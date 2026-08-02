@@ -1,7 +1,7 @@
 # DESIGN_TODO
 
 Paths: CORE = rust/crates/dcpwizard-core/src, CLI = rust/crates/dcpwizard-cli/src/main.rs,
-PK = extern/postkit (postkit submodule, pinned at be89fe0; bump the pin when postkit changes).
+PK = extern/postkit (postkit submodule, pinned at 7b90093; bump the pin when postkit changes).
 DoM refs (dom#N = https://dcpomatic.com/bugs/view.php?id=N) are DCP-o-matic tracker
 feature requests. Shared DSP/parsers belong in postkit (see its DESIGN_TODO); the
 user-facing surface is here.
