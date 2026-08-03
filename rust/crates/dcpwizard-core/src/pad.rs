@@ -153,7 +153,6 @@ pub fn generate_solid_frame(
         },
         |_p| {},
     );
-    grok_encoder::deinitialize();
 
     if !result.success {
         let _ = std::fs::remove_dir_all(&work);

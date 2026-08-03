@@ -4941,7 +4941,6 @@ fn run() {
         }
     };
 
-    postkit::grok_encoder::deinitialize();
     std::process::exit(code);
 }
 

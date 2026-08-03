@@ -69,12 +69,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.6
+          key: grok-${{ runner.os }}-v20.3.8
 
       - name: Setup grok
         if: runner.os != 'Windows'
         env:
-          GROK_TAG: v20.3.6
+          GROK_TAG: v20.3.8
         run: |
           prefix="$GITHUB_WORKSPACE/grok-install"
           if [ ! -x "$prefix/bin/grk_compress" ]; then
@@ -97,7 +97,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         env:
-          GROK_TAG: v20.3.6
+          GROK_TAG: v20.3.8
         run: |
           choco install -y --no-progress pkgconfiglite
           prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
@@ -166,12 +166,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.6
+          key: grok-${{ runner.os }}-v20.3.8
 
       - name: Setup grok
         if: runner.os != 'Windows'
         env:
-          GROK_TAG: v20.3.6
+          GROK_TAG: v20.3.8
         run: |
           prefix="$GITHUB_WORKSPACE/grok-install"
           if [ ! -x "$prefix/bin/grk_compress" ]; then

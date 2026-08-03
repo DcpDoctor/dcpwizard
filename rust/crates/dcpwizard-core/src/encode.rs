@@ -100,8 +100,6 @@ pub fn encode_j2k(config: &EncodeConfig) -> i32 {
         },
     );
 
-    grok_encoder::deinitialize();
-
     if !result.success {
         tracing::error!("Encode failed: {}", result.error);
         return -1;
