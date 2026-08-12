@@ -67,6 +67,38 @@ struct CreateSubtitleOpts {
     ccap_language: String,
 }
 
+/// CPL/PKL signing identity, boxed into the Create variant so it stays under
+/// the clippy large-variant threshold. Absent leaves the package unsigned.
+#[derive(Args)]
+struct CreateSignerOpts {
+    /// Signer leaf certificate file. With --signer-key, signs the CPL and PKL.
+    #[arg(long, requires = "signer_key")]
+    signer_cert: Option<String>,
+    /// Signer private key file, required with --signer-cert
+    #[arg(long, requires = "signer_cert")]
+    signer_key: Option<String>,
+    /// Signer CA certificate above the leaf (repeatable: intermediate(s) then root)
+    #[arg(long, requires = "signer_cert")]
+    signer_chain: Vec<String>,
+}
+
+/// The signer for a `create`, or None when no --signer-cert was given. clap's
+/// `requires` guarantees the key is present whenever the certificate is.
+fn create_package_signer(
+    opts: &CreateSignerOpts,
+) -> Option<dcpwizard_core::package_signature::PackageSigner> {
+    let cert = opts.signer_cert.as_ref()?;
+    let key = opts
+        .signer_key
+        .as_ref()
+        .expect("clap requires --signer-key alongside --signer-cert");
+    Some(dcpwizard_core::package_signature::PackageSigner {
+        signer_cert: PathBuf::from(cert),
+        signer_key: PathBuf::from(key),
+        signer_chain: opts.signer_chain.iter().map(PathBuf::from).collect(),
+    })
+}
+
 #[derive(Parser)]
 #[command(
     name = "dcpwizard",
@@ -213,6 +245,8 @@ enum Commands {
         audio_qol: Box<CreateAudioQol>,
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
+        #[command(flatten)]
+        signer_opts: Box<CreateSignerOpts>,
     },
     /// Rebuild ASSETMAP and PKL to cover every asset file present (metadata-only
     /// repackaging; no re-wrap or re-encode). For re-ingesting exported OV/VF
@@ -2430,6 +2464,7 @@ fn run() {
             split_chapters,
             input_range,
             audio_qol,
+            signer_opts,
         } => {
             let CreateAudioQol {
                 loudness_target,
@@ -2443,6 +2478,15 @@ fn run() {
             // user is not left with a finished DCP and no power-off.
             if shutdown_when_done
                 && let Err(e) = dcpwizard_core::encode_qol::resolve_shutdown_command()
+            {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+            // same for the signer: an unusable key or certificate must fail
+            // before the encode, not after it.
+            let package_signer = create_package_signer(&signer_opts);
+            if let Some(signer) = package_signer.as_ref()
+                && let Err(e) = signer.check_usable()
             {
                 tracing::error!("{e}");
                 std::process::exit(1);
@@ -3003,6 +3047,7 @@ fn run() {
                     sign_language_lang: sign_language_lang.clone(),
                     sign_language_main_channels: sl_main_channels,
                     hdr_dci,
+                    signer: package_signer.clone(),
                 };
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
@@ -3144,6 +3189,7 @@ fn run() {
                     sign_language_lang,
                     sign_language_main_channels: sl_main_channels,
                     hdr_dci,
+                    signer: package_signer,
                 };
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),

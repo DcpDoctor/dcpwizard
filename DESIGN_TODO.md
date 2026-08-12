@@ -32,10 +32,6 @@ user-facing surface is here.
   MCA-token evidence, three-state present/absent/undeterminable). Burned-in open
   captions and director commentary are undeterminable by construction: nothing in a
   package declares either.
-- asdcplib pin wave pending: asdcplib-rs 4f137a0 adds an MCA tag-symbol reader, and
-  postkit, dcpwizard, dcpdoctor and imfwizard all still pin 6d7b8ca. They have to move
-  together, since a split pin compiles the vendored C++ twice and the shared types
-  stop unifying.
 - Trusted Device List / DeviceList is written for no KDM, Interop or SMPTE.
 - GUI `--hdr-dci` is skipped: the job queue encodes through
   postkit::pipeline::run_encode_with_ratio -> stream_encode, which hardcodes
@@ -51,6 +47,20 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
+- DCP signing (`create --signer-cert/--signer-key/--signer-chain`, CORE/package_signature.rs)
+  covers `create` only. `assemble`, `create-vf`, `create-multi` and `ingest-package`
+  write their new CPLs/PKLs unsigned; `combine` copies CPLs byte-identical so their
+  signatures survive, but its merged PKL is unsigned. `edit` is the one to fix first:
+  it rewrites a CPL's text and patches the PKL entry in place without touching either
+  `ds:Signature`, so editing a signed DCP now leaves a signature that no longer
+  matches the document. Either strip the signature or re-sign, but not silently keep
+  a stale one. Three gaps in what `create` signs: no optional `<Signer>` element
+  beside the `ds:Signature` (optional in both schemas and dcpdoctor does not ask for
+  it, but real DCPs carry it); Interop packages are signed rsa-sha256 like SMPTE,
+  because that is postkit's only public profile, where real Interop DCPs use
+  rsa-sha1; and the supplied chain is not checked against the ST 430-2 rules
+  (2048-bit RSA, e=65537, role prefixes, dnQualifier thumbprint), only that the
+  private key matches the leaf certificate.
 
 ## Done 2026-08-12
 

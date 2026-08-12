@@ -87,6 +87,9 @@ pub struct DcpConfig {
     /// (PQ) and P3-D65 colour primaries. Source must already be PQ/DCI.
     #[serde(default)]
     pub hdr_dci: bool,
+    /// Signer for the CPL and PKL ds:Signature. None leaves them unsigned.
+    #[serde(default)]
+    pub signer: Option<crate::package_signature::PackageSigner>,
 }
 
 /// Validate custom container dimensions against the resolution bounds.
@@ -266,6 +269,15 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     };
     if !j2k_dir.is_dir() {
         tracing::error!("J2K input directory does not exist: {}", j2k_dir.display());
+        return -1;
+    }
+
+    // Reject a bad signer before anything is written, so signing cannot fail
+    // once the CPL is on disk and leave a half-signed package.
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("{e}");
         return -1;
     }
 
@@ -959,6 +971,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         tracing::error!("Failed to generate CPL");
         return -1;
     }
+    // Sign before the PKL hashes the file, otherwise the PKL records the hash of
+    // the unsigned CPL and no longer matches what is on disk.
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.sign_file(&cpl_path)
+    {
+        tracing::error!("Failed to sign the CPL: {e}");
+        return -1;
+    }
 
     // ── Generate PKL ──────────────────────────────────────────────────
     let pkl_path = config.output_dir.join(format!("PKL_{pkl_uuid}.xml"));
@@ -1038,6 +1058,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, config.standard, None, &pkl_path) != 0 {
         tracing::error!("Failed to generate PKL");
+        return -1;
+    }
+    // Nothing hashes the PKL, so this can follow the write.
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.sign_file(&pkl_path)
+    {
+        tracing::error!("Failed to sign the PKL: {e}");
         return -1;
     }
 

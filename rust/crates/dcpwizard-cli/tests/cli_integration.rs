@@ -225,3 +225,51 @@ fn mid_side_decode_writes_lr() {
     assert!((l - 0.75).abs() < 1e-3, "L was {l}");
     assert!((rr - 0.25).abs() < 1e-3, "R was {rr}");
 }
+
+#[test]
+fn create_signer_cert_requires_a_key() {
+    let dir = TempDir::new().unwrap();
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            dir.path().to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+            "--signer-cert",
+            "signer.pem",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--signer-key"));
+}
+
+#[test]
+fn create_rejects_a_key_that_does_not_match_the_certificate() {
+    let dir = TempDir::new().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    assert_eq!(postkit::certificate::generate_chain("Acme", &certs), 0);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            dir.path().to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--signer-cert",
+            certs.join("signer.pem").to_str().unwrap(),
+            "--signer-key",
+            certs.join("root.key").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("does not match"));
+    assert!(!out.exists(), "a bad signer must stop before any output");
+}

@@ -186,6 +186,8 @@ pub fn generate_kdm(
         formulation: "modified-transitional-1".to_string(),
         content_keys,
         format,
+        // empty is the assume-trust thumbprint, which is what that formulation means
+        device_cert_files: Vec::new(),
     };
     match postkit::certificate::generate_kdm(&config) {
         Ok(()) => {
@@ -328,6 +330,8 @@ pub fn rewrap_dkdm(
         output_file: output,
         valid_from,
         valid_to,
+        // empty is the assume-trust thumbprint, matching what kdm writes
+        device_cert_files: Vec::new(),
     };
     match postkit::certificate::rewrap_dkdm_to_file(&config) {
         Ok(()) => 0,

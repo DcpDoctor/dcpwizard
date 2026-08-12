@@ -244,6 +244,16 @@ dcpwizard transcode-dcp --input ./dcp --output ./dcp_light --video-bit-rate 100
 dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./dcp \
     --encrypt --key-out ./secret/my_film.keys.json
 
+# Create a signed DCP. The CPL and PKL get an XML-DSig ds:Signature (SMPTE
+# ST 429-7/-8), which encrypted packages require and validators such as
+# ClairMeta expect. --signer-chain takes the CA certificates above the leaf,
+# intermediate(s) then root, and is repeatable. Signing is opt-in: without
+# --signer-cert the package is written unsigned as before. The private key is
+# read straight from the file by dcpwizard, never passed to another process.
+dcpwizard create --title "My Film" --video ./j2k --output ./dcp \
+    --signer-cert signer.pem --signer-key signer.key \
+    --signer-chain intermediate.pem --signer-chain root.pem
+
 # Create Interop DCP
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --standard interop
 

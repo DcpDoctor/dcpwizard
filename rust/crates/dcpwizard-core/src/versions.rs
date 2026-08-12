@@ -133,6 +133,14 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         tracing::error!("J2K input directory does not exist: {}", j2k_dir.display());
         return -1;
     }
+    // Reject a bad signer before anything is written, so signing cannot fail
+    // once a CPL is on disk and leave a half-signed package.
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("{e}");
+        return -1;
+    }
     if let Err(e) = std::fs::create_dir_all(&config.output_dir) {
         tracing::error!("Failed to create output directory: {e}");
         return -1;
@@ -647,6 +655,18 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             cleanup(&temps);
             return -1;
         }
+        // Sign before the PKL entry below hashes the file, otherwise the PKL
+        // records the hash of the unsigned CPL.
+        if let Some(signer) = config.signer.as_ref()
+            && let Err(e) = signer.sign_file(&cpl_path)
+        {
+            tracing::error!(
+                "Failed to sign the CPL for version '{}': {e}",
+                version.title
+            );
+            cleanup(&temps);
+            return -1;
+        }
         pkl_entries.push(crate::pkl::PklEntry {
             id: cpl_uuid.clone(),
             asset_type: "text/xml".into(),
@@ -671,6 +691,14 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
     let pkl_path = config.output_dir.join(format!("PKL_{pkl_uuid}.xml"));
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, config.standard, None, &pkl_path) != 0 {
         tracing::error!("Failed to generate PKL");
+        cleanup(&temps);
+        return -1;
+    }
+    // Nothing hashes the PKL, so this can follow the write.
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.sign_file(&pkl_path)
+    {
+        tracing::error!("Failed to sign the PKL: {e}");
         cleanup(&temps);
         return -1;
     }
