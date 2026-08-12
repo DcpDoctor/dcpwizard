@@ -52,9 +52,7 @@ user-facing surface is here.
   `create-vf`, `create-multi`, `combine` and `ingest-package`. `combine` and
   `ingest-package` sign only the packing list they generate, because they hash the
   CPLs rather than rewriting them, so a signature a CPL already carries stays
-  valid. `conform` is the one command left: it takes no signer, and its two paths
-  would want one in different places, on the assembled CPL when it merges reels
-  and on the per-reel CPL when a single reel is moved straight out.
+  valid.
   Three gaps in what signing covers: no optional `<Signer>` element
   beside the `ds:Signature` (optional in both schemas and dcpdoctor does not ask for
   it, but real DCPs carry it); Interop packages are signed rsa-sha256 like SMPTE,

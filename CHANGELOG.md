@@ -54,7 +54,7 @@
 - **Dead modules** — dcp_diff, plugin, preferences, geometry, and the prores re-export shim (zero callers)
 
 ### Added
-- **Signing on the rest of the packaging commands** — `assemble`, `create-vf`, `create-multi`, `combine` and `ingest-package` take `--signer-cert/--signer-key/--signer-chain` like `create` does. Each signs a CPL before anything hashes it into the packing list. `combine` and `ingest-package` sign only the PKL they generate, since they hash the CPLs rather than rewriting them, so a signature a CPL already carries stays valid. `create-vf` signs after the supplemental marker is written, not before, or the marker would invalidate it. `conform` still takes no signer
+- **Signing on the rest of the packaging commands** — `assemble`, `create-vf`, `create-multi`, `combine` and `ingest-package` take `--signer-cert/--signer-key/--signer-chain` like `create` does. Each signs a CPL before anything hashes it into the packing list. `combine` and `ingest-package` sign only the PKL they generate, since they hash the CPLs rather than rewriting them, so a signature a CPL already carries stays valid. `create-vf` signs after the supplemental marker is written, not before, or the marker would invalidate it. `conform` takes them too, and signs whichever package it delivers: the per-reel DCP when a single reel is moved straight out, the assembled CPL and PKL when it merges reels
 
 ### Fixed
 - **Signer certificates were missing Basic Constraints and Key Usage** (via postkit) — every chain from `certificate chain` had a bare leaf, which ST 430-2 requires to carry both, so validators rejected packages signed with it. Regenerate any chain generated earlier

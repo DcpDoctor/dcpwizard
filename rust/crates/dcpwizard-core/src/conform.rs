@@ -178,7 +178,14 @@ fn run_ffmpeg(mut cmd: std::process::Command, what: &str) -> Result<(), String> 
 }
 
 /// Encode one grouped reel to J2K and build a single-reel DCP at `dcp_dir`.
-fn reel_to_dcp(group: &ReelGroup, fps: u32, work: &Path, dcp_dir: &Path) -> Result<(), String> {
+/// `signer` is set only when this reel's DCP is the delivered package.
+fn reel_to_dcp(
+    group: &ReelGroup,
+    fps: u32,
+    work: &Path,
+    dcp_dir: &Path,
+    signer: Option<&crate::package_signature::PackageSigner>,
+) -> Result<(), String> {
     use postkit::grok_encoder::{self, CompressParams, EncodeProgress};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -236,6 +243,7 @@ fn reel_to_dcp(group: &ReelGroup, fps: u32, work: &Path, dcp_dir: &Path) -> Resu
         j2k_dir: Some(j2k_dir),
         audio_path,
         subtitle_language: "en".to_string(),
+        signer: signer.cloned(),
         ..Default::default()
     };
     if crate::dcp::create_dcp(&config) != 0 {
@@ -247,12 +255,28 @@ fn reel_to_dcp(group: &ReelGroup, fps: u32, work: &Path, dcp_dir: &Path) -> Resu
 /// Drive a resolved reel plan to a finished multi-reel DCP: encode + wrap each
 /// reel, then assemble the per-reel DCPs into one CPL. `plan_json` (the conform
 /// plan) is written into `output_dir` as an artifact. Returns 0 on success.
-pub fn assemble_dcp(plan: &ReelPlan, output_dir: &Path) -> i32 {
+/// Signs whichever package it delivers: the per-reel DCP with one reel, the
+/// assembled CPL and PKL with more.
+pub fn assemble_dcp(
+    plan: &ReelPlan,
+    output_dir: &Path,
+    signer: Option<&crate::package_signature::PackageSigner>,
+) -> i32 {
     let groups = group_reels(plan);
     if groups.is_empty() {
         tracing::error!("conform plan has no video reels to assemble");
         return 1;
     }
+    // reject a bad signer before the encode, not after every reel is encoded
+    if let Some(signer) = signer
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
+        return 1;
+    }
+    // with more reels the delivered CPL is the assembled one below, so these
+    // per-reel DCPs are intermediates and signing them buys nothing
+    let reel_signer = if groups.len() == 1 { signer } else { None };
     let fps = plan.frame_rate.round().max(1.0) as u32;
 
     if let Err(e) = std::fs::create_dir_all(output_dir) {
@@ -265,7 +289,7 @@ pub fn assemble_dcp(plan: &ReelPlan, output_dir: &Path) -> i32 {
         let work = work_root.join(format!("reel_{}", i + 1));
         let dcp_dir = work.join("dcp");
         tracing::info!("conform reel {}: {}", i + 1, group.reel_name);
-        if let Err(e) = reel_to_dcp(group, fps, &work, &dcp_dir) {
+        if let Err(e) = reel_to_dcp(group, fps, &work, &dcp_dir, reel_signer) {
             tracing::error!("{e}");
             let _ = std::fs::remove_dir_all(&work_root);
             return 1;
@@ -282,10 +306,7 @@ pub fn assemble_dcp(plan: &ReelPlan, output_dir: &Path) -> i32 {
             inputs: reel_dcps.clone(),
             output_dir: output_dir.to_path_buf(),
             title: plan.title.clone(),
-            // conform takes no signer yet, and its two paths would need it in
-            // different places: the assembled CPL here, the per-reel one when a
-            // single reel is moved straight out
-            signer: None,
+            signer: signer.cloned(),
         })
     };
     let _ = std::fs::remove_dir_all(&work_root);

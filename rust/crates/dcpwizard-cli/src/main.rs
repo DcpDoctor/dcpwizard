@@ -872,6 +872,9 @@ enum Commands {
         /// Output the parsed timeline as JSON (parse-only mode)
         #[arg(long)]
         json: bool,
+
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
 
     /// Ingest camera raw media
@@ -2195,6 +2198,7 @@ fn run_conform_assembly(
     timeline: &postkit::conform::Timeline,
     media_dir: &str,
     output: Option<&str>,
+    signer: Option<&dcpwizard_core::package_signature::PackageSigner>,
 ) -> i32 {
     let media = PathBuf::from(media_dir);
     let out = PathBuf::from(output.unwrap_or("conform_out"));
@@ -2247,7 +2251,7 @@ fn run_conform_assembly(
     }
 
     // drive the plan to a finished multi-reel DCP (per-reel encode + wrap + assembly)
-    dcpwizard_core::conform::assemble_dcp(&plan, &out)
+    dcpwizard_core::conform::assemble_dcp(&plan, &out, signer)
 }
 
 /// Encode the packaged trailer mp4 to J2K and build a DCP (ContentKind=trailer)
@@ -4123,6 +4127,7 @@ fn run() {
             media_dir,
             output,
             json,
+            signer_opts,
         } => match postkit::conform::parse_timeline(std::path::Path::new(&input)) {
             Err(e) => {
                 tracing::error!("Timeline parse failed: {e}");
@@ -4130,7 +4135,13 @@ fn run() {
             }
             Ok(timeline) => {
                 if let Some(media_dir) = media_dir {
-                    run_conform_assembly(&input, &timeline, &media_dir, output.as_deref())
+                    run_conform_assembly(
+                        &input,
+                        &timeline,
+                        &media_dir,
+                        output.as_deref(),
+                        package_signer(&signer_opts).as_ref(),
+                    )
                 } else if json {
                     println!("{}", serde_json::to_string_pretty(&timeline).unwrap());
                     0
