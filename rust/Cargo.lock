@@ -673,13 +673,13 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 [[package]]
 name = "dcpdoctor-core"
 version = "0.1.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=d4da892#d4da89257b644f992c5c57bcbba1d5633b5ded01"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=692c6f6#692c6f618ffab46fb8e767334a5caa26775ec36a"
 dependencies = [
  "asdcplib",
  "base64",
  "dcpdoctor-imf",
  "dcpdoctor-parse",
- "postkit 0.5.0 (git+https://github.com/PostPerfection/dcpdoctor.git?rev=d4da892)",
+ "postkit",
  "quick-xml 0.41.0",
  "regex-lite",
  "serde",
@@ -696,7 +696,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-imf"
 version = "0.1.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=d4da892#d4da89257b644f992c5c57bcbba1d5633b5ded01"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=692c6f6#692c6f618ffab46fb8e767334a5caa26775ec36a"
 dependencies = [
  "dcpdoctor-parse",
  "quick-xml 0.41.0",
@@ -706,7 +706,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-parse"
 version = "0.1.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=d4da892#d4da89257b644f992c5c57bcbba1d5633b5ded01"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=692c6f6#692c6f618ffab46fb8e767334a5caa26775ec36a"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -721,7 +721,7 @@ dependencies = [
  "ctrlc",
  "dcpwizard-core",
  "hound",
- "postkit 0.5.0",
+ "postkit",
  "predicates",
  "serde_json",
  "tempfile",
@@ -741,7 +741,7 @@ dependencies = [
  "hound",
  "lettre",
  "libc",
- "postkit 0.5.0",
+ "postkit",
  "roxmltree",
  "serde",
  "serde_json",
@@ -1943,43 +1943,6 @@ dependencies = [
  "dolby_vision",
  "ebur128",
  "grokj2k-sys",
- "hex",
- "hound",
- "notify",
- "quick-xml 0.37.5",
- "rcgen",
- "regex",
- "ring",
- "rsa",
- "rusqlite",
- "rustfft",
- "serde",
- "serde_json",
- "sha1 0.10.6",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tiff",
- "time",
- "tracing",
- "unicode-bidi",
- "uuid",
- "x509-parser",
- "zeroize",
-]
-
-[[package]]
-name = "postkit"
-version = "0.5.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=d4da892#d4da89257b644f992c5c57bcbba1d5633b5ded01"
-dependencies = [
- "allsorts",
- "ar-reshaper",
- "asdcplib",
- "base64",
- "chrono",
- "dirs",
- "dolby_vision",
- "ebur128",
  "hex",
  "hound",
  "notify",

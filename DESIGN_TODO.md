@@ -8,16 +8,14 @@ user-facing surface is here.
 
 ## Open
 
-- postkit compiles twice. `postkit` is a path dep on `extern/postkit`, and
-  `dcpdoctor-core` comes from git carrying its own path dep on the postkit inside
-  that checkout, so cargo resolves two copies. Legal, because only `asdcplib-sys`
-  declares a `links` key, and asdcplib itself resolves once. The cost is build
-  time plus a latent hazard: `dcpdoctor_core::loudness` re-exports postkit types,
-  so the day anything here uses that re-export alongside `postkit::loudness` the
-  two will not unify and the error will be confusing. Nothing does today. Fixing
-  it means pinning postkit by git rev in dcpdoctor and here and in the Tauri
-  workspace, which costs the edit-the-submodule-and-rebuild loop. Left as is on
-  purpose 2026-08-12. imfwizard has the same shape.
+- postkit compiled twice, fixed 2026-08-12. `postkit` was a path dep on
+  `extern/postkit` while `dcpdoctor-core` came from git carrying its own path dep
+  on the postkit inside that checkout, so cargo resolved two copies. dcpdoctor
+  declares postkit by git now, and `rust/Cargo.toml` and `gui/src-tauri/Cargo.toml`
+  each carry a `[patch]` redirecting that git source at `extern/postkit`, so both
+  references collapse onto the submodule this workspace already builds. The
+  edit-the-submodule-and-rebuild loop is unchanged and `cargo tree -d` reports no
+  postkit duplicate. imfwizard has the same shape.
 - Distributed encoding across machines (dom#155, dom#1635, dom#2605). Out of scope
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is

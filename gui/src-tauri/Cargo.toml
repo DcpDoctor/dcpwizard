@@ -37,6 +37,11 @@ libc = "0.2"
 gtk = "0.18"
 gdkx11-sys = "0.18"
 
+# dcpwizard-core pulls dcpdoctor-core, which depends on postkit by git. pointing
+# that at the submodule this build already compiles keeps postkit to one compile.
+[patch."https://github.com/PostPerfection/postkit.git"]
+postkit = { path = "../../extern/postkit" }
+
 # Optimize postkit in debug builds (color math is too slow unoptimized)
 [profile.dev.package.postkit]
 opt-level = 2
