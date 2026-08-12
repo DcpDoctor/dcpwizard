@@ -1,13 +1,23 @@
 # DESIGN_TODO
 
 Paths: CORE = rust/crates/dcpwizard-core/src, CLI = rust/crates/dcpwizard-cli/src/main.rs,
-PK = extern/postkit (postkit submodule, pinned at c6406d1; bump the pin when postkit changes).
+PK = extern/postkit (postkit submodule, pinned at d8d97cf; bump the pin when postkit changes).
 DoM refs (dom#N = https://dcpomatic.com/bugs/view.php?id=N) are DCP-o-matic tracker
 feature requests. Shared DSP/parsers belong in postkit (see its DESIGN_TODO); the
 user-facing surface is here.
 
 ## Open
 
+- postkit compiles twice. `postkit` is a path dep on `extern/postkit`, and
+  `dcpdoctor-core` comes from git carrying its own path dep on the postkit inside
+  that checkout, so cargo resolves two copies. Legal, because only `asdcplib-sys`
+  declares a `links` key, and asdcplib itself resolves once. The cost is build
+  time plus a latent hazard: `dcpdoctor_core::loudness` re-exports postkit types,
+  so the day anything here uses that re-export alongside `postkit::loudness` the
+  two will not unify and the error will be confusing. Nothing does today. Fixing
+  it means pinning postkit by git rev in dcpdoctor and here and in the Tauri
+  workspace, which costs the edit-the-submodule-and-rebuild loop. Left as is on
+  purpose 2026-08-12. imfwizard has the same shape.
 - Distributed encoding across machines (dom#155, dom#1635, dom#2605). Out of scope
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is
