@@ -50,11 +50,11 @@ user-facing surface is here.
 - DCP signing (`create --signer-cert/--signer-key/--signer-chain`, CORE/package_signature.rs)
   covers `create` only. `assemble`, `create-vf`, `create-multi` and `ingest-package`
   write their new CPLs/PKLs unsigned; `combine` copies CPLs byte-identical so their
-  signatures survive, but its merged PKL is unsigned. `edit` is the one to fix first:
-  it rewrites a CPL's text and patches the PKL entry in place without touching either
-  `ds:Signature`, so editing a signed DCP now leaves a signature that no longer
-  matches the document. Either strip the signature or re-sign, but not silently keep
-  a stale one. Three gaps in what `create` signs: no optional `<Signer>` element
+  signatures survive, but its merged PKL is unsigned. Those leave an unsigned
+  package, which is honest. `edit` used to leave a worse one, a signature over
+  bytes it had rewritten, and now strips it instead (see Done below). Signing them
+  would need signer arguments each command currently lacks.
+  Three gaps in what `create` signs: no optional `<Signer>` element
   beside the `ds:Signature` (optional in both schemas and dcpdoctor does not ask for
   it, but real DCPs carry it); Interop packages are signed rsa-sha256 like SMPTE,
   because that is postkit's only public profile, where real Interop DCPs use
@@ -64,6 +64,16 @@ user-facing surface is here.
 
 ## Done 2026-08-12
 
+- `edit` drops the signature from every document it rewrites (the CPL, any PKL
+  carrying its entry, and the ASSETMAP) instead of leaving one that no longer
+  covers the bytes. A stale signature is worse than none: dcpdoctor reports
+  `signature_invalid` and a verifier reads it as tampering, where an unsigned
+  package only reads as unsigned. `package_signature::strip_signature` matches the
+  element by local name, so a third-party `dsig:` prefix is caught too, and takes
+  any `Signer` with it. The strip runs before the CPL is written, so the PKL keeps
+  hashing what actually lands on disk. Warn-only, no new flag: the edit already
+  mints a new composition id, so the output was never the signed artifact. Re-signing
+  would need signer arguments `edit` does not take.
 - GUI create panel, second batch: sign language, pad head/tail, and audio input
   order / filename channel routing now go through `submit_job` -> JobConfig ->
   run_job. Sign language calls `sign_language::build_slvs_sound` after the encode

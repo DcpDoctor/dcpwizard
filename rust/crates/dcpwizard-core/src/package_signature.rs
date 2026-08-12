@@ -48,6 +48,69 @@ impl PackageSigner {
     }
 }
 
+/// Drop a document's Signature, and the Signer that only means anything beside
+/// it, whatever namespace prefix they carry. Returns whether it was signed.
+///
+/// Anything that rewrites a signed document has to call this: a signature left
+/// over an edited document no longer matches the bytes, and a verifier reports
+/// that as tampering rather than as an unsigned package.
+pub fn strip_signature(xml: &mut String) -> bool {
+    if !remove_element(xml, "Signature") {
+        return false;
+    }
+    remove_element(xml, "Signer");
+    true
+}
+
+/// Find an element's open tag by local name, whatever prefix it carries.
+/// Returns the offset of its `<` and the prefix, so the close tag can be built.
+fn find_open_tag(xml: &str, local: &str) -> Option<(usize, String)> {
+    let mut from = 0;
+    while let Some(rel) = xml[from..].find('<') {
+        let open = from + rel;
+        let rest = &xml[open + 1..];
+        let name_end = rest
+            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .unwrap_or(rest.len());
+        // a close tag starts with '/', so its name reads empty and never matches
+        let (prefix, name) = match rest[..name_end].split_once(':') {
+            Some((p, n)) => (format!("{p}:"), n),
+            None => (String::new(), &rest[..name_end]),
+        };
+        if name == local {
+            return Some((open, prefix));
+        }
+        from = open + 1;
+    }
+    None
+}
+
+/// Cut the first element with this local name, content and all, taking the
+/// blank line it would otherwise leave behind.
+fn remove_element(xml: &mut String, local: &str) -> bool {
+    let Some((start, prefix)) = find_open_tag(xml, local) else {
+        return false;
+    };
+    let close = format!("</{prefix}{local}>");
+    let Some(rel) = xml[start..].find(&close) else {
+        return false;
+    };
+    let end = start + rel + close.len();
+    let line_start = xml[..start].rfind('\n').map_or(0, |n| n + 1);
+    let cut_from = if xml[line_start..start].trim().is_empty() {
+        line_start
+    } else {
+        start
+    };
+    let cut_to = if xml[end..].starts_with('\n') {
+        end + 1
+    } else {
+        end
+    };
+    xml.replace_range(cut_from..cut_to, "");
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +164,47 @@ mod tests {
         signer.signer_key = encrypted;
         let err = signer.check_usable().expect_err("encrypted key must fail");
         assert!(err.contains("not a valid RSA private key"), "got: {err}");
+    }
+
+    #[test]
+    fn stripping_a_real_signature_gives_back_the_document_that_was_signed() {
+        let dir = tempfile::tempdir().unwrap();
+        let signer = chain(dir.path());
+        let original = "<Root>\n  <Value>x</Value>\n</Root>\n";
+        let doc = dir.path().join("doc.xml");
+        std::fs::write(&doc, original).unwrap();
+        signer.sign_file(&doc).expect("sign the document");
+
+        let mut signed = std::fs::read_to_string(&doc).unwrap();
+        assert!(signed.contains("Signature"), "the document must be signed");
+        assert!(strip_signature(&mut signed), "a signed document reports so");
+        assert_eq!(signed, original, "stripping restores the signed-over bytes");
+    }
+
+    #[test]
+    fn stripping_finds_the_signature_under_any_prefix() {
+        for prefix in ["ds:", "dsig:", ""] {
+            let mut xml = format!(
+                "<Root>\n  <Value>x</Value>\n  <{prefix}Signature Id=\"s\">\n    <{prefix}SignatureValue>AAA</{prefix}SignatureValue>\n  </{prefix}Signature>\n</Root>\n"
+            );
+            assert!(strip_signature(&mut xml), "{prefix:?} must be recognised");
+            assert_eq!(xml, "<Root>\n  <Value>x</Value>\n</Root>\n");
+        }
+    }
+
+    #[test]
+    fn stripping_takes_the_signer_along_with_the_signature() {
+        let mut xml = "<Root>\n  <Signer>\n    <X509Data>c</X509Data>\n  </Signer>\n  <ds:Signature>v</ds:Signature>\n</Root>\n".to_string();
+        assert!(strip_signature(&mut xml));
+        assert_eq!(xml, "<Root>\n</Root>\n");
+    }
+
+    #[test]
+    fn an_unsigned_document_is_reported_unsigned_and_left_alone() {
+        let original = "<Root>\n  <SignerCheck>keep me</SignerCheck>\n</Root>\n";
+        let mut xml = original.to_string();
+        assert!(!strip_signature(&mut xml), "nothing to strip");
+        assert_eq!(xml, original, "an unsigned document is untouched");
     }
 
     #[test]

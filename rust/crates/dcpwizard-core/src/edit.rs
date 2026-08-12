@@ -4,7 +4,8 @@
 //! NEW composition id (a changed CPL is a different composition), then updates
 //! the CPL's PKL and ASSETMAP entries (new id, new hash/size). Essence MXFs are
 //! never touched: their asset ids and bytes stay identical. Encrypted DCPs are
-//! refused because the KDM binds the CPL id.
+//! refused because the KDM binds the CPL id. Every document rewritten here loses
+//! its signature, which the rewrite invalidates.
 //!
 //! Note (dom#1127 scope): the digest also mentions reel reorder / length edits.
 //! This command covers the metadata fields only; reel surgery is out of scope.
@@ -124,6 +125,11 @@ pub fn edit_dcp(config: &EditConfig) -> i32 {
     // ── write the CPL under its new id, drop the old file ──
     let new_cpl_name = format!("CPL_{new_id}.xml");
     let new_cpl_path = work.join(&new_cpl_name);
+    // strip before the write, so the hash below covers what actually lands
+    let mut unsigned: Vec<String> = Vec::new();
+    if crate::package_signature::strip_signature(&mut xml) {
+        unsigned.push(new_cpl_name.clone());
+    }
     if let Err(e) = write_atomic(&new_cpl_path, xml.as_bytes()) {
         tracing::error!("cannot write new CPL: {e}");
         return -1;
@@ -150,7 +156,10 @@ pub fn edit_dcp(config: &EditConfig) -> i32 {
         if !content.contains(&old_id) {
             continue;
         }
-        let updated = patch_pkl_cpl_entry(&content, &old_id, &new_id, &new_hash, new_size);
+        let mut updated = patch_pkl_cpl_entry(&content, &old_id, &new_id, &new_hash, new_size);
+        if crate::package_signature::strip_signature(&mut updated) {
+            unsigned.push(file_name(&pkl));
+        }
         if let Err(e) = write_atomic(&pkl, updated.as_bytes()) {
             tracing::error!("cannot update PKL {}: {e}", pkl.display());
             return -1;
@@ -175,12 +184,23 @@ pub fn edit_dcp(config: &EditConfig) -> i32 {
         tracing::error!("cannot read ASSETMAP");
         return -1;
     };
-    let am = am
+    let mut am = am
         .replace(&old_id, &new_id)
         .replace(&old_cpl_name, &new_cpl_name);
+    if crate::package_signature::strip_signature(&mut am) {
+        unsigned.push(file_name(&am_path));
+    }
     if let Err(e) = write_atomic(&am_path, am.as_bytes()) {
         tracing::error!("cannot update ASSETMAP: {e}");
         return -1;
+    }
+
+    if !unsigned.is_empty() {
+        tracing::warn!(
+            "dropped the signature from {}: the edit changes the bytes it covered. \
+             re-sign the package if it has to stay signed",
+            unsigned.join(", ")
+        );
     }
 
     tracing::info!(

@@ -54,6 +54,7 @@
 - **Dead modules** — dcp_diff, plugin, preferences, geometry, and the prores re-export shim (zero callers)
 
 ### Fixed
+- **`edit` no longer leaves a stale signature** — editing a signed DCP rewrote the CPL, PKL and ASSETMAP but kept their `ds:Signature`, so the output verified as tampered (dcpdoctor `signature_invalid`). `edit` now drops the signature from every document it rewrites, and warns which ones lost it. The package comes out unsigned rather than falsely signed. Re-sign it afterwards if it has to stay signed
 - **Subtitle vertical position** — SMPTE and Interop subtitle generators anchored the block at the top (Vposition 85 with Valign="bottom") so subtitles rendered near the top of the screen. The bottom line now sits at 8% from the bottom with lines stacked upward (a two-line cue renders at 15% and 8%)
 - **GUI "Show in Files"** — uses the tauri opener plugin (`revealItemInDir`); the shell `open` call only accepted URLs
 - **Copy-to-drive verify** — flushes to the device and drops the page cache before reading back, so verification is real
