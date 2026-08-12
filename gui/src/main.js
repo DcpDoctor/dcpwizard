@@ -524,6 +524,22 @@ document.getElementById("prop-browse-atmos")?.addEventListener("click", async ()
   if (path) document.getElementById("prop-atmos").value = path;
 });
 
+document.getElementById("prop-browse-audio-channel-dir")?.addEventListener("click", async () => {
+  const dir = await open({ directory: true });
+  if (dir) document.getElementById("prop-audio-channel-dir").value = dir;
+});
+
+document.getElementById("prop-browse-sign-language-video")?.addEventListener("click", async () => {
+  const path = await open({
+    directory: false, multiple: false,
+    filters: [
+      { name: 'Video', extensions: ['mp4','mkv','mov','avi','mxf','webm'] },
+      { name: 'All', extensions: ['*'] }
+    ]
+  });
+  if (path) document.getElementById("prop-sign-language-video").value = path;
+});
+
 document.getElementById("prop-browse-ccap")?.addEventListener("click", async () => {
   const path = await open({
     directory: false, multiple: false,
@@ -637,6 +653,13 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       ccapLanguage: document.getElementById("prop-ccap-language")?.value || "en",
       loudnessTarget: document.getElementById("prop-loudness")?.value || null,
       truePeakCeiling: parseFloat(document.getElementById("prop-true-peak")?.value) || null,
+      audioChannelDir: document.getElementById("prop-audio-channel-dir")?.value || null,
+      audioInputOrder: document.getElementById("prop-audio-input-order")?.value || "dcp",
+      signLanguageVideo: document.getElementById("prop-sign-language-video")?.value || null,
+      signLanguageTag: document.getElementById("prop-sign-language-tag")?.value || null,
+      padHead: document.getElementById("prop-pad-head")?.value || null,
+      padTail: document.getElementById("prop-pad-tail")?.value || null,
+      padColor: document.getElementById("prop-pad-color")?.value || null,
     });
     setStatus("Building DCP...");
   } catch (e) {

@@ -24,8 +24,8 @@ user-facing surface is here.
   apply_xyz_transform=true and has no HDR-to-DCI LUT / PQ-passthrough branch or
   per-codestream cap. Authoring an HDR DCP there would mislabel XYZ-transformed
   frames as ST 2084 PQ, so it stays CLI-only (grok path). Other CLI-only create
-  flags absent from the GUI panel: upmix, filename channel-routing, reel splitting,
-  pad head/tail, sign language, HDR tonemap, delivery profiles, versions/multi.
+  flags absent from the GUI panel: upmix, reel splitting, HDR tonemap, delivery
+  profiles, versions/multi.
 - Sony RAW / X-OCN is detected but undecodable (ffmpeg can't decode it), same as
   ARRIRAW/R3D/BRAW/Canon: a match only yields a clearer detected-but-undecodable
   error. postkit's detect_format matches Sony's private essence ULs in the .mxf
@@ -33,6 +33,23 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
+
+## Done 2026-08-12
+
+- GUI create panel, second batch: sign language, pad head/tail, and audio input
+  order / filename channel routing now go through `submit_job` -> JobConfig ->
+  run_job. Sign language calls `sign_language::build_slvs_sound` after the encode
+  (frame count from the encode result, or the J2K dir when the input was already
+  J2K) and carries the tag + leading channel count into DcpConfig. Pad head/tail
+  and pad colour are parsed in `submit_job` (`pad::parse_pad_frames` /
+  `parse_pad_color`) so a bad spec fails before the encode. A channel WAV
+  directory routes through `audio_route::route_directory` before loudness, and the
+  six-channel input order (dcp | lrc-ls-rs-lfe) reaches `DcpConfig`. run_job's
+  config building was split out into `build_dcp_config` / `prepare_audio` /
+  `frame_rate_of`, which the new pipeline.rs tests drive (the tauri command itself
+  has no test seam). index.html gained Padding and Sign Language fieldsets plus the
+  Audio channel-directory and channel-order controls; main.js added the browse
+  handlers and submit_job args.
 
 ## Done 2026-07-23
 
@@ -123,6 +140,9 @@ other:
   submits compositions with subtitles/audio; the atmos + loudness-normalize-before-wrap
   and single-DCP 3D right-eye bits are dcpwizard-specific (IMF has no atmos aux track /
   stereoscopic DCP concept), so nothing to mirror unless imfwizard adds a loudness step.
+  The 2026-08-12 batch added sign language, pad head/tail/colour, and filename channel
+  routing to the same path; all three sit on dcpwizard-core (sign_language, pad,
+  audio_route), so there is nothing to mirror there either.
 - .github/workflows/ci.yml, release.yml, gui-release.yml — copies across dcpwizard,
   imfwizard, dcpdoctor differing by binary/artifact names + per-app build deps.
   Separate git repos, so no shared reusable-workflow without a central repo. Keep

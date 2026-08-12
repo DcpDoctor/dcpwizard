@@ -238,6 +238,22 @@
                 </fieldset>
 
                 <fieldset>
+                  <legend>Padding</legend>
+                  <div class="prop-field">
+                    <label for="prop-pad-head">Head padding (black + silence)</label>
+                    <input id="prop-pad-head" type="text" placeholder="48f or 2s">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-pad-tail">Tail padding</label>
+                    <input id="prop-pad-tail" type="text" placeholder="48f or 2s">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-pad-color">Pad colour (hex sRGB, default black)</label>
+                    <input id="prop-pad-color" type="text" placeholder="#000000">
+                  </div>
+                </fieldset>
+
+                <fieldset>
                   <legend>Audio</legend>
                   <div class="prop-field">
                     <label for="prop-atmos">Dolby Atmos / IAB track</label>
@@ -245,6 +261,20 @@
                       <input id="prop-atmos" type="text" placeholder="Atmos/DCData bitstream…" readonly>
                       <button id="prop-browse-atmos" class="btn-sm">…</button>
                     </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-audio-channel-dir">Channel WAV directory (routed by filename)</label>
+                    <div class="input-with-btn">
+                      <input id="prop-audio-channel-dir" type="text" placeholder="Directory of mono WAVs (mix_L.wav, mix_Lfe.wav…)" readonly>
+                      <button id="prop-browse-audio-channel-dir" class="btn-sm">…</button>
+                    </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-audio-input-order">Input channel order (six-channel WAV)</label>
+                    <select id="prop-audio-input-order">
+                      <option value="dcp">DCP (L, R, C, LFE, Ls, Rs)</option>
+                      <option value="lrc-ls-rs-lfe">L, R, C, Ls, Rs, LFE</option>
+                    </select>
                   </div>
                   <div class="prop-field">
                     <label for="prop-loudness">Loudness target</label>
@@ -272,6 +302,21 @@
                   <div class="prop-field">
                     <label for="prop-ccap-language">CCAP language</label>
                     <input id="prop-ccap-language" type="text" value="en" placeholder="en">
+                  </div>
+                </fieldset>
+
+                <fieldset>
+                  <legend>Sign Language</legend>
+                  <div class="prop-field">
+                    <label for="prop-sign-language-video">Sign-language video (packed on sound channel 15)</label>
+                    <div class="input-with-btn">
+                      <input id="prop-sign-language-video" type="text" placeholder="Signer video…" readonly>
+                      <button id="prop-browse-sign-language-video" class="btn-sm">…</button>
+                    </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-sign-language-tag">Sign-language tag (RFC 5646)</label>
+                    <input id="prop-sign-language-tag" type="text" placeholder="sgn-ase">
                   </div>
                 </fieldset>
 

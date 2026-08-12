@@ -26,6 +26,10 @@ postkit = { path = "../../extern/postkit" }
 dcpwizard-core = { path = "../../rust/crates/dcpwizard-core" }
 tauri-plugin-opener = "2"
 
+[dev-dependencies]
+hound = "3.5"
+tempfile = "3"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
