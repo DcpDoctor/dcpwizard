@@ -382,8 +382,8 @@ fn process_picture(
         }
     }
 
-    let id_hint = uuid::Uuid::new_v4();
-    let filename = format!("picture_{id_hint}.mxf");
+    let asset_id = uuid::Uuid::new_v4();
+    let filename = format!("picture_{asset_id}.mxf");
     let out_mxf = out_dir.join(&filename);
     let track = crate::mxf_wrap::wrap_mxf_files(
         sorted_files(&j2k_dir),
@@ -392,6 +392,7 @@ fn process_picture(
         fps,
         None,
         None,
+        Some(*asset_id.as_bytes()),
     );
     let _ = std::fs::remove_dir_all(&work);
     let track = track.ok_or("rewrap of decrypted picture failed")?;
@@ -456,8 +457,8 @@ pub(crate) fn process_sound(
         return Err(e);
     }
 
-    let id_hint = uuid::Uuid::new_v4();
-    let filename = format!("sound_{id_hint}.mxf");
+    let asset_id = uuid::Uuid::new_v4();
+    let filename = format!("sound_{asset_id}.mxf");
     let out_mxf = out_dir.join(&filename);
     let track = crate::mxf_wrap::wrap_mxf_files(
         vec![wav_path],
@@ -466,6 +467,7 @@ pub(crate) fn process_sound(
         fps,
         None,
         None,
+        Some(*asset_id.as_bytes()),
     );
     let _ = std::fs::remove_dir_all(&work);
     let track = track.ok_or("rewrap of decrypted sound failed")?;

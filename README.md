@@ -99,7 +99,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Media scanning**, auto-detect resolution, frame rate, codec, reel names
 - **Transcode to intermediate**, DPX, TIFF, EXR, ProRes 4444 (via ffmpeg)
 - **3D LUT application** during ingest via `ingest --lut <lut.cube>`
-- **Timeline conform** from EDL (CMX 3600) / FCP7 XML (xmeml): parse, or with `--media-dir --output` resolve every reel to media and build a finished multi-reel DCP (per-reel encode + wrap + CPL assembly). The reel/asset plan (`conform_plan.json`) and conform manifest are kept as artifacts
+- **Timeline conform** from EDL (CMX 3600) / FCP7 XML (xmeml) / FCPX (fcpxml): parse, or with `--media-dir --output` resolve every reel to media and build a finished multi-reel DCP (per-reel encode + wrap + CPL assembly). The reel/asset plan (`conform_plan.json`) and conform manifest are kept as artifacts
 
 ### Export & Playback
 - **Export DCP** to ProRes, H.264, H.265, DNxHR, or image sequence

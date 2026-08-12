@@ -172,6 +172,13 @@
                       <option value="interop">Interop</option>
                     </select>
                   </div>
+                  <div class="prop-field">
+                    <label for="prop-profile">Delivery profile</label>
+                    <select id="prop-profile">
+                      <option value="">Manual (no profile)</option>
+                    </select>
+                    <p class="field-hint" id="prop-profile-hint"></p>
+                  </div>
                 </fieldset>
 
                 <fieldset>
@@ -238,6 +245,34 @@
                 </fieldset>
 
                 <fieldset>
+                  <legend>Reels</legend>
+                  <div class="prop-field">
+                    <label for="prop-reel-length">Reel length (minutes, 0 = single reel)</label>
+                    <input id="prop-reel-length" type="number" min="0" value="0">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-split-at">Split at timecodes</label>
+                    <input id="prop-split-at" type="text" placeholder="00:20:00, 00:41:30:12">
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-split-chapters"> Split at source chapter marks</label>
+                  </div>
+                  <p class="field-hint">Pick one: reel length, timecodes, or chapters.</p>
+                </fieldset>
+
+                <fieldset>
+                  <legend>Versions</legend>
+                  <div class="prop-field">
+                    <label for="prop-versions">Versions manifest (one CPL per entry)</label>
+                    <div class="input-with-btn">
+                      <input id="prop-versions" type="text" placeholder="JSON array of versions…" readonly>
+                      <button id="prop-browse-versions" class="btn-sm">…</button>
+                    </div>
+                  </div>
+                  <p class="field-hint">Each entry carries its own subtitle, captions and audio, so clear those fields above.</p>
+                </fieldset>
+
+                <fieldset>
                   <legend>Padding</legend>
                   <div class="prop-field">
                     <label for="prop-pad-head">Head padding (black + silence)</label>
@@ -268,6 +303,14 @@
                       <input id="prop-audio-channel-dir" type="text" placeholder="Directory of mono WAVs (mix_L.wav, mix_Lfe.wav…)" readonly>
                       <button id="prop-browse-audio-channel-dir" class="btn-sm">…</button>
                     </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-upmix">Upmix stereo to 5.1</label>
+                    <select id="prop-upmix">
+                      <option value="none">Off</option>
+                      <option value="a">Variant A (band-split)</option>
+                      <option value="b">Variant B (passthrough + delayed surrounds)</option>
+                    </select>
                   </div>
                   <div class="prop-field">
                     <label for="prop-audio-input-order">Input channel order (six-channel WAV)</label>

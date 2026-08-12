@@ -1,7 +1,7 @@
 # DESIGN_TODO
 
 Paths: CORE = rust/crates/dcpwizard-core/src, CLI = rust/crates/dcpwizard-cli/src/main.rs,
-PK = extern/postkit (postkit submodule, pinned at 05516cd; bump the pin when postkit changes).
+PK = extern/postkit (postkit submodule, pinned at c6406d1; bump the pin when postkit changes).
 DoM refs (dom#N = https://dcpomatic.com/bugs/view.php?id=N) are DCP-o-matic tracker
 feature requests. Shared DSP/parsers belong in postkit (see its DESIGN_TODO); the
 user-facing surface is here.
@@ -16,16 +16,18 @@ user-facing surface is here.
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
   No Trusted Device List / DeviceList is written for any KDM.
-- conform input formats: only CMX3600 EDL and FCP7 xmeml parse. AAF errors as
-  not-implemented, OTIO and FCPX (fcpxml) are rejected as unsupported.
+- conform input formats: CMX3600 EDL, FCP7 xmeml and FCPX fcpxml parse. fcpxml
+  covers the primary spine only, so connected clips in lanes, compound clips and
+  nested clips are skipped rather than guessed at. AAF errors as not-implemented
+  and OTIO routes to the otioz_import module instead of parse_timeline.
 - Trailer accessibility check is still substring matching, not a real track probe.
 - GUI `--hdr-dci` is skipped: the job queue encodes through
   postkit::pipeline::run_encode_with_ratio -> stream_encode, which hardcodes
   apply_xyz_transform=true and has no HDR-to-DCI LUT / PQ-passthrough branch or
   per-codestream cap. Authoring an HDR DCP there would mislabel XYZ-transformed
-  frames as ST 2084 PQ, so it stays CLI-only (grok path). Other CLI-only create
-  flags absent from the GUI panel: upmix, reel splitting, HDR tonemap, delivery
-  profiles, versions/multi.
+  frames as ST 2084 PQ, so it stays CLI-only (grok path). HDR tonemap
+  (`--allow-generic-hdr-tonemap`, `--hdr-to-dci-lut`) is absent from the GUI panel
+  for the same reason. Every other create flag is now on the panel.
 - Sony RAW / X-OCN is detected but undecodable (ffmpeg can't decode it), same as
   ARRIRAW/R3D/BRAW/Canon: a match only yields a clearer detected-but-undecodable
   error. postkit's detect_format matches Sony's private essence ULs in the .mxf
@@ -50,6 +52,26 @@ user-facing surface is here.
   has no test seam). index.html gained Padding and Sign Language fieldsets plus the
   Audio channel-directory and channel-order controls; main.js added the browse
   handlers and submit_job args.
+- GUI create panel, third batch: upmix, reel splitting, delivery profiles and
+  versions/multi. Upmix (a|b) runs `postkit::upmix::upmix_wav` in prepare_audio
+  between routing and loudness, same order as the CLI. Reel splitting carries
+  `reel_length_minutes` and `reel_split_frames` into DcpConfig: the panel's
+  timecodes parse in `submit_job` via `reel::parse_timecode`, chapter marks resolve
+  at the top of run_job (ffprobe -> `reel::parse_chapter_starts`) so a source with
+  no chapters fails before the encode, and the three split sources are mutually
+  exclusive like the CLI's clap conflicts. Versions loads the manifest in
+  `submit_job` (`versions::load_versions`, which validates it) and run_job picks
+  `create_versioned_dcp` over `create_dcp`; a manifest plus a panel subtitle/CCAP is
+  rejected, matching `conflicts_with = "versions"`, and so is a manifest plus explicit
+  split points, since `create_versioned_dcp` reels by `reel_length_minutes` alone and
+  would drop them (the CLI accepts that combination and ignores the splits). Profiles are a panel action, not
+  a job field: a `list_profiles` command maps `profiles::all_profiles` to panel
+  control values and picking one fills standard / resolution / frame rate /
+  bandwidth / content kind, marks those controls, and names them in a hint; a later
+  edit wins and clears the mark. The panel resolution-key <-> container table is now
+  one const shared by `build_dcp_config` and the profile mapping. Reading a source's
+  chapters duplicates ~10 lines of ffprobe invocation from the CLI (both sides parse
+  with the same core function); worth moving to core if a third caller appears.
 
 ## Done 2026-07-23
 
@@ -140,16 +162,19 @@ other:
   submits compositions with subtitles/audio; the atmos + loudness-normalize-before-wrap
   and single-DCP 3D right-eye bits are dcpwizard-specific (IMF has no atmos aux track /
   stereoscopic DCP concept), so nothing to mirror unless imfwizard adds a loudness step.
-  The 2026-08-12 batch added sign language, pad head/tail/colour, and filename channel
-  routing to the same path; all three sit on dcpwizard-core (sign_language, pad,
-  audio_route), so there is nothing to mirror there either.
+  The 2026-08-12 batches added sign language, pad head/tail/colour, filename channel
+  routing, reel splitting, delivery profiles and versions/multi to the same path; those
+  sit on dcpwizard-core (sign_language, pad, audio_route, reel, profiles, versions), so
+  there is nothing to mirror there either. Upmix is postkit::upmix and would port to
+  imfwizard unchanged if its panel ever wants it.
 - .github/workflows/ci.yml, release.yml, gui-release.yml — copies across dcpwizard,
   imfwizard, dcpdoctor differing by binary/artifact names + per-app build deps.
   Separate git repos, so no shared reusable-workflow without a central repo. Keep
   aligned by hand. Every job that compiles the rust workspace has a cached "Setup grok"
-  step that builds grok v20.3.6 from source, installs to $GITHUB_WORKSPACE/grok-install,
+  step that builds grok v20.3.8 from source, installs to $GITHUB_WORKSPACE/grok-install,
   and exports PKG_CONFIG_PATH/LD_LIBRARY_PATH via $GITHUB_ENV (actions/cache keyed on
-  grok tag + runner os). Linux + macOS only; windows legs are continue-on-error.
+  grok tag + runner os). Windows uses a separate msvc build of the same tag. All three
+  platforms are required, none are continue-on-error.
   imfwizard mirrors the step but only in ci (it runs grk_compress at runtime, does not
   link grok-ffi); dcpdoctor needs no grok.
 - tests/cli_flags_test.sh — NOT the same harness as imfwizard's (this one runs the

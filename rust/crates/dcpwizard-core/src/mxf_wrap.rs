@@ -47,6 +47,12 @@ pub struct MxfWrapConfig {
     /// `"51(L,R,C,LFE,Ls,Rs)"`). None auto-derives from the probed channel count.
     #[serde(skip)]
     pub mca_config: Option<String>,
+    /// The id the MXF carries as its AssetUUID. A caller that already named the
+    /// output file or wrote the CPL/PKL/ASSETMAP entry must pass its id here, or
+    /// the MXF ends up carrying a different id than the package claims. None
+    /// mints a fresh id.
+    #[serde(default)]
+    pub asset_uuid: Option<[u8; 16]>,
 }
 
 /// Collect sorted files from a directory, or treat a single file as one-element list.
@@ -270,6 +276,7 @@ pub fn wrap_mxf_result(config: &MxfWrapConfig) -> Option<postkit::mxf_wrap::MxfT
         config.frame_rate,
         config.encryption.clone(),
         config.mca_config.clone(),
+        config.asset_uuid,
     )
 }
 
@@ -283,6 +290,7 @@ pub fn wrap_mxf_files(
     frame_rate: u32,
     encryption: Option<postkit::mxf_wrap::MxfEncryption>,
     mca_config: Option<String>,
+    asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     if input_files.is_empty() {
         tracing::error!("no essence files to wrap into {}", output_mxf.display());
@@ -335,6 +343,7 @@ pub fn wrap_mxf_files(
         mca_config,
         resource_ids: vec![],
         hdr: None,
+        asset_uuid,
     };
 
     let result = postkit::mxf_wrap::mxf_wrap(&opts);
@@ -356,6 +365,7 @@ pub fn wrap_timed_text_resources(
     resources: &[(PathBuf, [u8; 16])],
     output_mxf: &std::path::Path,
     frame_rate: u32,
+    asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     let mut input_files = vec![dcst.to_path_buf()];
     let mut resource_ids = Vec::new();
@@ -376,6 +386,7 @@ pub fn wrap_timed_text_resources(
         mca_config: None,
         resource_ids,
         hdr: None,
+        asset_uuid,
     };
     let result = postkit::mxf_wrap::mxf_wrap(&opts);
     if result.success {
@@ -405,6 +416,7 @@ pub fn wrap_j2k_hdr_files(
     output_mxf: &std::path::Path,
     frame_rate: u32,
     encryption: Option<postkit::mxf_wrap::MxfEncryption>,
+    asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     use asdcplib::jp2k::{COLOR_PRIMARIES_P3D65, HdrMetadata, TRANSFER_CHARACTERISTIC_ST2084};
 
@@ -441,9 +453,9 @@ pub fn wrap_j2k_hdr_files(
     }
     let header = header.unwrap();
 
-    let asset_uuid = uuid::Uuid::new_v4();
+    let asset_uuid = asset_uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
     let mut info = asdcplib::WriterInfo {
-        asset_uuid: *asset_uuid.as_bytes(),
+        asset_uuid,
         context_id: *uuid::Uuid::new_v4().as_bytes(),
         label_set: asdcplib::LabelSet::Smpte,
         ..Default::default()
@@ -515,7 +527,7 @@ pub fn wrap_j2k_hdr_files(
         output_mxf.display()
     );
     Some(postkit::mxf_wrap::MxfTrackFile {
-        uuid: asset_uuid.hyphenated().to_string(),
+        uuid: uuid::Uuid::from_bytes(asset_uuid).hyphenated().to_string(),
         hash,
         size: data.len() as u64,
         duration: frames.len() as u64,
@@ -535,6 +547,7 @@ pub fn wrap_stereoscopic_files(
     output_mxf: &std::path::Path,
     fps: u32,
     encryption: Option<postkit::mxf_wrap::MxfEncryption>,
+    asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     if left_files.is_empty() || right_files.is_empty() {
         tracing::error!("stereoscopic wrap needs both eyes");
@@ -556,6 +569,7 @@ pub fn wrap_stereoscopic_files(
         fps_num: fps,
         fps_den: 1,
         encryption,
+        asset_uuid,
     };
     let result = postkit::mxf_wrap::wrap_stereoscopic(&opts);
     if result.success {
@@ -735,7 +749,7 @@ mod tests {
             .collect();
 
         let mxf = dir.path().join("hdr_picture.mxf");
-        let track = wrap_j2k_hdr_files(frames, &mxf, 24, None).expect("hdr wrap");
+        let track = wrap_j2k_hdr_files(frames, &mxf, 24, None, None).expect("hdr wrap");
         assert_eq!(track.duration, 3);
         assert!(mxf.exists());
 
@@ -769,6 +783,7 @@ mod tests {
             frame_rate: 24,
             encryption: None,
             mca_config: None,
+            asset_uuid: None,
         };
         // 44.1 kHz is illegal in a DCP: wrap must fail loud, not mislabel it
         assert!(wrap_mxf_result(&config).is_none());

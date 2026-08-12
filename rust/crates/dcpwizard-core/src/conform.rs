@@ -1,6 +1,6 @@
 //! Timeline conformance — assemble reels from EDL/AAF/XML edit decisions.
 //!
-//! Parsing (EDL/xmeml) and the manifest writer live in [`postkit::conform`].
+//! Parsing (EDL/xmeml/fcpxml) and the manifest writer live in [`postkit::conform`].
 //! The app-side [`build_reel_plan`] turns a parsed timeline plus a media
 //! directory into a concrete, resolved reel/asset plan (the input to DCP reel
 //! assembly).

@@ -524,6 +524,84 @@ document.getElementById("prop-browse-atmos")?.addEventListener("click", async ()
   if (path) document.getElementById("prop-atmos").value = path;
 });
 
+// === Delivery profiles ===
+// A profile fills the panel controls when it is picked. Whatever is in the
+// controls at build time wins, so editing a field afterwards overrides the
+// profile, and the edited field drops out of the "set by" hint.
+const PROFILE_DRIVEN_FIELDS = [
+  ["standard", "prop-standard", "standard"],
+  ["resolution", "prop-resolution", "resolution"],
+  ["framerate", "prop-framerate", "frame rate"],
+  ["bandwidth", "prop-bandwidth", "bandwidth"],
+  ["content_kind", "prop-content-kind", "content kind"],
+];
+
+let profileSettings = [];
+
+function updateProfileHint(profileName, drivenLabels) {
+  const hint = document.getElementById("prop-profile-hint");
+  if (!hint) return;
+  hint.textContent = drivenLabels.length
+    ? `Set by ${profileName}: ${drivenLabels.join(", ")}. Edit any field to override it.`
+    : "";
+}
+
+function applyProfile(profileName) {
+  const driven = [];
+  for (const [, elementId] of PROFILE_DRIVEN_FIELDS) {
+    document.getElementById(elementId)?.classList.remove("profile-driven");
+  }
+  const profile = profileSettings.find((p) => p.name === profileName);
+  if (!profile) {
+    updateProfileHint("", driven);
+    return;
+  }
+  for (const [key, elementId, label] of PROFILE_DRIVEN_FIELDS) {
+    const value = profile[key];
+    const element = document.getElementById(elementId);
+    if (value === null || value === undefined || !element) continue;
+    element.value = value;
+    element.classList.add("profile-driven");
+    driven.push(label);
+  }
+  updateProfileHint(profileName, driven);
+  setStatus(`Profile ${profileName}: ${profile.description}`);
+}
+
+(async () => {
+  const select = document.getElementById("prop-profile");
+  if (!select) return;
+  try {
+    profileSettings = await invoke("list_profiles");
+  } catch (e) {
+    console.warn("[main] Could not load delivery profiles:", e);
+    return;
+  }
+  for (const profile of profileSettings) {
+    const option = document.createElement("option");
+    option.value = profile.name;
+    option.textContent = `${profile.name} — ${profile.description}`;
+    select.appendChild(option);
+  }
+  select.addEventListener("change", (e) => applyProfile(e.target.value));
+  for (const [, elementId] of PROFILE_DRIVEN_FIELDS) {
+    document.getElementById(elementId)?.addEventListener("input", (e) => {
+      e.target.classList.remove("profile-driven");
+    });
+  }
+})();
+
+document.getElementById("prop-browse-versions")?.addEventListener("click", async () => {
+  const path = await open({
+    directory: false, multiple: false,
+    filters: [
+      { name: 'Versions manifest', extensions: ['json'] },
+      { name: 'All', extensions: ['*'] }
+    ]
+  });
+  if (path) document.getElementById("prop-versions").value = path;
+});
+
 document.getElementById("prop-browse-audio-channel-dir")?.addEventListener("click", async () => {
   const dir = await open({ directory: true });
   if (dir) document.getElementById("prop-audio-channel-dir").value = dir;
@@ -660,6 +738,11 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       padHead: document.getElementById("prop-pad-head")?.value || null,
       padTail: document.getElementById("prop-pad-tail")?.value || null,
       padColor: document.getElementById("prop-pad-color")?.value || null,
+      upmix: document.getElementById("prop-upmix")?.value || "none",
+      reelLengthMinutes: parseInt(document.getElementById("prop-reel-length")?.value) || 0,
+      splitAt: document.getElementById("prop-split-at")?.value || null,
+      splitChapters: document.getElementById("prop-split-chapters")?.checked || false,
+      versions: document.getElementById("prop-versions")?.value || null,
     });
     setStatus("Building DCP...");
   } catch (e) {

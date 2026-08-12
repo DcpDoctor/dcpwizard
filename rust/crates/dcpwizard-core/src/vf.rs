@@ -340,6 +340,35 @@ pub fn create_vf(config: &VfConfig) -> i32 {
     0
 }
 
+/// Read the AssetUUID an already-wrapped MXF carries, so a copied track file is
+/// listed in the CPL/PKL/ASSETMAP under the id it actually holds.
+fn embedded_asset_uuid(path: &Path, mxf_type: crate::mxf_wrap::MxfType) -> Option<uuid::Uuid> {
+    let file = path.to_string_lossy().to_string();
+    let info = match mxf_type {
+        crate::mxf_wrap::MxfType::J2kPicture => {
+            let mut reader = asdcplib::jp2k::MxfReader::new();
+            reader.open_read(&file).ok()?;
+            reader.writer_info().ok()?
+        }
+        crate::mxf_wrap::MxfType::PcmAudio => {
+            let mut reader = asdcplib::pcm::MxfReader::new();
+            reader.open_read(&file).ok()?;
+            reader.writer_info().ok()?
+        }
+        crate::mxf_wrap::MxfType::TimedText => {
+            let mut reader = asdcplib::timed_text::MxfReader::new();
+            reader.open_read(&file).ok()?;
+            reader.writer_info().ok()?
+        }
+        crate::mxf_wrap::MxfType::Atmos => {
+            let mut reader = asdcplib::atmos::MxfReader::new();
+            reader.open_read(&file).ok()?;
+            reader.writer_info().ok()?
+        }
+    };
+    Some(uuid::Uuid::from_bytes(info.asset_uuid))
+}
+
 /// Wrap raw essence (or copy an already-wrapped MXF) into the VF directory and
 /// return its real asset id, hash, and size. `None` on any failure (logged).
 fn prepare_asset(
@@ -362,18 +391,23 @@ fn prepare_asset(
             .is_some_and(|e| e.eq_ignore_ascii_case("mxf"));
 
     let (id, filename, duration) = if is_mxf {
-        // Already wrapped: copy verbatim. We can't read its embedded id without
-        // an MXF probe, so mint a fresh id used consistently in CPL/PKL/ASSETMAP.
-        let id = uuid::Uuid::new_v4().to_string();
+        // Already wrapped: copy verbatim under the id the MXF itself carries,
+        // so the CPL/PKL/ASSETMAP entries match what the file holds.
+        let Some(id) = embedded_asset_uuid(input, mxf_type) else {
+            tracing::error!("cannot read the asset id of MXF {}", input.display());
+            return None;
+        };
         let filename = format!("{prefix}_{id}.mxf");
+        let id = id.to_string();
         if let Err(e) = std::fs::copy(input, vf_dir.join(&filename)) {
             tracing::error!("Failed to copy MXF {}: {e}", input.display());
             return None;
         }
         (id, filename, fallback_duration)
     } else {
-        // Raw essence: wrap and use the MXF's real embedded asset id.
-        let filename = format!("{prefix}_{}.mxf", uuid::Uuid::new_v4());
+        // Raw essence: mint the id, name the file with it and wrap the MXF under it.
+        let id = uuid::Uuid::new_v4();
+        let filename = format!("{prefix}_{id}.mxf");
         let wrap_config = crate::mxf_wrap::MxfWrapConfig {
             input_path: input.to_path_buf(),
             output_mxf: vf_dir.join(&filename),
@@ -381,6 +415,7 @@ fn prepare_asset(
             frame_rate: fps,
             encryption: None,
             mca_config: None,
+            asset_uuid: Some(*id.as_bytes()),
         };
         let tf = crate::mxf_wrap::wrap_mxf_result(&wrap_config)?;
         let duration = if tf.duration > 0 {
@@ -444,7 +479,8 @@ fn prepare_timed_text(
         tmp
     };
 
-    let filename = format!("{prefix}_{}.mxf", uuid::Uuid::new_v4());
+    let id = uuid::Uuid::new_v4();
+    let filename = format!("{prefix}_{id}.mxf");
     let wrap_config = crate::mxf_wrap::MxfWrapConfig {
         input_path: dcst_path,
         output_mxf: vf_dir.join(&filename),
@@ -452,6 +488,7 @@ fn prepare_timed_text(
         frame_rate: fps,
         encryption: None,
         mca_config: None,
+        asset_uuid: Some(*id.as_bytes()),
     };
     let track = crate::mxf_wrap::wrap_mxf_result(&wrap_config);
     if let Some(tmp) = temp_dcst {
@@ -628,6 +665,45 @@ mod tests {
         std::fs::write(dir.join("ASSETMAP.xml"), am).unwrap();
     }
 
+    /// Wrap a second of stereo silence into a real sound MXF carrying `asset_id`.
+    fn write_sound_mxf(dir: &Path, asset_id: uuid::Uuid) -> PathBuf {
+        let sample_rate = 48_000u32;
+        let channels = 2u16;
+        let bits = 24u16;
+        let block_align = (bits / 8) * channels;
+        let data_len = sample_rate as u64 * block_align as u64;
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&channels.to_le_bytes());
+        w.extend_from_slice(&sample_rate.to_le_bytes());
+        w.extend_from_slice(&(sample_rate * block_align as u32).to_le_bytes());
+        w.extend_from_slice(&block_align.to_le_bytes());
+        w.extend_from_slice(&bits.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(data_len as u32).to_le_bytes());
+        w.resize(w.len() + data_len as usize, 0);
+        let wav = dir.join("replacement.wav");
+        std::fs::write(&wav, &w).unwrap();
+
+        let mxf = dir.join("new_sound.mxf");
+        crate::mxf_wrap::wrap_mxf_files(
+            vec![wav],
+            &mxf,
+            crate::mxf_wrap::MxfType::PcmAudio,
+            24,
+            None,
+            None,
+            Some(*asset_id.as_bytes()),
+        )
+        .expect("wrap replacement sound MXF");
+        mxf
+    }
+
     /// Replacing a reel's sound must put the new MXF's real (registered) id in
     /// the CPL AND declare it in PKL + ASSETMAP, while unchanged reels stay refs.
     #[test]
@@ -638,9 +714,10 @@ mod tests {
         std::fs::create_dir_all(&ov).unwrap();
         write_ov(&ov);
 
-        // Pre-wrapped replacement MXF (bytes are irrelevant to the wiring).
-        let new_snd = tmp.path().join("new_sound.mxf");
-        std::fs::write(&new_snd, b"fake mxf essence").unwrap();
+        // A pre-wrapped replacement ships under the id it already carries, so the
+        // fixture has to be a real MXF with a known AssetUUID.
+        let embedded_id = uuid::Uuid::new_v4();
+        let new_snd = write_sound_mxf(tmp.path(), embedded_id);
 
         let config = VfConfig {
             ov_dir: ov.clone(),
@@ -668,7 +745,11 @@ mod tests {
             .trim_start_matches("sound_")
             .trim_end_matches(".mxf")
             .to_string();
-        assert!(!new_id.is_empty());
+        assert_eq!(
+            new_id,
+            embedded_id.to_string(),
+            "the shipped file must be named with the id the MXF itself carries"
+        );
         assert!(vf.join(&mxf).exists());
 
         let cpl_name = std::fs::read_dir(&vf)

@@ -412,7 +412,7 @@ fn transcode_picture(
         return None;
     }
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4();
     let filename = format!("picture_{id}.mxf");
     let out_mxf = config.output_dir.join(&filename);
     let track = crate::mxf_wrap::wrap_mxf_files(
@@ -422,6 +422,7 @@ fn transcode_picture(
         fps,
         None,
         None,
+        Some(*id.as_bytes()),
     );
     let _ = std::fs::remove_dir_all(&work);
     let track = track?;

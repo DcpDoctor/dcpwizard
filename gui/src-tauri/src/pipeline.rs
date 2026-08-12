@@ -69,6 +69,14 @@ struct JobConfig {
     pad_head: Option<String>,
     pad_tail: Option<String>,
     pad_color: Option<String>,
+    // stereo -> 5.1 upmix applied before loudness normalization
+    upmix: Option<postkit::upmix::Upmixer>,
+    reel_length_minutes: u32,
+    // explicit reel boundaries in frames, from the panel's split timecodes
+    reel_split_frames: Vec<u64>,
+    split_chapters: bool,
+    // one CPL per entry over shared essence; empty keeps the single-CPL path
+    versions: Vec<dcpwizard_core::versions::VersionSpec>,
 }
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
@@ -132,6 +140,11 @@ pub async fn submit_job(
     pad_head: Option<String>,
     pad_tail: Option<String>,
     pad_color: Option<String>,
+    upmix: Option<String>,
+    reel_length_minutes: Option<u32>,
+    split_at: Option<String>,
+    split_chapters: Option<bool>,
+    versions: Option<String>,
 ) -> Result<u64, String> {
     let queue = app.state::<JobQueue>();
     let id = queue.next_id.fetch_add(1, Ordering::Relaxed);
@@ -165,6 +178,43 @@ pub async fn submit_job(
         dcpwizard_core::pad::parse_pad_color(spec)?;
     }
 
+    let upmix = parse_upmixer(upmix.as_deref())?;
+
+    // reel splitting: length, timecodes and chapters are three ways to say the
+    // same thing, so only one may be set (the CLI rejects the combos too).
+    let reel_length_minutes = reel_length_minutes.unwrap_or(0);
+    let split_at = split_at.filter(|s| !s.trim().is_empty());
+    let split_chapters = split_chapters.unwrap_or(false);
+    let split_sources = [reel_length_minutes > 0, split_at.is_some(), split_chapters]
+        .into_iter()
+        .filter(|set| *set)
+        .count();
+    if split_sources > 1 {
+        return Err(
+            "Choose one reel split: reel length, split timecodes, or split at chapters".into(),
+        );
+    }
+    let reel_split_frames = match split_at.as_deref() {
+        Some(spec) => parse_split_timecodes(spec, fps_num)?,
+        None => Vec::new(),
+    };
+
+    let versions = load_version_specs(versions.as_deref())?;
+    let subtitle = subtitle.filter(|s| !s.is_empty());
+    let ccap = ccap.filter(|s| !s.is_empty());
+    if !versions.is_empty() && (subtitle.is_some() || ccap.is_some()) {
+        return Err(
+            "A versions manifest carries its own subtitles and captions: clear the subtitle and CCAP fields".into(),
+        );
+    }
+    // multi-CPL packages reel by length only, so refuse the split the packer
+    // would drop on the floor.
+    if !versions.is_empty() && (!reel_split_frames.is_empty() || split_chapters) {
+        return Err(
+            "A versions manifest splits reels by length only: clear the split timecodes and chapter split".into(),
+        );
+    }
+
     let job = JobConfig {
         id,
         video_path: PathBuf::from(&video_path),
@@ -183,9 +233,9 @@ pub async fn submit_job(
         channels: channels.unwrap_or_else(|| "5.1".into()),
         right_eye: right_eye.filter(|s| !s.is_empty()),
         atmos: atmos.filter(|s| !s.is_empty()),
-        subtitle: subtitle.filter(|s| !s.is_empty()),
+        subtitle,
         subtitle_language: subtitle_language.unwrap_or_else(|| "en".into()),
-        ccap: ccap.filter(|s| !s.is_empty()),
+        ccap,
         ccap_language: ccap_language.unwrap_or_else(|| "en".into()),
         loudness_target: loudness_target.filter(|s| !s.is_empty()),
         true_peak_ceiling,
@@ -196,6 +246,11 @@ pub async fn submit_job(
         pad_head,
         pad_tail,
         pad_color,
+        upmix,
+        reel_length_minutes,
+        reel_split_frames,
+        split_chapters,
+        versions,
     };
 
     {
@@ -211,6 +266,48 @@ pub async fn submit_job(
     }
 
     Ok(id)
+}
+
+// ─── Delivery profiles ─────────────────────────────────────────────────────
+
+/// A delivery profile as panel control values. A field is null when the profile
+/// carries nothing the panel can express, and the panel leaves that control
+/// alone.
+#[derive(Clone, Serialize)]
+pub struct ProfilePanelSettings {
+    pub name: String,
+    pub description: String,
+    pub standard: Option<String>,
+    pub resolution: Option<String>,
+    pub framerate: String,
+    pub bandwidth: u32,
+    pub content_kind: String,
+}
+
+fn profile_panel_settings(profile: &dcpwizard_core::profiles::Profile) -> ProfilePanelSettings {
+    let standard = profile.standard.to_lowercase();
+    ProfilePanelSettings {
+        name: profile.name.clone(),
+        description: profile.description.clone(),
+        standard: matches!(standard.as_str(), "smpte" | "interop").then_some(standard),
+        resolution: resolution_key_of(profile.resolution_width, profile.resolution_height)
+            .map(str::to_string),
+        framerate: profile.frame_rate.to_string(),
+        bandwidth: profile.bitrate_mbps,
+        content_kind: profile.content_kind.clone(),
+    }
+}
+
+fn profile_panel_list() -> Vec<ProfilePanelSettings> {
+    dcpwizard_core::profiles::all_profiles()
+        .iter()
+        .map(profile_panel_settings)
+        .collect()
+}
+
+#[tauri::command]
+pub async fn list_profiles() -> Vec<ProfilePanelSettings> {
+    profile_panel_list()
 }
 
 #[tauri::command]
@@ -401,6 +498,80 @@ fn parse_audio_input_order(
     }
 }
 
+/// Panel resolution keys and the CPL container they stand for. scope/flat/full
+/// are distinct containers, not just 2K vs 4K.
+const RESOLUTION_CONTAINERS: [(&str, u32, u32); 6] = [
+    ("2k-scope", 2048, 858),
+    ("2k-flat", 1998, 1080),
+    ("2k-full", 2048, 1080),
+    ("4k-scope", 4096, 1716),
+    ("4k-flat", 3996, 2160),
+    ("4k-full", 4096, 2160),
+];
+
+fn container_of(resolution: &str) -> (u32, u32) {
+    RESOLUTION_CONTAINERS
+        .iter()
+        .find(|(key, _, _)| *key == resolution)
+        .map(|(_, width, height)| (*width, *height))
+        .unwrap_or((0, 0))
+}
+
+fn resolution_key_of(width: u32, height: u32) -> Option<&'static str> {
+    RESOLUTION_CONTAINERS
+        .iter()
+        .find(|(_, w, h)| *w == width && *h == height)
+        .map(|(key, _, _)| *key)
+}
+
+fn parse_upmixer(value: Option<&str>) -> Result<Option<postkit::upmix::Upmixer>, String> {
+    match value.unwrap_or("") {
+        "" | "none" => Ok(None),
+        "a" => Ok(Some(postkit::upmix::Upmixer::A)),
+        "b" => Ok(Some(postkit::upmix::Upmixer::B)),
+        other => Err(format!("Unknown upmix variant '{other}' (use a or b)")),
+    }
+}
+
+fn parse_split_timecodes(spec: &str, fps: u32) -> Result<Vec<u64>, String> {
+    let mut frames = Vec::new();
+    for timecode in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        frames.push(dcpwizard_core::reel::parse_timecode(timecode, fps)?);
+    }
+    if frames.is_empty() {
+        return Err("Split timecodes need at least one HH:MM:SS or HH:MM:SS:FF entry".into());
+    }
+    Ok(frames)
+}
+
+/// Read and validate a versions manifest. An absent or empty path keeps the
+/// single-CPL path.
+fn load_version_specs(
+    path: Option<&str>,
+) -> Result<Vec<dcpwizard_core::versions::VersionSpec>, String> {
+    match path.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => dcpwizard_core::versions::load_versions(std::path::Path::new(p)),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Reel boundaries in frames: the panel's timecodes, or the source's chapter
+/// marks when the panel asked to split at chapters.
+fn resolve_reel_splits(job: &JobConfig, fps: u32) -> Result<Vec<u64>, String> {
+    if !job.split_chapters {
+        return Ok(job.reel_split_frames.clone());
+    }
+    let probe = std::process::Command::new("ffprobe")
+        .args(["-v", "quiet", "-print_format", "json", "-show_chapters"])
+        .arg(&job.video_path)
+        .output()
+        .map_err(|e| format!("failed to run ffprobe: {e}"))?;
+    if !probe.status.success() {
+        return Err("ffprobe failed to read chapters".into());
+    }
+    dcpwizard_core::reel::parse_chapter_starts(&String::from_utf8_lossy(&probe.stdout), fps)
+}
+
 // Frame rate drives both the J2K encode (video demux rate) and the CPL.
 fn frame_rate_of(framerate: &str) -> (u32, u32) {
     match framerate {
@@ -427,8 +598,8 @@ fn count_frames(j2k_dir: &std::path::Path) -> u64 {
 }
 
 /// Create-time audio processing: filename channel routing from a directory of
-/// mono WAVs, then loudness normalization. Mirrors the CLI create path minus
-/// upmix. Intermediates go under `<output>/audio_work`.
+/// mono WAVs, then stereo-to-5.1 upmix, then loudness normalization. Same order
+/// as the CLI create path. Intermediates go under `<output>/audio_work`.
 fn prepare_audio(
     job: &JobConfig,
     output: &std::path::Path,
@@ -449,6 +620,14 @@ fn prepare_audio(
             &routed,
         )?);
         log("[AUDIO] Routed channel WAVs from the input directory by filename");
+    }
+
+    if let (Some(variant), Some(input)) = (job.upmix, &audio_path) {
+        std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
+        let out = work_dir.join("upmix.wav");
+        postkit::upmix::upmix_wav(variant, input, &out).map_err(|e| e.to_string())?;
+        log("[AUDIO] Upmixed stereo to 5.1");
+        audio_path = Some(out);
     }
 
     if let (Some(spec), Some(input)) = (job.loudness_target.as_deref(), &audio_path) {
@@ -476,6 +655,7 @@ fn build_dcp_config(
     right_eye_dir: Option<PathBuf>,
     audio_path: Option<PathBuf>,
     sign_language_main_channels: Option<u32>,
+    reel_split_frames: Vec<u64>,
 ) -> dcpwizard_core::dcp::DcpConfig {
     let standard = match job.standard.as_str() {
         "interop" => dcpwizard_core::Standard::Interop,
@@ -487,16 +667,7 @@ fn build_dcp_config(
     } else {
         dcpwizard_core::Resolution::TwoK
     };
-    // scope/flat/full are distinct containers, not just 2K vs 4K
-    let (container_width, container_height) = match job.resolution.as_str() {
-        "2k-scope" => (2048, 858),
-        "2k-flat" => (1998, 1080),
-        "2k-full" => (2048, 1080),
-        "4k-scope" => (4096, 1716),
-        "4k-flat" => (3996, 2160),
-        "4k-full" => (4096, 2160),
-        _ => (0, 0),
-    };
+    let (container_width, container_height) = container_of(&job.resolution);
 
     let content_type = match job.content_kind.as_str() {
         "trailer" => dcpwizard_core::ContentType::Trailer,
@@ -535,6 +706,8 @@ fn build_dcp_config(
         pad_head: job.pad_head.clone(),
         pad_tail: job.pad_tail.clone(),
         pad_color: job.pad_color.clone(),
+        reel_length_minutes: job.reel_length_minutes,
+        reel_split_frames,
         sign_language_lang: job.sign_language_tag.clone(),
         sign_language_main_channels,
         ..Default::default()
@@ -565,6 +738,16 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     );
 
     let (fps_num, _) = frame_rate_of(&job.framerate);
+
+    // reel boundaries before the encode: a source with no chapter marks should
+    // fail now, not after an hour of J2K.
+    let reel_split_frames = resolve_reel_splits(job, fps_num)?;
+    if !reel_split_frames.is_empty() {
+        log_to(
+            &log_file,
+            &format!("[PACKAGE] Reel boundaries: {reel_split_frames:?}"),
+        );
+    }
 
     // Map the target bandwidth (Mbps) to a J2K compression ratio, matching the
     // CLI convention (raw = w*h*36 bits/frame). Only honoured for video input;
@@ -671,9 +854,21 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         right_eye_dir,
         audio_path,
         sign_language_main_channels,
+        reel_split_frames,
     );
 
-    let rc = dcpwizard_core::dcp::create_dcp(&config);
+    let rc = if job.versions.is_empty() {
+        dcpwizard_core::dcp::create_dcp(&config)
+    } else {
+        log_to(
+            &log_file,
+            &format!(
+                "[PACKAGE] {} versions over shared essence",
+                job.versions.len()
+            ),
+        );
+        dcpwizard_core::versions::create_versioned_dcp(&config, &job.versions)
+    };
     if rc != 0 {
         log_to(&log_file, &format!("[PACKAGE] FAILED (rc={rc})"));
         return Err(format!("DCP packaging failed (rc={rc})"));
@@ -805,6 +1000,11 @@ mod tests {
             pad_head: None,
             pad_tail: None,
             pad_color: None,
+            upmix: None,
+            reel_length_minutes: 0,
+            reel_split_frames: Vec::new(),
+            split_chapters: false,
+            versions: Vec::new(),
         }
     }
 
@@ -904,6 +1104,7 @@ mod tests {
             None,
             Some(PathBuf::from("/out/slvs_sound.wav")),
             Some(6),
+            Vec::new(),
         );
 
         assert_eq!(config.audio_input_order, AudioInputOrder::LrcLsRsLfe);
@@ -920,7 +1121,14 @@ mod tests {
 
     #[test]
     fn omitted_options_leave_the_core_defaults() {
-        let config = build_dcp_config(&test_job(), PathBuf::from("/out/j2k"), None, None, None);
+        let config = build_dcp_config(
+            &test_job(),
+            PathBuf::from("/out/j2k"),
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
 
         assert_eq!(config.audio_input_order, AudioInputOrder::Canonical51);
         assert_eq!(config.pad_head, None);
@@ -930,5 +1138,139 @@ mod tests {
         assert_eq!(config.sign_language_main_channels, None);
         assert_eq!(config.container_width, 1998);
         assert_eq!(config.frame_rate_num, 24);
+        assert_eq!(config.reel_length_minutes, 0);
+        assert!(config.reel_split_frames.is_empty());
+    }
+
+    #[test]
+    fn upmix_variant_parses() {
+        assert!(matches!(
+            parse_upmixer(Some("a")).unwrap(),
+            Some(postkit::upmix::Upmixer::A)
+        ));
+        assert!(matches!(
+            parse_upmixer(Some("b")).unwrap(),
+            Some(postkit::upmix::Upmixer::B)
+        ));
+        assert!(parse_upmixer(Some("none")).unwrap().is_none());
+        assert!(parse_upmixer(None).unwrap().is_none());
+        assert!(parse_upmixer(Some("c")).is_err());
+    }
+
+    #[test]
+    fn upmix_turns_a_stereo_file_into_five_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let stereo = dir.path().join("stereo.wav");
+        let spec = WavSpec {
+            channels: 2,
+            sample_rate: 48000,
+            bits_per_sample: 24,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(&stereo, spec).unwrap();
+        for frame in 0..4800 {
+            let value = ((frame % 48) - 24) * 10_000;
+            writer.write_sample(value).unwrap();
+            writer.write_sample(-value).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let mut job = test_job();
+        job.audio_path = Some(stereo.to_string_lossy().into_owned());
+        job.upmix = Some(postkit::upmix::Upmixer::B);
+
+        let upmixed = prepare_audio(&job, dir.path(), |_| {}).unwrap().unwrap();
+        assert_eq!(upmixed, dir.path().join("audio_work").join("upmix.wav"));
+        let reader = WavReader::open(&upmixed).unwrap();
+        assert_eq!(reader.spec().channels, 6);
+    }
+
+    #[test]
+    fn split_timecodes_become_reel_frames() {
+        assert_eq!(
+            parse_split_timecodes("00:00:10, 00:01:00:12", 24).unwrap(),
+            vec![240, 1452]
+        );
+        assert!(parse_split_timecodes("10 minutes", 24).is_err());
+        assert!(parse_split_timecodes(" , ", 24).is_err());
+    }
+
+    #[test]
+    fn reel_splitting_reaches_the_core_config() {
+        let mut job = test_job();
+        job.reel_length_minutes = 20;
+
+        let config = build_dcp_config(
+            &job,
+            PathBuf::from("/out/j2k"),
+            None,
+            None,
+            None,
+            parse_split_timecodes("00:00:10", 24).unwrap(),
+        );
+
+        assert_eq!(config.reel_length_minutes, 20);
+        assert_eq!(config.reel_split_frames, vec![240]);
+    }
+
+    #[test]
+    fn versions_manifest_is_loaded_and_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let subtitle = dir.path().join("fr.srt");
+        std::fs::write(&subtitle, "1\n00:00:00,000 --> 00:00:01,000\nbonjour\n").unwrap();
+        let manifest = dir.path().join("versions.json");
+        std::fs::write(
+            &manifest,
+            serde_json::json!([
+                { "title": "Feature OV" },
+                { "title": "Feature FR", "subtitle": subtitle, "subtitle_language": "fr" },
+            ])
+            .to_string(),
+        )
+        .unwrap();
+
+        let specs = load_version_specs(Some(manifest.to_str().unwrap())).unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[1].title, "Feature FR");
+        assert_eq!(specs[1].subtitle.as_deref(), Some(subtitle.as_path()));
+
+        assert!(load_version_specs(None).unwrap().is_empty());
+        assert!(load_version_specs(Some("")).unwrap().is_empty());
+
+        let missing = dir.path().join("missing.json");
+        std::fs::write(
+            &missing,
+            r#"[{"title": "Gone", "subtitle": "/no/such/file.srt"}]"#,
+        )
+        .unwrap();
+        assert!(load_version_specs(Some(missing.to_str().unwrap())).is_err());
+    }
+
+    #[test]
+    fn profiles_map_to_panel_controls() {
+        let profiles = profile_panel_list();
+        assert_eq!(profiles.len(), 4);
+
+        let four_k = profiles.iter().find(|p| p.name == "cinema_4k").unwrap();
+        assert_eq!(four_k.resolution.as_deref(), Some("4k-full"));
+        assert_eq!(four_k.framerate, "24");
+        assert_eq!(four_k.bandwidth, 500);
+        assert_eq!(four_k.content_kind, "feature");
+        assert_eq!(four_k.standard.as_deref(), Some("smpte"));
+
+        let trailer = profiles.iter().find(|p| p.name == "trailer").unwrap();
+        assert_eq!(trailer.resolution.as_deref(), Some("2k-scope"));
+        assert_eq!(trailer.content_kind, "trailer");
+
+        // the panel controls a profile names must drive the same containers the
+        // job path maps back to.
+        for profile in &profiles {
+            let key = profile.resolution.as_deref().unwrap();
+            let core = dcpwizard_core::profiles::get_profile(&profile.name).unwrap();
+            assert_eq!(
+                container_of(key),
+                (core.resolution_width, core.resolution_height)
+            );
+        }
     }
 }

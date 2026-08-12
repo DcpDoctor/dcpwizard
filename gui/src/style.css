@@ -496,6 +496,11 @@ body {
   margin-right: 6px;
 }
 
+/* a control whose value came from the selected delivery profile */
+.prop-field .profile-driven {
+  border-left: 3px solid var(--primary);
+}
+
 .input-with-btn {
   display: flex;
   gap: 4px;

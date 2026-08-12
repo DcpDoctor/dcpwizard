@@ -228,10 +228,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
     for (i, range) in ranges.iter().enumerate() {
         let reel_frames = range.frames();
         let slice = frames[range.start as usize..range.end as usize].to_vec();
-        let picture_uuid = uuid::Uuid::new_v4().to_string();
+        let picture_uuid = uuid::Uuid::new_v4();
         let picture_name = format!("picture_{picture_uuid}.mxf");
         let picture_path = config.output_dir.join(&picture_name);
-        let picture_key = match mint_key(config, KeyType::Mdik, &picture_uuid) {
+        let picture_key = match mint_key(config, KeyType::Mdik, &picture_uuid.to_string()) {
             Ok(k) => k,
             Err(()) => {
                 cleanup(&temps);
@@ -245,6 +245,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             fps,
             picture_key.as_ref().map(crate::reel::mxf_enc),
             None,
+            Some(*picture_uuid.as_bytes()),
         )
         .is_none()
         {
@@ -255,7 +256,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         register_asset(
             &mut pkl_entries,
             &mut am_entries,
-            &picture_uuid,
+            &picture_uuid.to_string(),
             &picture_name,
             &picture_path,
         );
@@ -288,7 +289,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
 
         essences.push(ReelEssence {
             reel_frames,
-            picture_uuid,
+            picture_uuid: picture_uuid.to_string(),
             picture_key_id: picture_key.as_ref().map(|k| k.info.key_id.clone()),
             picture_key_info: picture_key.map(|k| k.info),
             base_sound_uuid,
@@ -300,7 +301,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
     // ── atmos: shared aux data, single reel only (guarded above) ──
     let mut aux_data: Option<crate::cpl::AuxData> = None;
     if let Some(atmos_path) = config.atmos_path.as_ref() {
-        let atmos_uuid = uuid::Uuid::new_v4().to_string();
+        let atmos_uuid = uuid::Uuid::new_v4();
         let atmos_name = format!("atmos_{atmos_uuid}.mxf");
         let atmos_path_out = config.output_dir.join(&atmos_name);
         let Some(track) = crate::mxf_wrap::wrap_mxf_result(&crate::mxf_wrap::MxfWrapConfig {
@@ -310,6 +311,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             frame_rate: fps,
             encryption: None,
             mca_config: None,
+            asset_uuid: Some(*atmos_uuid.as_bytes()),
         }) else {
             tracing::error!("Failed to wrap Atmos MXF");
             cleanup(&temps);
@@ -327,12 +329,12 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         register_asset(
             &mut pkl_entries,
             &mut am_entries,
-            &atmos_uuid,
+            &atmos_uuid.to_string(),
             &atmos_name,
             &atmos_path_out,
         );
         aux_data = Some(crate::cpl::AuxData {
-            id: atmos_uuid,
+            id: atmos_uuid.to_string(),
             edit_rate_num: fps,
             edit_rate_den: 1,
             duration: track.duration,
@@ -747,7 +749,7 @@ pub(crate) fn wrap_sound_reel(
     temps: &mut Vec<PathBuf>,
 ) -> Result<SoundReel, ()> {
     let spf = (info.sample_rate / fps) as u64;
-    let uuid = uuid::Uuid::new_v4().to_string();
+    let uuid = uuid::Uuid::new_v4();
     let wav_tmp = config.output_dir.join(format!("sound_{uuid}.wav"));
     if let Err(e) =
         crate::reel::write_reel_wav(src, info, range.start * spf, range.frames() * spf, &wav_tmp)
@@ -757,7 +759,7 @@ pub(crate) fn wrap_sound_reel(
     }
     let name = format!("sound_{uuid}.mxf");
     let path = config.output_dir.join(&name);
-    let key = mint_key(config, KeyType::Mdak, &uuid)?;
+    let key = mint_key(config, KeyType::Mdak, &uuid.to_string())?;
     let wrapped = crate::mxf_wrap::wrap_mxf_files(
         vec![wav_tmp.clone()],
         &path,
@@ -765,15 +767,16 @@ pub(crate) fn wrap_sound_reel(
         fps,
         key.as_ref().map(crate::reel::mxf_enc),
         None,
+        Some(*uuid.as_bytes()),
     );
     temps.push(wav_tmp);
     if wrapped.is_none() {
         tracing::error!("Failed to wrap sound MXF");
         return Err(());
     }
-    register_asset(pkl, am, &uuid, &name, &path);
+    register_asset(pkl, am, &uuid.to_string(), &name, &path);
     Ok(SoundReel {
-        uuid,
+        uuid: uuid.to_string(),
         key_id: key.as_ref().map(|k| k.info.key_id.clone()),
         key_info: key.map(|k| k.info),
     })
@@ -792,7 +795,7 @@ pub(crate) fn wrap_subtitle_cues(
     am: &mut Vec<crate::assetmap::AssetMapEntry>,
     temps: &mut Vec<PathBuf>,
 ) -> Result<(String, u64), ()> {
-    let uuid = uuid::Uuid::new_v4().to_string();
+    let uuid = uuid::Uuid::new_v4();
     let dcst = config.output_dir.join(format!("{prefix}_{uuid}.xml"));
     if let Err(e) = crate::subtitle::write_dcst_frames(cues, lang, fps, &dcst) {
         tracing::error!("{prefix} write failed: {e}");
@@ -807,14 +810,15 @@ pub(crate) fn wrap_subtitle_cues(
         frame_rate: fps,
         encryption: None,
         mca_config: None,
+        asset_uuid: Some(*uuid.as_bytes()),
     });
     temps.push(dcst);
     let Some(track) = wrapped else {
         tracing::error!("Failed to wrap {prefix} MXF");
         return Err(());
     };
-    register_asset(pkl, am, &uuid, &name, &path);
-    Ok((uuid, track.duration))
+    register_asset(pkl, am, &uuid.to_string(), &name, &path);
+    Ok((uuid.to_string(), track.duration))
 }
 
 /// Wrap a supplied SMPTE timed-text XML into an MXF unchanged (single reel).
@@ -827,7 +831,7 @@ pub(crate) fn wrap_subtitle_xml(
     pkl: &mut Vec<crate::pkl::PklEntry>,
     am: &mut Vec<crate::assetmap::AssetMapEntry>,
 ) -> Result<(String, u64), ()> {
-    let uuid = uuid::Uuid::new_v4().to_string();
+    let uuid = uuid::Uuid::new_v4();
     let name = format!("{prefix}_{uuid}.mxf");
     let path = config.output_dir.join(&name);
     let wrapped = crate::mxf_wrap::wrap_mxf_result(&crate::mxf_wrap::MxfWrapConfig {
@@ -837,13 +841,14 @@ pub(crate) fn wrap_subtitle_xml(
         frame_rate: fps,
         encryption: None,
         mca_config: None,
+        asset_uuid: Some(*uuid.as_bytes()),
     });
     let Some(track) = wrapped else {
         tracing::error!("Failed to wrap {prefix} MXF");
         return Err(());
     };
-    register_asset(pkl, am, &uuid, &name, &path);
-    Ok((uuid, track.duration))
+    register_asset(pkl, am, &uuid.to_string(), &name, &path);
+    Ok((uuid.to_string(), track.duration))
 }
 
 /// Prepare an audio source to canonical DCP 5.1 layout when it is 5.1, else use

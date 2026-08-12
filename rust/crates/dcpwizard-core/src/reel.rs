@@ -400,10 +400,14 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         let reel_frames = range.frames();
 
         // ── picture ───────────────────────────────────────────────────
-        let picture_uuid = uuid::Uuid::new_v4().to_string();
+        let picture_uuid = uuid::Uuid::new_v4();
         let picture_name = format!("picture_{picture_uuid}.mxf");
         let picture_path = config.output_dir.join(&picture_name);
-        let picture_key = match mint_key(config, crate::encrypt::KeyType::Mdik, &picture_uuid) {
+        let picture_key = match mint_key(
+            config,
+            crate::encrypt::KeyType::Mdik,
+            &picture_uuid.to_string(),
+        ) {
             Ok(k) => k,
             Err(()) => return -1,
         };
@@ -416,6 +420,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             fps,
             picture_key.as_ref().map(mxf_enc),
             None,
+            Some(*picture_uuid.as_bytes()),
         )
         .is_none()
         {
@@ -425,7 +430,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         register_asset(
             &mut pkl_entries,
             &mut am_entries,
-            &picture_uuid,
+            &picture_uuid.to_string(),
             &picture_name,
             &picture_path,
         );
@@ -436,7 +441,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         let mut sound_key = None;
         if let Some((src, info)) = &wav {
             let spf = (info.sample_rate / fps) as u64;
-            let sound_uuid = uuid::Uuid::new_v4().to_string();
+            let sound_uuid = uuid::Uuid::new_v4();
             let wav_tmp = config.output_dir.join(format!("sound_{sound_uuid}.wav"));
             if let Err(e) =
                 write_reel_wav(src, info, range.start * spf, reel_frames * spf, &wav_tmp)
@@ -446,7 +451,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             }
             let sound_name = format!("sound_{sound_uuid}.mxf");
             let sound_path = config.output_dir.join(&sound_name);
-            let key = match mint_key(config, crate::encrypt::KeyType::Mdak, &sound_uuid) {
+            let key = match mint_key(
+                config,
+                crate::encrypt::KeyType::Mdak,
+                &sound_uuid.to_string(),
+            ) {
                 Ok(k) => k,
                 Err(()) => return -1,
             };
@@ -458,6 +467,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 fps,
                 key.as_ref().map(mxf_enc),
                 None,
+                Some(*sound_uuid.as_bytes()),
             );
             temps.push(wav_tmp);
             if wrapped.is_none() {
@@ -467,11 +477,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             register_asset(
                 &mut pkl_entries,
                 &mut am_entries,
-                &sound_uuid,
+                &sound_uuid.to_string(),
                 &sound_name,
                 &sound_path,
             );
-            sound_id = Some(sound_uuid);
+            sound_id = Some(sound_uuid.to_string());
             sound_key = key;
         }
 
@@ -481,7 +491,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             let rebased =
                 crate::subtitle::rebase_styled_for_reel(&plan.cues, range.start, range.end, fps);
             if !rebased.is_empty() {
-                let subtitle_uuid = uuid::Uuid::new_v4().to_string();
+                let subtitle_uuid = uuid::Uuid::new_v4();
                 let dcst = config
                     .output_dir
                     .join(format!("subtitle_{subtitle_uuid}.xml"));
@@ -498,8 +508,13 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 }
                 let sub_name = format!("subtitle_{subtitle_uuid}.mxf");
                 let sub_path = config.output_dir.join(&sub_name);
-                let wrapped =
-                    crate::mxf_wrap::wrap_timed_text_resources(&dcst, &resources, &sub_path, fps);
+                let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+                    &dcst,
+                    &resources,
+                    &sub_path,
+                    fps,
+                    Some(*subtitle_uuid.as_bytes()),
+                );
                 temps.push(dcst);
                 let Some(track) = wrapped else {
                     tracing::error!("Failed to wrap subtitle MXF for reel {}", i + 1);
@@ -508,11 +523,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 register_asset(
                     &mut pkl_entries,
                     &mut am_entries,
-                    &subtitle_uuid,
+                    &subtitle_uuid.to_string(),
                     &sub_name,
                     &sub_path,
                 );
-                sub = Some((subtitle_uuid, track.duration));
+                sub = Some((subtitle_uuid.to_string(), track.duration));
             }
         }
 
@@ -522,7 +537,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             let rebased =
                 crate::subtitle::rebase_styled_for_reel(&plan.cues, range.start, range.end, fps);
             if !rebased.is_empty() {
-                let ccap_uuid = uuid::Uuid::new_v4().to_string();
+                let ccap_uuid = uuid::Uuid::new_v4();
                 let dcst = config.output_dir.join(format!("ccap_{ccap_uuid}.xml"));
                 let (xml, resources) = crate::subtitle::render_reel_dcst(
                     &rebased,
@@ -537,8 +552,13 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 }
                 let ccap_name = format!("ccap_{ccap_uuid}.mxf");
                 let ccap_path = config.output_dir.join(&ccap_name);
-                let wrapped =
-                    crate::mxf_wrap::wrap_timed_text_resources(&dcst, &resources, &ccap_path, fps);
+                let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+                    &dcst,
+                    &resources,
+                    &ccap_path,
+                    fps,
+                    Some(*ccap_uuid.as_bytes()),
+                );
                 temps.push(dcst);
                 let Some(track) = wrapped else {
                     tracing::error!("Failed to wrap closed-caption MXF for reel {}", i + 1);
@@ -547,11 +567,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 register_asset(
                     &mut pkl_entries,
                     &mut am_entries,
-                    &ccap_uuid,
+                    &ccap_uuid.to_string(),
                     &ccap_name,
                     &ccap_path,
                 );
-                ccap = Some((ccap_uuid, track.duration));
+                ccap = Some((ccap_uuid.to_string(), track.duration));
             }
         }
 
@@ -564,7 +584,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
 
         cpl_reels.push(crate::cpl::CplReel {
             reel_id: uuid::Uuid::new_v4().to_string(),
-            picture_id: picture_uuid,
+            picture_id: picture_uuid.to_string(),
             picture_width: pic_w,
             picture_height: pic_h,
             picture_edit_rate_num: fps,

@@ -428,10 +428,10 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
         let mut bundle_keys: Vec<ContentKey> = Vec::new();
 
         // ── picture ──
-        let picture_uuid = uuid::Uuid::new_v4().to_string();
+        let picture_uuid = uuid::Uuid::new_v4();
         let picture_name = format!("picture_{picture_uuid}.mxf");
         let picture_path = config.output_dir.join(&picture_name);
-        let picture_key = match mint_key(config, KeyType::Mdik, &picture_uuid) {
+        let picture_key = match mint_key(config, KeyType::Mdik, &picture_uuid.to_string()) {
             Ok(k) => k,
             Err(()) => {
                 cleanup(&temps);
@@ -445,6 +445,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             fps,
             picture_key.as_ref().map(crate::reel::mxf_enc),
             None,
+            Some(*picture_uuid.as_bytes()),
         )
         .is_none()
         {
@@ -458,7 +459,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
         register_asset(
             &mut pkl_entries,
             &mut am_entries,
-            &picture_uuid,
+            &picture_uuid.to_string(),
             &picture_name,
             &picture_path,
         );
@@ -601,7 +602,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             .to_string();
         let reel = crate::cpl::CplReel {
             reel_id: uuid::Uuid::new_v4().to_string(),
-            picture_id: picture_uuid,
+            picture_id: picture_uuid.to_string(),
             picture_width: pic_w,
             picture_height: pic_h,
             picture_edit_rate_num: fps,
