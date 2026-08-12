@@ -100,7 +100,17 @@ jobs:
         env:
           GROK_TAG: v20.3.8
         run: |
-          choco install -y --no-progress pkgconfiglite
+          # choco exits 0 when its feed times out and installs nothing, so a
+          # missing pkg-config used to surface as a grokj2k-sys build failure
+          for attempt in 1 2 3; do
+            pkg-config --version >/dev/null 2>&1 && break
+            [ "$attempt" -gt 1 ] && sleep 20
+            choco install -y --no-progress pkgconfiglite || true
+          done
+          pkg-config --version >/dev/null 2>&1 || {
+            echo "pkg-config missing after 3 chocolatey attempts" >&2
+            exit 1
+          }
           prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
           if [ ! -f "$prefix/bin/grokj2k.dll" ]; then
             git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
