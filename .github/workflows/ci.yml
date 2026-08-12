@@ -100,15 +100,17 @@ jobs:
         env:
           GROK_TAG: v20.3.8
         run: |
-          # choco exits 0 when its feed times out and installs nothing, so a
-          # missing pkg-config used to surface as a grokj2k-sys build failure
-          for attempt in 1 2 3; do
-            pkg-config --version >/dev/null 2>&1 && break
-            [ "$attempt" -gt 1 ] && sleep 20
-            choco install -y --no-progress pkgconfiglite || true
-          done
+          # choco puts its shim directory on the machine PATH, which this
+          # already-running bash cannot see, so add it by hand
+          choco_bin="$(cygpath -u "${ChocolateyInstall:-C:/ProgramData/chocolatey}")/bin"
+          export PATH="$choco_bin:$PATH"
+          echo "$(cygpath -w "$choco_bin")" >> "$GITHUB_PATH"
+          pkg-config --version >/dev/null 2>&1 || choco install -y --no-progress pkgconfiglite
+          hash -r
           pkg-config --version >/dev/null 2>&1 || {
-            echo "pkg-config missing after 3 chocolatey attempts" >&2
+            echo "pkg-config still missing after installing pkgconfiglite." >&2
+            echo "$choco_bin holds:" >&2
+            ls -1 "$choco_bin" >&2 || echo "  (no such directory)" >&2
             exit 1
           }
           prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
