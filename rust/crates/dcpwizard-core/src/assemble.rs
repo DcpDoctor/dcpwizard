@@ -17,6 +17,7 @@ pub struct AssembleConfig {
     pub inputs: Vec<PathBuf>,
     pub output_dir: PathBuf,
     pub title: String,
+    pub signer: Option<crate::package_signature::PackageSigner>,
 }
 
 /// One parsed input DCP: its reels plus picture dimensions and edit rate.
@@ -33,6 +34,14 @@ struct InputDcp {
 pub fn assemble(config: &AssembleConfig) -> i32 {
     if config.inputs.len() < 2 {
         tracing::error!("assemble needs at least two input DCPs");
+        return -1;
+    }
+    // prove the signer works before anything is written, so a bad one cannot
+    // leave a half-signed package behind
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
         return -1;
     }
 
@@ -201,6 +210,10 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
         tracing::error!("failed to write assembled CPL");
         return -1;
     }
+    // before the PKL entry below hashes it
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &cpl_path, "CPL") {
+        return -1;
+    }
 
     // ── PKL: CPL plus every copied asset ──
     let pkl_uuid = uuid::Uuid::new_v4().to_string();
@@ -223,6 +236,9 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
     let pkl_path = config.output_dir.join(format!("PKL_{pkl_uuid}.xml"));
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, standard, None, &pkl_path) != 0 {
         tracing::error!("failed to write assembled PKL");
+        return -1;
+    }
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "PKL") {
         return -1;
     }
 

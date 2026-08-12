@@ -48,6 +48,24 @@ impl PackageSigner {
     }
 }
 
+/// Sign `path` when there is a signer, and do nothing when there is not. Returns
+/// whether the caller may carry on, so an unusable signer stops a half-signed
+/// package rather than leaving one behind.
+///
+/// A CPL has to go through this before anything hashes it into a PKL.
+pub fn sign_if_configured(signer: Option<&PackageSigner>, path: &Path, what: &str) -> bool {
+    let Some(signer) = signer else {
+        return true;
+    };
+    match signer.sign_file(path) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!("failed to sign the {what}: {e}");
+            false
+        }
+    }
+}
+
 /// Drop a document's Signature, and the Signer that only means anything beside
 /// it, whatever namespace prefix they carry. Returns whether it was signed.
 ///

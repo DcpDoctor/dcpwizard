@@ -293,6 +293,179 @@ fn a_key_that_does_not_match_the_certificate_writes_nothing() {
     );
 }
 
+/// Assert every CPL and PKL in `dir` verifies against `signer`, and that each
+/// PKL records the CPL as it lies on disk, which only holds if signing preceded
+/// hashing.
+fn assert_package_signed_and_hashed_after_signing(dir: &Path, signer: &PackageSigner) {
+    let xml_files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.ends_with(".xml") && (n.starts_with("CPL_") || n.starts_with("PKL_"))
+            })
+        })
+        .collect();
+    assert!(!xml_files.is_empty(), "no CPL/PKL in {}", dir.display());
+    for path in &xml_files {
+        let xml = std::fs::read_to_string(path).unwrap();
+        postkit::xmldsig::verify_document_enveloped(&xml, Some(&signer.signer_cert))
+            .unwrap_or_else(|e| panic!("{} signature must verify: {e}", path.display()));
+    }
+    let pkl = only_file_matching(dir, "PKL_");
+    for cpl in xml_files.iter().filter(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("CPL_"))
+    }) {
+        let (recorded_hash, _) = pkl_asset_record(&pkl, &cpl_id(cpl));
+        assert_eq!(
+            recorded_hash,
+            dcpwizard_core::hash::hash_file(cpl).unwrap(),
+            "PKL must hash the signed {}",
+            cpl.display()
+        );
+    }
+}
+
+fn signed_source_dcp(dir: &Path, name: &str, signer: &PackageSigner) -> PathBuf {
+    let j2k = dir.join(format!("{name}_j2k"));
+    make_frames(&j2k);
+    let out = dir.join(name);
+    let mut config = base_config(&out, j2k);
+    config.title = name.into();
+    config.signer = Some(signer.clone());
+    assert_eq!(
+        create_dcp(&config),
+        0,
+        "signed create of {name} must succeed"
+    );
+    out
+}
+
+#[test]
+fn assemble_signs_the_composition_it_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    let signer = signer_chain(&certs);
+    let a = signed_source_dcp(dir.path(), "reel_a", &signer);
+    let b = signed_source_dcp(dir.path(), "reel_b", &signer);
+
+    let out = dir.path().join("assembled");
+    let code = dcpwizard_core::assemble::assemble(&dcpwizard_core::assemble::AssembleConfig {
+        inputs: vec![a, b],
+        output_dir: out.clone(),
+        title: "Assembled".into(),
+        signer: Some(signer.clone()),
+    });
+    assert_eq!(code, 0, "signed assemble must succeed");
+    assert_package_signed_and_hashed_after_signing(&out, &signer);
+}
+
+/// The VF CPL is written, then rewritten to carry the OriginalPackagingList
+/// marker. Signing before that rewrite would leave exactly the stale signature
+/// `edit` used to produce.
+#[test]
+fn create_vf_signs_after_the_supplemental_marker_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    let signer = signer_chain(&certs);
+    let ov = signed_source_dcp(dir.path(), "ov", &signer);
+
+    let replacement = dir.path().join("vf_j2k");
+    make_frames(&replacement);
+    let out = dir.path().join("vf");
+    let code = dcpwizard_core::vf::create_vf(&dcpwizard_core::vf::VfConfig {
+        ov_dir: ov,
+        vf_dir: out.clone(),
+        title: "VF".into(),
+        subtitle_language: "en".into(),
+        replacement_reels: vec![dcpwizard_core::vf::ReplacementReel {
+            reel_number: 1,
+            picture: Some(replacement),
+            ..Default::default()
+        }],
+        signer: Some(signer.clone()),
+    });
+    assert_eq!(code, 0, "signed create-vf must succeed");
+
+    let cpl = only_file_matching(&out, "CPL_");
+    let xml = std::fs::read_to_string(&cpl).unwrap();
+    assert!(
+        xml.contains("OriginalPackagingList"),
+        "the marker must be present, or this proves nothing"
+    );
+    assert_package_signed_and_hashed_after_signing(&out, &signer);
+}
+
+#[test]
+fn combine_signs_the_merged_pkl_and_leaves_the_copied_cpls_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    let signer = signer_chain(&certs);
+    let a = signed_source_dcp(dir.path(), "vol_a", &signer);
+    let b = signed_source_dcp(dir.path(), "vol_b", &signer);
+
+    let out = dir.path().join("volume");
+    let code = dcpwizard_core::combine::combine(&dcpwizard_core::combine::CombineConfig {
+        inputs: vec![a, b],
+        output_dir: out.clone(),
+        separate_pkls: false,
+        sort: false,
+        annotation: None,
+        signer: Some(signer.clone()),
+    });
+    assert_eq!(code, 0, "signed combine must succeed");
+    // the merged PKL is new, the CPLs are copied byte for byte
+    assert_package_signed_and_hashed_after_signing(&out, &signer);
+}
+
+#[test]
+fn ingest_package_signs_the_pkl_it_regenerates() {
+    let dir = tempfile::tempdir().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    let signer = signer_chain(&certs);
+    let dcp = signed_source_dcp(dir.path(), "exported", &signer);
+
+    assert_eq!(
+        dcpwizard_core::ingest_package::ingest_package(&dcp, Some(&signer)),
+        0,
+        "signed ingest-package must succeed"
+    );
+    assert_package_signed_and_hashed_after_signing(&dcp, &signer);
+}
+
+#[test]
+fn a_command_given_no_signer_still_writes_an_unsigned_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let certs = dir.path().join("certs");
+    std::fs::create_dir_all(&certs).unwrap();
+    let signer = signer_chain(&certs);
+    let a = signed_source_dcp(dir.path(), "plain_a", &signer);
+    let b = signed_source_dcp(dir.path(), "plain_b", &signer);
+
+    let out = dir.path().join("unsigned");
+    let code = dcpwizard_core::assemble::assemble(&dcpwizard_core::assemble::AssembleConfig {
+        inputs: vec![a, b],
+        output_dir: out.clone(),
+        title: "Unsigned".into(),
+        signer: None,
+    });
+    assert_eq!(code, 0);
+    for prefix in ["CPL_", "PKL_"] {
+        let xml = std::fs::read_to_string(only_file_matching(&out, prefix)).unwrap();
+        assert!(
+            !xml.contains("Signature"),
+            "no signer must leave {prefix} unsigned"
+        );
+    }
+}
+
 #[test]
 fn every_cpl_of_a_versioned_package_is_signed_and_hashed_after_signing() {
     let dir = tempfile::tempdir().unwrap();

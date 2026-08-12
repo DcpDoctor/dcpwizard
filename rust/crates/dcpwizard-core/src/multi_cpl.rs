@@ -375,6 +375,14 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
         tracing::error!("{e}");
         return -1;
     }
+    // prove the signer works before anything is written, so a bad one cannot
+    // leave a half-signed package behind
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
+        return -1;
+    }
     if let Err(e) = std::fs::create_dir_all(&config.output_dir) {
         tracing::error!("Failed to create output directory: {e}");
         return -1;
@@ -641,6 +649,15 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             cleanup(&temps);
             return -1;
         }
+        // before the PKL entry below hashes it
+        if !crate::package_signature::sign_if_configured(
+            config.signer.as_ref(),
+            &cpl_path,
+            &format!("CPL for composition '{}'", comp.title),
+        ) {
+            cleanup(&temps);
+            return -1;
+        }
         pkl_entries.push(crate::pkl::PklEntry {
             id: cpl_uuid.clone(),
             asset_type: "text/xml".into(),
@@ -665,6 +682,10 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
     let pkl_path = config.output_dir.join(format!("PKL_{pkl_uuid}.xml"));
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, config.standard, None, &pkl_path) != 0 {
         tracing::error!("Failed to generate PKL");
+        cleanup(&temps);
+        return -1;
+    }
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "PKL") {
         cleanup(&temps);
         return -1;
     }

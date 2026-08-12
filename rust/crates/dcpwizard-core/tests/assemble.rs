@@ -73,6 +73,7 @@ fn assembles_two_dcps_into_one_valid_ov() {
         inputs: vec![a, b],
         output_dir: out.clone(),
         title: "Program".into(),
+        signer: None,
     };
     assert_eq!(assemble(&config), 0);
 
@@ -106,6 +107,7 @@ fn frame_rate_mismatch_fails_loud() {
         inputs: vec![a, b],
         output_dir: root.path().join("out"),
         title: "X".into(),
+        signer: None,
     };
     assert_eq!(assemble(&config), -1, "mixed frame rates must fail");
 }
@@ -120,6 +122,7 @@ fn encrypted_input_fails_loud() {
         inputs: vec![a, enc],
         output_dir: root.path().join("out"),
         title: "X".into(),
+        signer: None,
     };
     assert_eq!(assemble(&config), -1, "encrypted input must fail");
 }

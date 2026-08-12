@@ -53,7 +53,11 @@
 - **`verify --output .pdf`** — silently produced plain text; option dropped
 - **Dead modules** — dcp_diff, plugin, preferences, geometry, and the prores re-export shim (zero callers)
 
+### Added
+- **Signing on the rest of the packaging commands** — `assemble`, `create-vf`, `create-multi`, `combine` and `ingest-package` take `--signer-cert/--signer-key/--signer-chain` like `create` does. Each signs a CPL before anything hashes it into the packing list. `combine` and `ingest-package` sign only the PKL they generate, since they hash the CPLs rather than rewriting them, so a signature a CPL already carries stays valid. `create-vf` signs after the supplemental marker is written, not before, or the marker would invalidate it. `conform` still takes no signer
+
 ### Fixed
+- **Signer certificates were missing Basic Constraints and Key Usage** (via postkit) — every chain from `certificate chain` had a bare leaf, which ST 430-2 requires to carry both, so validators rejected packages signed with it. Regenerate any chain generated earlier
 - **`edit` no longer leaves a stale signature** — editing a signed DCP rewrote the CPL, PKL and ASSETMAP but kept their `ds:Signature`, so the output verified as tampered (dcpdoctor `signature_invalid`). `edit` now drops the signature from every document it rewrites, and warns which ones lost it. The package comes out unsigned rather than falsely signed. Re-sign it afterwards if it has to stay signed
 - **Subtitle vertical position** — SMPTE and Interop subtitle generators anchored the block at the top (Vposition 85 with Valign="bottom") so subtitles rendered near the top of the screen. The bottom line now sits at 8% from the bottom with lines stacked upward (a two-line cue renders at 15% and 8%)
 - **GUI "Show in Files"** — uses the tauri opener plugin (`revealItemInDir`); the shell `open` call only accepted URLs

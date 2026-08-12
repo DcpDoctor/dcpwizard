@@ -67,10 +67,10 @@ struct CreateSubtitleOpts {
     ccap_language: String,
 }
 
-/// CPL/PKL signing identity, boxed into the Create variant so it stays under
+/// CPL/PKL signing identity. Boxed into the Create variant so it stays under
 /// the clippy large-variant threshold. Absent leaves the package unsigned.
 #[derive(Args)]
-struct CreateSignerOpts {
+struct SignerOpts {
     /// Signer leaf certificate file. With --signer-key, signs the CPL and PKL.
     #[arg(long, requires = "signer_key")]
     signer_cert: Option<String>,
@@ -82,11 +82,9 @@ struct CreateSignerOpts {
     signer_chain: Vec<String>,
 }
 
-/// The signer for a `create`, or None when no --signer-cert was given. clap's
+/// The signer, or None when no --signer-cert was given. clap's
 /// `requires` guarantees the key is present whenever the certificate is.
-fn create_package_signer(
-    opts: &CreateSignerOpts,
-) -> Option<dcpwizard_core::package_signature::PackageSigner> {
+fn package_signer(opts: &SignerOpts) -> Option<dcpwizard_core::package_signature::PackageSigner> {
     let cert = opts.signer_cert.as_ref()?;
     let key = opts
         .signer_key
@@ -246,7 +244,7 @@ enum Commands {
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
         #[command(flatten)]
-        signer_opts: Box<CreateSignerOpts>,
+        signer_opts: Box<SignerOpts>,
     },
     /// Rebuild ASSETMAP and PKL to cover every asset file present (metadata-only
     /// repackaging; no re-wrap or re-encode). For re-ingesting exported OV/VF
@@ -254,6 +252,8 @@ enum Commands {
     IngestPackage {
         /// DCP package directory to repackage in place
         dir: String,
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
     /// Combine several complete DCPs into one delivery volume with a merged
     /// ASSETMAP/VOLINDEX (and, by default, a single merged PKL). CPLs and essence
@@ -274,6 +274,8 @@ enum Commands {
         /// AnnotationText for the merged PKL/ASSETMAP (default: derived from titles)
         #[arg(long)]
         annotation: Option<String>,
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
     /// Create a supplemental Version File (VF) DCP against an Original Version
     CreateVf {
@@ -307,6 +309,8 @@ enum Commands {
         /// Language code for wrapped subtitle tracks
         #[arg(long, default_value = "en")]
         subtitle_language: String,
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
     /// Assemble a new OV composition from existing DCPs: one new CPL whose reels
     /// are the inputs' reels in order. Essence is copied byte-identical and
@@ -322,6 +326,8 @@ enum Commands {
         /// Title for the assembled composition
         #[arg(short, long, default_value = "")]
         title: String,
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
     /// Edit a DCP's CPL metadata (title/annotation/content-kind/issuer) without
     /// re-wrapping essence. Assigns a new CPL id and refreshes PKL/ASSETMAP.
@@ -381,6 +387,8 @@ enum Commands {
         /// Where to write the content keys (required with --encrypt)
         #[arg(long, required_if_eq("encrypt", "true"))]
         key_out: Option<String>,
+        #[command(flatten)]
+        signer_opts: SignerOpts,
     },
     /// Encode images to JPEG 2000
     Encode {
@@ -2484,7 +2492,7 @@ fn run() {
             }
             // same for the signer: an unusable key or certificate must fail
             // before the encode, not after it.
-            let package_signer = create_package_signer(&signer_opts);
+            let package_signer = package_signer(&signer_opts);
             if let Some(signer) = package_signer.as_ref()
                 && let Err(e) = signer.check_usable()
             {
@@ -4767,8 +4775,11 @@ fn run() {
             }
         }
 
-        Commands::IngestPackage { dir } => {
-            let code = dcpwizard_core::ingest_package::ingest_package(&PathBuf::from(&dir));
+        Commands::IngestPackage { dir, signer_opts } => {
+            let code = dcpwizard_core::ingest_package::ingest_package(
+                &PathBuf::from(&dir),
+                package_signer(&signer_opts).as_ref(),
+            );
             if code == 0 {
                 println!("Repackaged {dir} (regenerated ASSETMAP and PKL)");
             }
@@ -4781,6 +4792,7 @@ fn run() {
             separate_pkls,
             sort,
             annotation,
+            signer_opts,
         } => {
             let config = dcpwizard_core::combine::CombineConfig {
                 inputs: inputs.iter().map(PathBuf::from).collect(),
@@ -4788,6 +4800,7 @@ fn run() {
                 separate_pkls,
                 sort,
                 annotation,
+                signer: package_signer(&signer_opts),
             };
             let code = dcpwizard_core::combine::combine(&config);
             if code == 0 {
@@ -4807,6 +4820,7 @@ fn run() {
             replace_ccap,
             add_ccap,
             subtitle_language,
+            signer_opts,
         } => {
             // Parse REEL=PATH into a per-reel map. picture/sound/subtitle/ccap share
             // reels; --add-* and --replace-* both set the track.
@@ -4865,6 +4879,7 @@ fn run() {
                     title,
                     subtitle_language,
                     replacement_reels: reels.into_values().collect(),
+                    signer: package_signer(&signer_opts),
                 };
                 let code = dcpwizard_core::vf::create_vf(&config);
                 if code == 0 {
@@ -4878,11 +4893,13 @@ fn run() {
             input,
             output,
             title,
+            signer_opts,
         } => {
             let config = dcpwizard_core::assemble::AssembleConfig {
                 inputs: input.iter().map(PathBuf::from).collect(),
                 output_dir: PathBuf::from(&output),
                 title,
+                signer: package_signer(&signer_opts),
             };
             let code = dcpwizard_core::assemble::assemble(&config);
             if code == 0 {
@@ -4928,6 +4945,7 @@ fn run() {
             content_type,
             encrypt,
             key_out,
+            signer_opts,
         } => {
             let comps =
                 match dcpwizard_core::multi_cpl::load_compositions(&PathBuf::from(&compositions)) {
@@ -4977,6 +4995,7 @@ fn run() {
                 container_height,
                 output_dir: PathBuf::from(&output),
                 subtitle_language,
+                signer: package_signer(&signer_opts),
                 ..Default::default()
             };
             let code = dcpwizard_core::multi_cpl::create_multi_composition(&config, &comps);

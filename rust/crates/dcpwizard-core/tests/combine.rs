@@ -143,6 +143,7 @@ fn combine_two_dcps_validates_and_keeps_both_cpls() {
         separate_pkls: false,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0, "combine must succeed");
 
@@ -193,6 +194,7 @@ fn combine_dedupes_identical_assets() {
         separate_pkls: false,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0);
 
@@ -264,6 +266,7 @@ fn combine_rejects_id_clash() {
         separate_pkls: false,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(
         combine(&cfg),
@@ -297,6 +300,7 @@ fn combine_separate_pkls_keeps_each_input_pkl() {
         separate_pkls: true,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0);
 
@@ -338,6 +342,7 @@ fn combine_sort_orders_cpls_and_sets_annotation() {
         separate_pkls: false,
         sort: true,
         annotation: Some("Feature Reel".into()),
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0);
 
@@ -393,6 +398,7 @@ fn combine_interop_volume_validates_clean() {
         separate_pkls: false,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0);
     assert!(out.join("ASSETMAP").exists(), "interop ASSETMAP filename");
@@ -423,6 +429,7 @@ fn combine_relocates_interop_loose_subtitles_without_touching_cpl() {
         separate_pkls: false,
         sort: false,
         annotation: None,
+        signer: None,
     };
     assert_eq!(combine(&cfg), 0);
 

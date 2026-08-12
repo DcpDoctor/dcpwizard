@@ -10,6 +10,7 @@ pub struct VfConfig {
     pub replacement_reels: Vec<ReplacementReel>,
     /// Language code for wrapped subtitle tracks (default "en").
     pub subtitle_language: String,
+    pub signer: Option<crate::package_signature::PackageSigner>,
 }
 
 /// A reel in the VF that replaces one or more OV essence tracks. A track is
@@ -47,6 +48,14 @@ struct NewAsset {
 pub fn create_vf(config: &VfConfig) -> i32 {
     if !config.ov_dir.exists() {
         tracing::error!("OV directory not found: {}", config.ov_dir.display());
+        return -1;
+    }
+    // prove the signer works before anything is written, so a bad one cannot
+    // leave a half-signed package behind
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
         return -1;
     }
 
@@ -280,6 +289,11 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             return -1;
         }
     }
+    // after the supplemental marker rewrite, which would otherwise invalidate
+    // the signature, and before the PKL hashes the file
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &cpl_path, "VF CPL") {
+        return -1;
+    }
 
     // ── PKL: the CPL plus every new MXF ────────────────────────────────────
     let pkl_uuid = uuid::Uuid::new_v4().to_string();
@@ -304,6 +318,9 @@ pub fn create_vf(config: &VfConfig) -> i32 {
     let pkl_path = config.vf_dir.join(format!("PKL_{pkl_uuid}.xml"));
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, standard, None, &pkl_path) != 0 {
         tracing::error!("Failed to generate VF PKL");
+        return -1;
+    }
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "VF PKL") {
         return -1;
     }
 
@@ -724,6 +741,7 @@ mod tests {
             vf_dir: vf.clone(),
             title: String::new(),
             subtitle_language: String::new(),
+            signer: None,
             replacement_reels: vec![ReplacementReel {
                 reel_number: 1,
                 picture: None,
@@ -805,6 +823,7 @@ mod tests {
             vf_dir: tmp.path().join("vf"),
             title: String::new(),
             subtitle_language: String::new(),
+            signer: None,
             replacement_reels: vec![],
         };
         assert_eq!(create_vf(&config), -1);
@@ -823,6 +842,7 @@ mod tests {
             vf_dir: tmp.path().join("vf"),
             title: String::new(),
             subtitle_language: String::new(),
+            signer: None,
             replacement_reels: vec![ReplacementReel {
                 reel_number: 9,
                 picture: None,

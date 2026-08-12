@@ -21,9 +21,19 @@ struct Asset {
 
 /// Regenerate ASSETMAP + PKL (+ VOLINDEX) for the package in `dir`, covering
 /// every asset file present. Replaces the existing ASSETMAP/PKL/VOLINDEX.
-pub fn ingest_package(dir: &Path) -> i32 {
+/// `signer` signs the new PKL. The CPLs already in `dir` are hashed, never
+/// rewritten, so a signature one of them carries stays valid.
+pub fn ingest_package(dir: &Path, signer: Option<&crate::package_signature::PackageSigner>) -> i32 {
     if !dir.is_dir() {
         tracing::error!("not a directory: {}", dir.display());
+        return -1;
+    }
+    // prove the signer works before anything is written, so a bad one cannot
+    // leave a half-signed package behind
+    if let Some(signer) = signer
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
         return -1;
     }
 
@@ -131,6 +141,9 @@ pub fn ingest_package(dir: &Path) -> i32 {
     let pkl_path = dir.join(format!("PKL_{pkl_uuid}.xml"));
     if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, standard, None, &pkl_path) != 0 {
         tracing::error!("failed to write PKL");
+        return -1;
+    }
+    if !crate::package_signature::sign_if_configured(signer, &pkl_path, "PKL") {
         return -1;
     }
 

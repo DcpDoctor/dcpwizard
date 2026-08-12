@@ -657,13 +657,11 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         }
         // Sign before the PKL entry below hashes the file, otherwise the PKL
         // records the hash of the unsigned CPL.
-        if let Some(signer) = config.signer.as_ref()
-            && let Err(e) = signer.sign_file(&cpl_path)
-        {
-            tracing::error!(
-                "Failed to sign the CPL for version '{}': {e}",
-                version.title
-            );
+        if !crate::package_signature::sign_if_configured(
+            config.signer.as_ref(),
+            &cpl_path,
+            &format!("CPL for version '{}'", version.title),
+        ) {
             cleanup(&temps);
             return -1;
         }
@@ -695,10 +693,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         return -1;
     }
     // Nothing hashes the PKL, so this can follow the write.
-    if let Some(signer) = config.signer.as_ref()
-        && let Err(e) = signer.sign_file(&pkl_path)
-    {
-        tracing::error!("Failed to sign the PKL: {e}");
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "PKL") {
         cleanup(&temps);
         return -1;
     }

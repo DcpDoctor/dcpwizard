@@ -973,10 +973,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     }
     // Sign before the PKL hashes the file, otherwise the PKL records the hash of
     // the unsigned CPL and no longer matches what is on disk.
-    if let Some(signer) = config.signer.as_ref()
-        && let Err(e) = signer.sign_file(&cpl_path)
-    {
-        tracing::error!("Failed to sign the CPL: {e}");
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &cpl_path, "CPL") {
         return -1;
     }
 
@@ -1061,10 +1058,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         return -1;
     }
     // Nothing hashes the PKL, so this can follow the write.
-    if let Some(signer) = config.signer.as_ref()
-        && let Err(e) = signer.sign_file(&pkl_path)
-    {
-        tracing::error!("Failed to sign the PKL: {e}");
+    if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "PKL") {
         return -1;
     }
 

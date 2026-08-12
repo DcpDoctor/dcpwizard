@@ -47,14 +47,15 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
-- DCP signing (`create --signer-cert/--signer-key/--signer-chain`, CORE/package_signature.rs)
-  covers `create` only. `assemble`, `create-vf`, `create-multi` and `ingest-package`
-  write their new CPLs/PKLs unsigned; `combine` copies CPLs byte-identical so their
-  signatures survive, but its merged PKL is unsigned. Those leave an unsigned
-  package, which is honest. `edit` used to leave a worse one, a signature over
-  bytes it had rewritten, and now strips it instead (see Done below). Signing them
-  would need signer arguments each command currently lacks.
-  Three gaps in what `create` signs: no optional `<Signer>` element
+- DCP signing (`--signer-cert/--signer-key/--signer-chain`,
+  CORE/package_signature.rs) now covers `create`, `create --versions`, `assemble`,
+  `create-vf`, `create-multi`, `combine` and `ingest-package`. `combine` and
+  `ingest-package` sign only the packing list they generate, because they hash the
+  CPLs rather than rewriting them, so a signature a CPL already carries stays
+  valid. `conform` is the one command left: it takes no signer, and its two paths
+  would want one in different places, on the assembled CPL when it merges reels
+  and on the per-reel CPL when a single reel is moved straight out.
+  Three gaps in what signing covers: no optional `<Signer>` element
   beside the `ds:Signature` (optional in both schemas and dcpdoctor does not ask for
   it, but real DCPs carry it); Interop packages are signed rsa-sha256 like SMPTE,
   because that is postkit's only public profile, where real Interop DCPs use

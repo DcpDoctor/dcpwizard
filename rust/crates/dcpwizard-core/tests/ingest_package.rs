@@ -120,7 +120,7 @@ fn repackage_declares_present_mxf_omitted_from_assetmap() {
     )
     .unwrap();
 
-    assert_eq!(ingest_package(root), 0);
+    assert_eq!(ingest_package(root, None), 0);
 
     // the regenerated ASSETMAP now maps the present MXF to its real asset id
     let am = std::fs::read_to_string(root.join("ASSETMAP.xml")).unwrap();

@@ -106,6 +106,7 @@ fn subtitle_only_vf_references_ov_and_volume_validates() {
             subtitle: Some(srt),
             ..Default::default()
         }],
+        signer: None,
     };
     assert_eq!(create_vf(&config), 0);
 

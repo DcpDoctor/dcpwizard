@@ -198,6 +198,7 @@ fn vf_adds_closed_caption_track() {
             ccap: Some(ccap),
             ..Default::default()
         }],
+        signer: None,
     };
     assert_eq!(create_vf(&vf_config), 0);
 

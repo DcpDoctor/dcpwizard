@@ -28,6 +28,9 @@ pub struct CombineConfig {
     /// AnnotationText for the merged PKL/ASSETMAP. When None a value is derived
     /// from the input CPL titles.
     pub annotation: Option<String>,
+    /// Signs the merged PKL. The CPLs are copied byte for byte, so any signature
+    /// they already carry stays valid and is left alone.
+    pub signer: Option<crate::package_signature::PackageSigner>,
 }
 
 /// One asset listed in an input's ASSETMAP (PKL excluded).
@@ -76,6 +79,14 @@ struct Chosen {
 pub fn combine(config: &CombineConfig) -> i32 {
     if config.inputs.is_empty() {
         tracing::error!("no input DCPs given");
+        return -1;
+    }
+    // prove the signer works before anything is written, so a bad one cannot
+    // leave a half-signed package behind
+    if let Some(signer) = config.signer.as_ref()
+        && let Err(e) = signer.check_usable()
+    {
+        tracing::error!("unusable signer: {e}");
         return -1;
     }
     for dir in &config.inputs {
@@ -229,6 +240,13 @@ pub fn combine(config: &CombineConfig) -> i32 {
             != 0
         {
             tracing::error!("failed to write merged PKL");
+            return -1;
+        }
+        if !crate::package_signature::sign_if_configured(
+            config.signer.as_ref(),
+            &pkl_path,
+            "merged PKL",
+        ) {
             return -1;
         }
         pkl_entries.push((pkl_uuid, file_name(&pkl_path)));

@@ -282,6 +282,10 @@ pub fn assemble_dcp(plan: &ReelPlan, output_dir: &Path) -> i32 {
             inputs: reel_dcps.clone(),
             output_dir: output_dir.to_path_buf(),
             title: plan.title.clone(),
+            // conform takes no signer yet, and its two paths would need it in
+            // different places: the assembled CPL here, the per-reel one when a
+            // single reel is moved straight out
+            signer: None,
         })
     };
     let _ = std::fs::remove_dir_all(&work_root);
