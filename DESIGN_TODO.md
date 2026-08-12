@@ -15,12 +15,20 @@ user-facing surface is here.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
-  No Trusted Device List / DeviceList is written for any KDM.
+  This one cannot be closed by testing: it needs hardware.
 - conform input formats: CMX3600 EDL, FCP7 xmeml and FCPX fcpxml parse. fcpxml
   covers the primary spine only, so connected clips in lanes, compound clips and
   nested clips are skipped rather than guessed at. AAF errors as not-implemented
   and OTIO routes to the otioz_import module instead of parse_timeline.
-- Trailer accessibility check is still substring matching, not a real track probe.
+- Accessibility check is a real structural probe as of postkit c6406d1 (element and
+  MCA-token evidence, three-state present/absent/undeterminable). Burned-in open
+  captions and director commentary are undeterminable by construction: nothing in a
+  package declares either.
+- asdcplib pin wave pending: asdcplib-rs 4f137a0 adds an MCA tag-symbol reader, and
+  postkit, dcpwizard, dcpdoctor and imfwizard all still pin 6d7b8ca. They have to move
+  together, since a split pin compiles the vendored C++ twice and the shared types
+  stop unifying.
+- Trusted Device List / DeviceList is written for no KDM, Interop or SMPTE.
 - GUI `--hdr-dci` is skipped: the job queue encodes through
   postkit::pipeline::run_encode_with_ratio -> stream_encode, which hardcodes
   apply_xyz_transform=true and has no HDR-to-DCI LUT / PQ-passthrough branch or
