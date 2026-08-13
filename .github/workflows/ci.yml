@@ -112,14 +112,21 @@ jobs:
           choco_bin="$(cygpath -u "${ChocolateyInstall:-C:/ProgramData/chocolatey}")/bin"
           export PATH="$choco_bin:$PATH"
           echo "$(cygpath -w "$choco_bin")" >> "$GITHUB_PATH"
-          pkg-config --version >/dev/null 2>&1 || choco install -y --no-progress pkgconfiglite
-          hash -r
-          pkg-config --version >/dev/null 2>&1 || {
-            echo "pkg-config still missing after installing pkgconfiglite." >&2
-            echo "$choco_bin holds:" >&2
-            ls -1 "$choco_bin" >&2 || echo "  (no such directory)" >&2
-            exit 1
-          }
+          # choco sometimes reports success while installing nothing, so gate
+          # the retries on pkg-config actually answering, not choco's exit code
+          for attempt in 1 2 3 4 5; do
+            pkg-config --version >/dev/null 2>&1 && break
+            choco install -y --no-progress --force pkgconfiglite || true
+            hash -r
+            pkg-config --version >/dev/null 2>&1 && break
+            if [ "$attempt" = 5 ]; then
+              echo "pkg-config still missing after $attempt pkgconfiglite installs." >&2
+              echo "$choco_bin holds:" >&2
+              ls -1 "$choco_bin" >&2 || echo "  (no such directory)" >&2
+              exit 1
+            fi
+            sleep $((30 * attempt))
+          done
           prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
           if [ ! -f "$prefix/bin/grokj2k.dll" ]; then
             git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
