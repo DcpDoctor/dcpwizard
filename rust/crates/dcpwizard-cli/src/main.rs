@@ -141,7 +141,7 @@ enum Commands {
         hdr_dci: bool,
         /// Acknowledge the source is already ST 2084 PQ (DCI HDR), so --hdr-dci
         /// needs no LUT conversion.
-        #[arg(long)]
+        #[arg(long, requires = "hdr_dci", conflicts_with = "hdr_to_dci_lut")]
         hdr_already_pq: bool,
         /// Sign-language video (ISDCF Doc 13): encoded to VP9 and packed onto
         /// channel 15 of the sound track. Requires --sign-language-lang.
@@ -2682,7 +2682,12 @@ fn run() {
                 // display rgb and needs grok's dcdm transform at encode time
                 let mut content_already_xyz = false;
                 let hdr_type = dcpwizard_core::dolby_vision::detect_hdr_type(&range_src);
-                if hdr_type != postkit::dolby_vision::HdrType::Sdr {
+                if hdr_already_pq {
+                    // the operator's assertion beats detection: a pq source can
+                    // probe as sdr, and transforming it would stamp pq on frames
+                    // that are no longer pq
+                    content_already_xyz = true;
+                } else if hdr_type != postkit::dolby_vision::HdrType::Sdr {
                     let converted = output_dir.join("hdr_to_dci_source.mov");
                     if let Some(lut) = hdr_to_dci_lut.as_ref() {
                         let lut = PathBuf::from(lut);
