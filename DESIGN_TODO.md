@@ -27,8 +27,7 @@ user-facing surface is here.
 - conform gaps (the formats themselves are in DESIGN.md): AAF video is
   code-complete but untested against a real file, since libaaf's public test
   corpus has video tracks but no video clips. AAF pan and gain automation are
-  surfaced in the timeline's skipped list but not applied, deliberate scope:
-  constant clip gain is applied (see Done 2026-08-13).
+  surfaced in the timeline's skipped list but not applied, deliberate scope.
 - Accessibility check is a real structural probe as of postkit c6406d1 (element and
   MCA-token evidence, three-state present/absent/undeterminable). Burned-in open
   captions and director commentary are undeterminable by construction: nothing in a
@@ -40,33 +39,6 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
-
-## Done 2026-08-13
-
-- libaaf bumped from v1.0 to upstream master (reversed calloc arguments, >2GB and
-  >4GB files, utf-8 paths on windows, better external essence locating). The
-  shim's API surface is unchanged between the two.
-- libaaf-sys build.rs builds the aaf-static cmake target and copies the archive
-  out of the build tree under the one name rustc links. libaaf defines install()
-  only inside a Linux guard and names the archive libaaf.a, libaaf.obj (msvc), or
-  bare aaf (macOS, no Darwin branch upstream), so the old install-target build
-  broke Windows and macOS CI the moment libaaf-sys landed.
-- AAF constant clip gain reaches the conformed audio. The shim reads clip gain,
-  automation, mute and track pan; libaaf-sys exposes gain_factor plus three
-  presence flags; aaf_import maps constant gain to EditEvent.gain_factor (a
-  postkit field, unity collapses to None, mute becomes 0.0) and surfaces
-  automation, pan and mute in Timeline.skipped; conform carries the factor
-  through ReelAsset into ffmpeg -af volume. Corpus: DR_Audio_Levels.aaf asserts
-  the -99/+6/+3 dB multipliers against libaaf's own expected output,
-  MC_Clip_Mute.aaf mute, MC_Audio_Pan.aaf pan, PR_Fades.aaf unity.
-- libaaf reads are serialized behind a mutex in AafComposition::read: two
-  concurrent reads corrupt the heap (upstream bug, parse and release paths
-  both), which had the AAF tests aborting on half of 8-thread runs.
-- OTIO conform: postkit parse_timeline parses .otio for real (postkit 6ce0bc9,
-  serde_json, per-track record positions, everything unmappable lands in
-  skipped) and the otioz string scanner is gone. dcpwizard needed only the pin
-  bump, since its parse_timeline already routes non-AAF formats to postkit.
-  imfwizard gets OTIO conform the same way on its next pin bump.
 
 ## Done 2026-08-12
 
