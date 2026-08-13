@@ -184,7 +184,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev
 
       # build grok (jpeg 2000 codec) from source once per tag, cached.
       # provides libgrokj2k on the pkg-config + loader paths and grk_compress on PATH.
@@ -229,4 +229,4 @@ jobs:
           cp target/release/dcpwizard ../gui/src-tauri/dcpwizard-${TRIPLE}
 
       - name: Check Tauri backend
-        run: cargo check --manifest-path gui/src-tauri/Cargo.toml
+        run: cargo check --manifest-path gui/src-tauri/Cargo.toml --features embedded-preview
