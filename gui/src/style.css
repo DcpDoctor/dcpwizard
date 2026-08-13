@@ -1,3 +1,5 @@
+@import "../../extern/guikit/src/base.css";
+
 /* a control whose value came from the selected delivery profile */
 .prop-field .profile-driven {
   border-left: 3px solid var(--primary);
