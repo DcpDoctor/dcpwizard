@@ -6,6 +6,7 @@
 //! value is converted to frames of the composition rate and offset by the
 //! timecode start. That leaves record times reading as timecode, like an EDL.
 
+use crate::conform::UNITY_GAIN_EPSILON;
 use libaaf_sys::{AafComposition, AafItem, AafItemKind};
 use postkit::conform::{ConformError, EditEvent, Timeline, TimelineFormat};
 use std::path::Path;
@@ -25,6 +26,7 @@ pub fn read_timeline(file: &Path) -> Result<Timeline, ConformError> {
     let mut events = Vec::new();
     let mut skipped = Vec::new();
     let mut transitions: Vec<(String, u32)> = Vec::new();
+    let mut pan_notes: Vec<String> = Vec::new();
     for item in &composition.items {
         let units_per_second = item
             .edit_rate
@@ -63,6 +65,9 @@ pub fn read_timeline(file: &Path) -> Result<Timeline, ConformError> {
                 continue;
             }
         };
+        if item.kind == AafItemKind::AudioClip {
+            note_levels_not_applied(item, record_in, &mut skipped, &mut pan_notes);
+        }
         events.push(EditEvent {
             event_number: 0,
             reel_name: reel_name(item),
@@ -74,6 +79,7 @@ pub fn read_timeline(file: &Path) -> Result<Timeline, ConformError> {
             transition: "CUT".to_string(),
             comment: item.source_path.clone(),
             lane: 0,
+            gain_factor: clip_gain(item),
         });
     }
 
@@ -142,6 +148,44 @@ fn reel_name(item: &AafItem) -> String {
         .filter(|stem| !stem.is_empty())
         .unwrap_or(UNNAMED_REEL_NAME)
         .to_string()
+}
+
+/// The fixed level to apply to a clip, as a linear multiplier. Muting a clip is
+/// the same thing as turning it all the way down, so it becomes a gain of zero.
+fn clip_gain(item: &AafItem) -> Option<f64> {
+    if item.muted {
+        return Some(0.0);
+    }
+    item.gain_factor
+        .filter(|factor| (factor - 1.0).abs() > UNITY_GAIN_EPSILON)
+}
+
+/// What AAF carries on an audio clip that conform reads but does not act on.
+/// Pan belongs to the track, so it is reported once per track rather than once
+/// per clip sitting on it.
+fn note_levels_not_applied(
+    item: &AafItem,
+    record_in: u32,
+    skipped: &mut Vec<String>,
+    pan_notes: &mut Vec<String>,
+) {
+    let clip = format!("clip \"{}\" at frame {record_in}", reel_name(item));
+    if item.muted {
+        skip(skipped, format!("{clip}: clip is muted, audio silenced"));
+    }
+    if item.has_gain_automation {
+        skip(
+            skipped,
+            format!("{clip}: gain automation present, not applied"),
+        );
+    }
+    if item.track_has_pan {
+        let note = format!("{}: pan present, not applied", track_label(item));
+        if !pan_notes.contains(&note) {
+            pan_notes.push(note.clone());
+            skip(skipped, note);
+        }
+    }
 }
 
 fn track_label(item: &AafItem) -> String {
@@ -238,6 +282,93 @@ mod tests {
                 .any(|note| note.contains("4 transition(s) dropped")),
             "{:?}",
             timeline.skipped
+        );
+    }
+
+    /// Track 1 of this composition is four clips: -99 dB, +6 dB, a curve with
+    /// no fixed level, then +3 dB with a curve on top.
+    #[test]
+    fn constant_clip_gain_is_carried_and_automation_is_surfaced() {
+        let Some(path) = fixture("DR_Audio_Levels.aaf") else {
+            return;
+        };
+        let timeline = read_timeline(&path).unwrap();
+        let track_one: Vec<&EditEvent> = timeline
+            .events
+            .iter()
+            .filter(|event| event.track_type == "A1")
+            .collect();
+        assert_eq!(track_one.len(), 4);
+
+        let decibels = |event: &EditEvent| 20.0 * event.gain_factor.unwrap().log10();
+        assert!((decibels(track_one[0]) + 99.0).abs() < 0.05);
+        assert!((decibels(track_one[1]) - 6.0).abs() < 0.05);
+        assert_eq!(track_one[2].gain_factor, None);
+        assert!((decibels(track_one[3]) - 3.0).abs() < 0.05);
+
+        let automation: Vec<&String> = timeline
+            .skipped
+            .iter()
+            .filter(|note| note.contains("gain automation present, not applied"))
+            .collect();
+        assert!(!automation.is_empty(), "{:?}", timeline.skipped);
+        assert!(
+            automation.iter().all(|note| note.starts_with("clip \"")),
+            "{automation:?}"
+        );
+    }
+
+    #[test]
+    fn a_unity_gain_clip_carries_no_gain() {
+        let Some(path) = fixture("PR_Fades.aaf") else {
+            return;
+        };
+        let timeline = read_timeline(&path).unwrap();
+        assert!(
+            timeline
+                .events
+                .iter()
+                .all(|event| event.gain_factor.is_none()),
+            "every clip in this composition is at unity"
+        );
+    }
+
+    #[test]
+    fn a_muted_clip_is_silenced_out_loud() {
+        let Some(path) = fixture("MC_Clip_Mute.aaf") else {
+            return;
+        };
+        let timeline = read_timeline(&path).unwrap();
+        assert_eq!(timeline.events[0].gain_factor, Some(0.0));
+        assert!(
+            timeline
+                .skipped
+                .iter()
+                .any(|note| note.contains("clip is muted, audio silenced")),
+            "{:?}",
+            timeline.skipped
+        );
+    }
+
+    #[test]
+    fn track_pan_is_reported_once_per_track() {
+        let Some(path) = fixture("MC_Audio_Pan.aaf") else {
+            return;
+        };
+        let timeline = read_timeline(&path).unwrap();
+        let pan: Vec<&String> = timeline
+            .skipped
+            .iter()
+            .filter(|note| note.contains("pan present, not applied"))
+            .collect();
+        // two panned tracks, three clips between them
+        assert_eq!(pan.len(), 2, "{:?}", timeline.skipped);
+        assert_ne!(pan[0], pan[1]);
+        assert!(
+            timeline
+                .events
+                .iter()
+                .all(|event| event.gain_factor.is_none())
         );
     }
 

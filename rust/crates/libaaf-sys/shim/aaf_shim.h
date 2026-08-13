@@ -37,6 +37,14 @@ typedef struct AafShimItem {
 	int64_t     source_offset;
 	int32_t     edit_rate_numerator;
 	int32_t     edit_rate_denominator;
+	/* Audio clips only, zero on everything else. A clip that draws its channels
+	 * from several files becomes several items, and each one repeats the gain
+	 * of the clip it came from. */
+	double      gain_factor;
+	int         has_constant_gain;
+	int         has_gain_automation;
+	int         muted;
+	int         track_has_pan;
 } AafShimItem;
 
 typedef struct AafShimComposition {

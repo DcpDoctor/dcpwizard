@@ -64,6 +64,28 @@ static void set_edit_rate(AafShimItem *item, aafRational_t *edit_rate)
 	}
 }
 
+/* Levels the Rust side reports but does not apply, except the constant gain.
+ * Resolve fills both a fixed clip gain and an automation curve, so a clip can
+ * carry either or both. */
+static void set_levels(AafShimItem *item, aafiAudioTrack *track, aafiAudioClip *clip)
+{
+	item->muted = (clip->mute != 0);
+	item->track_has_pan = (track->pan != NULL);
+	item->has_gain_automation =
+	        (clip->automation != NULL ||
+	         (clip->gain && (clip->gain->flags & AAFI_AUDIO_GAIN_VARIABLE)));
+
+	if (!clip->gain || !(clip->gain->flags & AAFI_AUDIO_GAIN_CONSTANT) ||
+	    clip->gain->pts_cnt < 1 || !clip->gain->value ||
+	    clip->gain->value[0].denominator == 0) {
+		return;
+	}
+
+	item->gain_factor = (double)clip->gain->value[0].numerator /
+	                    (double)clip->gain->value[0].denominator;
+	item->has_constant_gain = 1;
+}
+
 /* One audio clip can draw its channels from several mono files, so it becomes
  * one item per distinct file: in a flat reel plan each of those files is a
  * source in its own right. */
@@ -114,6 +136,7 @@ static int collect_audio_clip(struct AafShimReader *reader, aafiAudioTrack *trac
 		item->length = clip->len;
 		item->source_offset = clip->essence_offset;
 		set_edit_rate(item, track->edit_rate);
+		set_levels(item, track, clip);
 	}
 
 	if (reader->count > first) {
@@ -132,6 +155,7 @@ static int collect_audio_clip(struct AafShimReader *reader, aafiAudioTrack *trac
 	item->position = clip->pos;
 	item->length = clip->len;
 	set_edit_rate(item, track->edit_rate);
+	set_levels(item, track, clip);
 	return 1;
 }
 

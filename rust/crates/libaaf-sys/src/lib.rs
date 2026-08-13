@@ -8,8 +8,12 @@
 
 use std::ffi::{CStr, CString, c_char};
 use std::path::Path;
+use std::sync::Mutex;
 
 const ERROR_BUFFER_LENGTH: usize = 512;
+
+// two libaaf reads at once corrupt the heap, parsing or releasing
+static LIBAAF_READ_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, thiserror::Error)]
 pub enum AafError {
@@ -71,6 +75,13 @@ pub struct AafItem {
     /// Start of the clip inside its source, from SourceClip::StartTime.
     pub source_offset: i64,
     pub edit_rate: Option<EditRate>,
+    /// Fixed clip gain as a linear amplitude multiplier, when the clip has one.
+    pub gain_factor: Option<f64>,
+    /// The clip carries a gain curve rather than (or as well as) a fixed level.
+    pub has_gain_automation: bool,
+    pub muted: bool,
+    /// The track this clip sits on carries a pan.
+    pub track_has_pan: bool,
 }
 
 /// A composition read from an AAF file.
@@ -94,6 +105,8 @@ impl AafComposition {
             .ok_or_else(|| AafError::Path(path.display().to_string()))?;
         let c_path = CString::new(text).map_err(|_| AafError::Path(path.display().to_string()))?;
         let mut error = [0 as c_char; ERROR_BUFFER_LENGTH];
+
+        let _one_at_a_time = LIBAAF_READ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // SAFETY: c_path is NUL terminated and the buffer matches the length
         // passed alongside it.
@@ -135,6 +148,10 @@ impl AafComposition {
                     length: item.length,
                     source_offset: item.source_offset,
                     edit_rate: rate(item.edit_rate_numerator, item.edit_rate_denominator),
+                    gain_factor: (item.has_constant_gain != 0).then_some(item.gain_factor),
+                    has_gain_automation: item.has_gain_automation != 0,
+                    muted: item.muted != 0,
+                    track_has_pan: item.track_has_pan != 0,
                 })
             })
             .collect();
@@ -243,6 +260,11 @@ mod tests {
         assert_eq!(clips[0].length, 132300 * 48000 / 44100);
         assert_eq!(clips[0].source_offset, 0);
         assert_eq!(clips[1].position, 183750 * 48000 / 44100);
+        // this composition sets no levels at all
+        assert_eq!(clips[0].gain_factor, None);
+        assert!(!clips[0].has_gain_automation);
+        assert!(!clips[0].muted);
+        assert!(!clips[0].track_has_pan);
 
         assert_eq!(composition.start, 86400);
         assert_eq!(
@@ -274,6 +296,60 @@ mod tests {
         assert_ne!(sources[0], sources[1]);
     }
 
+    /// Resolve writes a fixed clip gain, a gain curve, or both on the same
+    /// clip, and libaaf's own expected output for this file names the levels in
+    /// dB. Amplitude is 10^(dB/20).
+    #[test]
+    fn constant_clip_gain_and_automation_are_read_apart() {
+        let Some(path) = fixture("DR_Audio_Levels.aaf") else {
+            return;
+        };
+        let composition = AafComposition::read(&path).unwrap();
+        let clips: Vec<&AafItem> = composition
+            .items
+            .iter()
+            .filter(|item| item.kind == AafItemKind::AudioClip && item.track_number == 1)
+            .collect();
+        assert_eq!(clips.len(), 4);
+
+        let decibels = |item: &AafItem| 20.0 * item.gain_factor.unwrap().log10();
+        assert!((decibels(clips[0]) + 99.0).abs() < 0.05, "{:?}", clips[0]);
+        assert!((decibels(clips[1]) - 6.0).abs() < 0.05, "{:?}", clips[1]);
+        assert!(clips.iter().all(|clip| !clip.muted));
+
+        // clip 3 is a curve with no fixed level, clip 4 carries both
+        assert_eq!(clips[2].gain_factor, None);
+        assert!(clips[2].has_gain_automation);
+        assert!((decibels(clips[3]) - 3.0).abs() < 0.05, "{:?}", clips[3]);
+        assert!(clips[3].has_gain_automation);
+    }
+
+    #[test]
+    fn a_muted_clip_and_a_panned_track_are_reported() {
+        if let Some(path) = fixture("MC_Clip_Mute.aaf") {
+            let composition = AafComposition::read(&path).unwrap();
+            let clip = composition
+                .items
+                .iter()
+                .find(|item| item.kind == AafItemKind::AudioClip)
+                .unwrap();
+            assert!(clip.muted);
+            assert_eq!(clip.gain_factor, None);
+        }
+
+        let Some(path) = fixture("MC_Audio_Pan.aaf") else {
+            return;
+        };
+        let composition = AafComposition::read(&path).unwrap();
+        assert!(
+            composition
+                .items
+                .iter()
+                .filter(|item| item.kind == AafItemKind::AudioClip)
+                .all(|item| item.track_has_pan && !item.muted)
+        );
+    }
+
     #[test]
     fn reading_a_file_that_is_not_aaf_fails_loud() {
         let directory = std::env::temp_dir().join("libaaf-sys-not-an-aaf");
@@ -291,7 +367,7 @@ mod tests {
 }
 
 mod ffi {
-    use std::ffi::c_char;
+    use std::ffi::{c_char, c_int};
 
     #[repr(C)]
     pub struct AafShimReader {
@@ -310,6 +386,11 @@ mod ffi {
         pub source_offset: i64,
         pub edit_rate_numerator: i32,
         pub edit_rate_denominator: i32,
+        pub gain_factor: f64,
+        pub has_constant_gain: c_int,
+        pub has_gain_automation: c_int,
+        pub muted: c_int,
+        pub track_has_pan: c_int,
     }
 
     #[repr(C)]

@@ -13,6 +13,9 @@ pub use postkit::conform::{
     detect_timeline_format, find_missing_reels,
 };
 
+/// How close to unity a gain multiplier has to be for applying it to be a no-op.
+pub(crate) const UNITY_GAIN_EPSILON: f64 = 1e-9;
+
 /// Parse a timeline file. AAF is read through libaaf here, every other format
 /// is postkit's.
 pub fn parse_timeline(file: &Path) -> Result<Timeline, ConformError> {
@@ -43,6 +46,10 @@ pub struct ReelAsset {
     pub track_type: String,
     pub source_in: u32,
     pub source_out: u32,
+    /// Fixed clip gain as a linear amplitude multiplier, None for unity. Plans
+    /// written before conform carried gain have no field at all.
+    #[serde(default)]
+    pub gain_factor: Option<f64>,
 }
 
 /// A conformed reel plan: every timeline event resolved to a media file, in
@@ -87,6 +94,7 @@ pub fn build_reel_plan(timeline: &Timeline, media_dir: &Path) -> Result<ReelPlan
                 track_type: event.track_type.clone(),
                 source_in: event.source_in,
                 source_out: event.source_out,
+                gain_factor: event.gain_factor,
             }),
             None => {
                 if !missing.contains(&event.reel_name) {
@@ -114,6 +122,8 @@ struct ReelGroup {
     audio: Option<PathBuf>,
     source_in: u32,
     source_out: u32,
+    /// Gain of whichever event supplies this reel's audio.
+    gain_factor: Option<f64>,
 }
 
 /// Group a reel plan by reel_name (first-seen order): the V track is the picture,
@@ -131,14 +141,21 @@ fn group_reels(plan: &ReelPlan) -> Vec<ReelGroup> {
                 audio: None,
                 source_in: a.source_in,
                 source_out: a.source_out,
+                gain_factor: None,
             }
         });
         if is_video {
             g.picture = a.media_path.clone();
             g.source_in = a.source_in;
             g.source_out = a.source_out;
+            // the picture's own audio is only used while no A track has claimed
+            // the reel, so its gain only counts under the same condition
+            if g.audio.is_none() {
+                g.gain_factor = a.gain_factor;
+            }
         } else if g.audio.is_none() {
             g.audio = Some(a.media_path.clone());
+            g.gain_factor = a.gain_factor;
         }
     }
     order
@@ -161,6 +178,14 @@ fn trim_video(src: &Path, source_in: u32, source_out: u32, dst: &Path) -> Result
     run_ffmpeg(cmd, "video trim")
 }
 
+/// The ffmpeg filter that applies a clip gain, or None when there is nothing to
+/// apply. A factor of zero is a real level: it is what a muted clip means.
+fn volume_filter(gain_factor: Option<f64>) -> Option<String> {
+    gain_factor
+        .filter(|factor| (factor - 1.0).abs() > UNITY_GAIN_EPSILON)
+        .map(|factor| format!("volume={factor}"))
+}
+
 /// Time-based audio trim (48 kHz s24 WAV). Returns Ok(false) when the source has
 /// no audio stream. `[source_in, source_out)` in frames at `fps`.
 fn trim_audio(
@@ -168,6 +193,7 @@ fn trim_audio(
     source_in: u32,
     source_out: u32,
     fps: u32,
+    gain_factor: Option<f64>,
     dst: &Path,
 ) -> Result<bool, String> {
     let mut cmd = std::process::Command::new("ffmpeg");
@@ -176,6 +202,9 @@ fn trim_audio(
         let start = source_in as f64 / fps as f64;
         let dur = (source_out - source_in) as f64 / fps as f64;
         cmd.args(["-ss", &format!("{start}"), "-t", &format!("{dur}")]);
+    }
+    if let Some(filter) = volume_filter(gain_factor) {
+        cmd.args(["-af", &filter]);
     }
     cmd.args(["-vn", "-acodec", "pcm_s24le", "-ar", "48000"])
         .arg(dst);
@@ -244,7 +273,14 @@ fn reel_to_dcp(
     // audio: a dedicated A-track clip, else the picture clip's own audio
     let wav = work.join("audio.wav");
     let audio_src = group.audio.as_deref().unwrap_or(&group.picture);
-    let audio_path = match trim_audio(audio_src, group.source_in, group.source_out, fps, &wav) {
+    let audio_path = match trim_audio(
+        audio_src,
+        group.source_in,
+        group.source_out,
+        fps,
+        group.gain_factor,
+        &wav,
+    ) {
         Ok(true) => Some(wav.clone()),
         Ok(false) => None,
         Err(e) => return Err(e),
@@ -437,6 +473,78 @@ mod tests {
         assert_eq!(plan.reels[0].reel_name, timeline.events[0].reel_name);
         assert_eq!(plan.reels[0].track_type, "A1");
         assert!(plan.reels[0].media_path.is_file());
+    }
+
+    #[test]
+    fn a_gain_becomes_an_ffmpeg_volume_filter() {
+        assert_eq!(volume_filter(None), None);
+        assert_eq!(volume_filter(Some(1.0)), None);
+        assert_eq!(volume_filter(Some(1.0 + 1e-12)), None);
+        assert_eq!(volume_filter(Some(0.5)), Some("volume=0.5".to_string()));
+        // a muted clip is a gain of zero, which is a level like any other
+        assert_eq!(volume_filter(Some(0.0)), Some("volume=0".to_string()));
+    }
+
+    #[test]
+    fn a_reel_takes_the_gain_of_whichever_event_gives_it_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("REEL001.mov"), "").unwrap();
+        std::fs::write(dir.path().join("REEL001_sound.wav"), "").unwrap();
+        let timeline = Timeline {
+            events: vec![
+                EditEvent {
+                    reel_name: "REEL001".into(),
+                    track_type: "V".into(),
+                    gain_factor: Some(4.0),
+                    ..Default::default()
+                },
+                EditEvent {
+                    reel_name: "REEL001".into(),
+                    track_type: "A1".into(),
+                    gain_factor: Some(0.5),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let plan = build_reel_plan(&timeline, dir.path()).unwrap();
+        assert_eq!(plan.reels[0].gain_factor, Some(4.0));
+        assert_eq!(plan.reels[1].gain_factor, Some(0.5));
+
+        // the A track supplies the sound, so its gain wins over the picture's
+        let groups = group_reels(&plan);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].gain_factor, Some(0.5));
+        assert!(groups[0].audio.is_some());
+    }
+
+    #[test]
+    fn a_picture_only_reel_keeps_the_gain_of_its_own_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("REEL001.mov"), "").unwrap();
+        let timeline = Timeline {
+            events: vec![EditEvent {
+                reel_name: "REEL001".into(),
+                track_type: "V".into(),
+                gain_factor: Some(0.25),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let groups = group_reels(&build_reel_plan(&timeline, dir.path()).unwrap());
+        assert!(groups[0].audio.is_none());
+        assert_eq!(groups[0].gain_factor, Some(0.25));
+    }
+
+    #[test]
+    fn a_plan_written_before_conform_carried_gain_still_reads() {
+        let plan: ReelPlan = serde_json::from_str(
+            r#"{"title":"Cut","frame_rate":24.0,"reels":[{"reel_name":"REEL001",
+               "media_path":"/media/REEL001.mov","track_type":"V",
+               "source_in":0,"source_out":120}]}"#,
+        )
+        .unwrap();
+        assert_eq!(plan.reels[0].gain_factor, None);
     }
 
     #[test]
