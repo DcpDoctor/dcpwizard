@@ -17,6 +17,8 @@ const MAIN_WINDOW_HEIGHT: f64 = 700.0;
 const MAIN_WINDOW_MINIMUM_WIDTH: f64 = 700.0;
 #[cfg(target_os = "linux")]
 const MAIN_WINDOW_MINIMUM_HEIGHT: f64 = 500.0;
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 255);
 
 mod pipeline;
 mod preview_server;
@@ -79,12 +81,14 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .title(MAIN_WINDOW_TITLE)
         .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
         .min_inner_size(MAIN_WINDOW_MINIMUM_WIDTH, MAIN_WINDOW_MINIMUM_HEIGHT)
+        .background_color(MAIN_WINDOW_BACKGROUND)
         .build()?;
     let size = window.inner_size()?;
     let webview = tauri::webview::WebviewBuilder::new(
         MAIN_WEBVIEW_LABEL,
         tauri::WebviewUrl::App("index.html".into()),
-    );
+    )
+    .background_color(MAIN_WINDOW_BACKGROUND);
     window.add_child(webview, tauri::LogicalPosition::new(0, 0), size)?;
     Ok(())
 }
