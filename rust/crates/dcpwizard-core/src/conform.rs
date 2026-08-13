@@ -62,8 +62,18 @@ pub struct ReelPlan {
     pub reels: Vec<ReelAsset>,
 }
 
-/// Find the first file in `media_dir` whose name contains `reel_name`.
+/// windows filenames cannot carry these, so media matching an AAF clip named
+/// by timecode only exists there with them substituted
+const WINDOWS_UNSAFE_FILENAME_CHARACTERS: &[char] = &[':', '*', '?', '"', '<', '>', '|'];
+
+fn comparable_file_name(name: &str) -> String {
+    name.replace(WINDOWS_UNSAFE_FILENAME_CHARACTERS, "_")
+}
+
+/// Find the first file in `media_dir` whose name contains `reel_name`,
+/// comparing both in substituted form.
 fn resolve_media(reel_name: &str, media_dir: &Path) -> Option<PathBuf> {
+    let wanted = comparable_file_name(reel_name);
     std::fs::read_dir(media_dir)
         .into_iter()
         .flatten()
@@ -73,7 +83,7 @@ fn resolve_media(reel_name: &str, media_dir: &Path) -> Option<PathBuf> {
         .find(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.contains(reel_name))
+                .is_some_and(|n| comparable_file_name(n).contains(&wanted))
         })
 }
 
@@ -466,7 +476,9 @@ mod tests {
 
         let media = tempfile::tempdir().unwrap();
         for event in &timeline.events {
-            std::fs::write(media.path().join(format!("{}.wav", event.reel_name)), "").unwrap();
+            // one corpus clip is named by timecode, unwritable raw on windows
+            let file_name = format!("{}.wav", comparable_file_name(&event.reel_name));
+            std::fs::write(media.path().join(file_name), "").unwrap();
         }
         let plan = build_reel_plan(&timeline, media.path()).unwrap();
         assert_eq!(plan.reels.len(), timeline.events.len());
