@@ -1,6 +1,6 @@
 // DCP Timeline View - renders multi-reel timeline with visual reel segments and playback integration
 import { invoke } from '@tauri-apps/api/core';
-import { showEmbeddedPanel } from './preview.js';
+import { showEmbeddedPanel } from '../../extern/guikit/src/preview.js';
 
 let timelineData = null; // { reels: [], totalFrames, editRate }
 let currentReel = -1;

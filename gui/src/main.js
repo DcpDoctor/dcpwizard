@@ -5,9 +5,9 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as _open, save, confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
 import { documentDir, join } from "@tauri-apps/api/path";
-import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible } from "./preview.js";
+import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible } from "../../extern/guikit/src/preview.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
-import { initShortcuts, getBinding } from "./shortcuts.js";
+import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
 
 // === Browse wrapper (remembers last directory) ===
 let lastBrowseDir = null;
