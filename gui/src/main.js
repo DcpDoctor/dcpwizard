@@ -1395,9 +1395,33 @@ function renderRecentProjects() {
         <span class="recent-title">${r.title || r.path.split(/[/\\]/).pop()}</span>
         <span class="recent-path">${r.path}</span>
       </div>
+      <button class="recent-retitle" data-path="${r.path}" title="Give this DCP a new content title">✎</button>
       <button class="recent-delete" data-path="${r.path}" title="Delete this DCP from disk">✕</button>
     </div>
   `).join('');
+  list.querySelectorAll('.recent-retitle').forEach(el => {
+    el.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const dir = el.dataset.path;
+      const title = prompt("New content title:", dir.split(/[/\\]/).pop());
+      if (!title?.trim()) return;
+      const ok = await tauriConfirm(
+        `Retitle to ${title}? The CPL gets a new composition id, so any KDM or delivery made from the old one no longer matches. A signed package loses its signature.`,
+        { title: "Retitle DCP", kind: "warning" },
+      );
+      if (!ok) return;
+      let newPath;
+      try {
+        newPath = await invoke("retitle_dcp", { path: dir, title });
+      } catch (e) {
+        tauriMessage(String(e), { title: "Retitle failed", kind: "error" });
+        return;
+      }
+      removeRecentProject(dir);
+      addRecentProject(newPath, title.trim());
+      setStatus(`Retitled to ${title.trim()}`);
+    });
+  });
   list.querySelectorAll('.recent-delete').forEach(el => {
     el.addEventListener('click', async (event) => {
       event.stopPropagation();

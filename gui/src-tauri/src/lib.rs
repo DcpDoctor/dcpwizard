@@ -126,6 +126,7 @@ pub fn run() {
             pipeline::resume_job,
             pipeline::list_jobs,
             pipeline::delete_dcp,
+            pipeline::retitle_dcp,
             pipeline::disk_space,
             pipeline::list_profiles,
             pipeline::create_vf,

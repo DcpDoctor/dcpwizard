@@ -436,6 +436,52 @@ pub async fn disk_space(path: String) -> Result<DiskSpace, String> {
     })
 }
 
+/// Give a built DCP a new content title without re-encoding: the CPL is
+/// rewritten with a new composition id and the essence is left alone. The folder
+/// is renamed too when it is still named after the old title. Returns the
+/// package path, which changes when the folder is renamed.
+#[tauri::command]
+pub async fn retitle_dcp(path: String, title: String) -> Result<String, String> {
+    let dir = PathBuf::from(&path);
+    if !holds_dcp(&dir) {
+        return Err(format!("{path} does not hold a DCP"));
+    }
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err("Enter a new title".into());
+    }
+    let old_title = dcpwizard_core::multi_cpl::list_cpls(&dir)
+        .first()
+        .map(|cpl| cpl.content_title.clone())
+        .ok_or_else(|| format!("No CPL found in {path}"))?;
+
+    let config = dcpwizard_core::edit::EditConfig {
+        input: dir.clone(),
+        title: Some(title.clone()),
+        ..Default::default()
+    };
+    if dcpwizard_core::edit::edit_dcp(&config) != 0 {
+        return Err(format!(
+            "Could not retitle {path}. Encrypted packages are refused: every KDM is bound to the CPL id, and a retitle mints a new one."
+        ));
+    }
+
+    let folder_is_named_after_the_title =
+        dir.file_name().and_then(|n| n.to_str()) == Some(&old_title);
+    let title_works_as_a_folder_name =
+        !title.contains(std::path::MAIN_SEPARATOR) && !title.contains('/');
+    if !folder_is_named_after_the_title || !title_works_as_a_folder_name {
+        return Ok(path);
+    }
+    let renamed = dir.with_file_name(&title);
+    if renamed.exists() {
+        return Ok(path);
+    }
+    std::fs::rename(&dir, &renamed)
+        .map_err(|e| format!("Retitled, but could not rename the folder: {e}"))?;
+    Ok(renamed.to_string_lossy().into_owned())
+}
+
 /// Delete a built DCP folder and everything in it. Refuses any folder that is
 /// not a DCP, so a stale recent entry cannot take out a folder of source media.
 #[tauri::command]
