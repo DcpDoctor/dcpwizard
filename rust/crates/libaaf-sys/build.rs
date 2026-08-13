@@ -50,11 +50,14 @@ fn main() {
         .unwrap_or_else(|| panic!("no libaaf static archive under {}", build_dir.display()));
 
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let canonical = if target_env == "msvc" { "aaf.lib" } else { "libaaf.a" };
+    let canonical = if target_env == "msvc" {
+        "aaf.lib"
+    } else {
+        "libaaf.a"
+    };
     let linked = out.join(canonical);
-    std::fs::copy(&archive, &linked).unwrap_or_else(|e| {
-        panic!("copying {} to {}: {e}", archive.display(), linked.display())
-    });
+    std::fs::copy(&archive, &linked)
+        .unwrap_or_else(|e| panic!("copying {} to {}: {e}", archive.display(), linked.display()));
     println!("cargo:rustc-link-search=native={}", out.display());
 
     cc::Build::new()
