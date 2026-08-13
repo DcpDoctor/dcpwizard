@@ -10,20 +10,25 @@ let reportSurface = () => {};
 export function initPreview() {
   initEmbeddedSurface();
 
-  // Keyboard shortcuts for preview (space=play/pause, arrows=seek)
-  document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.key === ' ') {
-      e.preventDefault();
-      invoke('preview_play_pause').catch(() => {});
-    }
-    if (e.key === 'ArrowLeft') invoke('preview_seek', { seconds: -5.0 }).catch(() => {});
-    if (e.key === 'ArrowRight') invoke('preview_seek', { seconds: 5.0 }).catch(() => {});
-    if (e.key === 'Home') invoke('preview_seek_absolute', { seconds: 0.0 }).catch(() => {});
-  });
-
   // Initialize scrubber
   initScrubber();
+}
+
+export function previewPlayPause() {
+  invoke('preview_play_pause').catch(() => {});
+}
+
+export function previewSeek(seconds) {
+  invoke('preview_seek', { seconds }).catch(() => {});
+}
+
+export function previewSeekAbsolute(seconds) {
+  invoke('preview_seek_absolute', { seconds }).catch(() => {});
+}
+
+export function isPreviewVisible() {
+  const panel = document.getElementById('preview-panel');
+  return !!panel && !panel.hidden;
 }
 
 // The video is a native surface the app draws over #preview-surface, so the
@@ -101,9 +106,7 @@ function initScrubber() {
   }
 
   // Play/pause button
-  playBtn?.addEventListener('click', () => {
-    invoke('preview_play_pause').catch(() => {});
-  });
+  playBtn?.addEventListener('click', previewPlayPause);
 
   // Start position polling
   startScrubberPolling();

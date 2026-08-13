@@ -201,7 +201,7 @@ The GUI uses [Tauri 2](https://tauri.app/) (Rust backend + web frontend) with a 
 
 **GUI features:**
 - Drag & drop file import (video, audio, subtitle)
-- Keyboard shortcuts (Ctrl+N/O/B/P/I, Ctrl+1–7 for views)
+- Keyboard shortcuts (Ctrl+N/O/B/P/I, Ctrl+1–7 for views, Space/arrows/Home during preview). Ctrl+K opens the shortcut list, where clicking a shortcut rebinds it (Backspace clears, Escape cancels) and the rebindings are saved
 - Recent projects quick-access list
 - Right-click context menus on assets (Preview, Remove, Show in Files)
 - Asset filter / search

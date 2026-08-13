@@ -5,8 +5,9 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as _open, save, confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
 import { documentDir, join } from "@tauri-apps/api/path";
-import { initPreview, previewDcp, previewFile } from "./preview.js";
+import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible } from "./preview.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
+import { initShortcuts } from "./shortcuts.js";
 
 // === Browse wrapper (remembers last directory) ===
 let lastBrowseDir = null;
@@ -55,27 +56,42 @@ function switchView(viewName) {
   if (viewName === "jobs") { refreshJobs(); startJobsPolling(); } else { stopJobsPolling(); }
 }
 
-document.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+const SHORTCUTS_KEY = "dcpwizard-shortcuts";
+const PREVIEW_SEEK_SECONDS = 5;
 
-  const ctrl = e.ctrlKey || e.metaKey;
-  const shift = e.shiftKey;
+function clickAction(id, label, category, binding, buttonId) {
+  return { id, label, category, binding, handler: () => document.getElementById(buttonId)?.click() };
+}
 
-  if (ctrl && e.key === "n") { e.preventDefault(); document.getElementById("btn-new-project")?.click(); }
-  else if (ctrl && e.key === "o") { e.preventDefault(); document.getElementById("btn-open-project")?.click(); }
-  else if (ctrl && e.key === "b") { e.preventDefault(); document.getElementById("btn-build")?.click(); }
-  else if (ctrl && e.key === "p") { e.preventDefault(); document.getElementById("btn-preview")?.click(); }
-  else if (ctrl && e.key === "i") { e.preventDefault(); document.getElementById("import-video")?.click(); }
-  // View switching: Ctrl+1-7
-  else if (ctrl && e.key === "1") { e.preventDefault(); switchView("project"); }
-  else if (ctrl && e.key === "2") { e.preventDefault(); switchView("reels"); }
-  else if (ctrl && e.key === "3") { e.preventDefault(); switchView("verify"); }
-  else if (ctrl && e.key === "4") { e.preventDefault(); switchView("security"); }
-  else if (ctrl && e.key === "5") { e.preventDefault(); switchView("tools"); }
-  else if (ctrl && e.key === "6") { e.preventDefault(); switchView("jobs"); }
-  else if (ctrl && e.key === "7") { e.preventDefault(); switchView("settings"); }
-  // Theme toggle
-  else if (ctrl && shift && e.key === "T") { e.preventDefault(); document.getElementById("theme-toggle")?.click(); }
+function viewAction(view, label, binding) {
+  return { id: `view-${view}`, label, category: "Views", binding, handler: () => switchView(view) };
+}
+
+function previewAction(id, label, binding, handler) {
+  return { id, label, category: "Preview", binding, when: isPreviewVisible, handler };
+}
+
+initShortcuts({
+  storageKey: SHORTCUTS_KEY,
+  actions: [
+    clickAction("new-project", "New project", "Project", "Ctrl+N", "btn-new-project"),
+    clickAction("open-project", "Open DCP", "Project", "Ctrl+O", "btn-open-project"),
+    clickAction("build", "Build DCP", "Project", "Ctrl+B", "btn-build"),
+    clickAction("preview", "Preview", "Project", "Ctrl+P", "btn-preview"),
+    clickAction("import-video", "Import video", "Project", "Ctrl+I", "import-video"),
+    viewAction("project", "Project", "Ctrl+1"),
+    viewAction("reels", "Reels & Timeline", "Ctrl+2"),
+    viewAction("verify", "Verify", "Ctrl+3"),
+    viewAction("security", "Encryption & KDM", "Ctrl+4"),
+    viewAction("tools", "Tools", "Ctrl+5"),
+    viewAction("jobs", "Jobs", "Ctrl+6"),
+    viewAction("settings", "Settings", "Ctrl+7"),
+    previewAction("preview-play-pause", "Play / pause", "Space", previewPlayPause),
+    previewAction("preview-back", `Back ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowLeft", () => previewSeek(-PREVIEW_SEEK_SECONDS)),
+    previewAction("preview-forward", `Forward ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowRight", () => previewSeek(PREVIEW_SEEK_SECONDS)),
+    previewAction("preview-start", "Go to start", "Home", () => previewSeekAbsolute(0)),
+    clickAction("toggle-theme", "Toggle light / dark theme", "Appearance", "Ctrl+Shift+T", "theme-toggle"),
+  ],
 });
 
 // === Preferences (localStorage) ===
