@@ -428,7 +428,17 @@ mod tests {
             .join("../../../extern/dcpdoctor/schemas")
             .canonicalize()
             .ok()?;
+        let dir = without_windows_verbatim_prefix(dir);
         dir.join("catalog.xml").exists().then_some(dir)
+    }
+
+    // canonicalize returns a \\?\ path on windows, which xmllint reads as a
+    // relative uri and cannot open, so hand it a plain drive path
+    fn without_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+        match path.to_string_lossy().strip_prefix(r"\\?\") {
+            Some(plain) => PathBuf::from(plain),
+            None => path,
+        }
     }
 
     fn xmllint_available() -> bool {
