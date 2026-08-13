@@ -45,6 +45,7 @@
 - **KDM validity** — duration-based end times keep the start's UTC offset
 - **GUI resolution** — scope/flat/full map to the correct container dimensions; content kind `episode` maps to a real ContentKind
 - **Subtitle timecodes** — SMPTE DCST now emits frame-based `HH:MM:SS:FF` (schema-valid), not `HH:MM:SS.mmm`
+- **Shared GUI frontend**: the preview player, keyboard shortcuts and base stylesheet now come from the PostPerfection/guikit submodule at `extern/guikit` instead of per-app copies, shared with imfwizard. `gui/src/style.css` keeps only the dcpwizard-specific rules, loaded after the base. Building the GUI from source now requires the submodules checked out (`git clone --recurse-submodules`, or `git submodule update --init`). No behaviour change
 
 ### Removed
 - **DTS:X** — was silently mapped to the Atmos (IAB) essence UL, which is wrong for DTS:X. Removed the `MxfType::DtsX` variant and dropped DTS:X from the docs; blocked on a confirmed DataEssenceCoding UL (see DESIGN_TODO)
