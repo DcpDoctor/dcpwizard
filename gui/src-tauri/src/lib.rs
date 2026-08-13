@@ -125,6 +125,8 @@ pub fn run() {
             pipeline::pause_job,
             pipeline::resume_job,
             pipeline::list_jobs,
+            pipeline::delete_dcp,
+            pipeline::disk_space,
             pipeline::list_profiles,
             pipeline::create_vf,
             timeline::list_cpls,
