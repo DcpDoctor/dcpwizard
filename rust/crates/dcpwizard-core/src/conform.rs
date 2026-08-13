@@ -1,17 +1,37 @@
 //! Timeline conformance — assemble reels from EDL/AAF/XML edit decisions.
 //!
-//! Parsing (EDL/xmeml/fcpxml) and the manifest writer live in [`postkit::conform`].
-//! The app-side [`build_reel_plan`] turns a parsed timeline plus a media
-//! directory into a concrete, resolved reel/asset plan (the input to DCP reel
-//! assembly).
+//! EDL/xmeml/fcpxml parsing lives in [`postkit::conform`], AAF in
+//! [`crate::aaf_import`], and [`parse_timeline`] routes between them. The
+//! app-side [`build_reel_plan`] turns a parsed timeline plus a media directory
+//! into a concrete, resolved reel/asset plan (the input to DCP reel assembly).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub use postkit::conform::{
-    ConformOptions, EditEvent, Timeline, TimelineFormat, conform, detect_timeline_format,
-    find_missing_reels, parse_timeline,
+    ConformError, ConformOptions, EditEvent, Timeline, TimelineFormat, conform,
+    detect_timeline_format, find_missing_reels,
 };
+
+/// Parse a timeline file. AAF is read through libaaf here, every other format
+/// is postkit's.
+pub fn parse_timeline(file: &Path) -> Result<Timeline, ConformError> {
+    match detect_timeline_format(file) {
+        TimelineFormat::Aaf => crate::aaf_import::read_timeline(file),
+        _ => postkit::conform::parse_timeline(file),
+    }
+}
+
+/// Write the parsed timeline next to the reel plan, the artifact downstream
+/// tools read. Same file postkit's `conform` writes, from a timeline already
+/// parsed rather than parsed a second time.
+pub fn write_conform_manifest(timeline: &Timeline, output_dir: &Path) -> std::io::Result<PathBuf> {
+    let path = output_dir.join("conform_manifest.json");
+    let json = serde_json::to_string_pretty(timeline)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&path, json)?;
+    Ok(path)
+}
 
 /// One resolved reel asset: an edit event whose reel_name was matched to a real
 /// media file in the media directory.
@@ -377,6 +397,46 @@ mod tests {
         assert_eq!(tl.title, "Test");
         assert_eq!(tl.events.len(), 1);
         assert_eq!(tl.events[0].reel_name, "REEL001");
+    }
+
+    #[test]
+    fn manifest_keeps_the_events_and_the_skipped_constructs() {
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = Timeline {
+            title: "Cut".into(),
+            events: vec![EditEvent {
+                reel_name: "REEL001".into(),
+                ..Default::default()
+            }],
+            skipped: vec!["<title> \"Card\": no source media".into()],
+            ..Default::default()
+        };
+        let path = write_conform_manifest(&timeline, dir.path()).unwrap();
+        let written: Timeline =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written.events.len(), 1);
+        assert_eq!(written.skipped, timeline.skipped);
+    }
+
+    #[test]
+    fn aaf_builds_the_same_reel_plan_shape_as_an_edl() {
+        let aaf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../extern/libaaf/test/aaf/DR_Mono_Clip_Positioning.aaf");
+        if !aaf.is_file() {
+            return;
+        }
+        let timeline = parse_timeline(&aaf).unwrap();
+        assert_eq!(timeline.format, TimelineFormat::Aaf);
+
+        let media = tempfile::tempdir().unwrap();
+        for event in &timeline.events {
+            std::fs::write(media.path().join(format!("{}.wav", event.reel_name)), "").unwrap();
+        }
+        let plan = build_reel_plan(&timeline, media.path()).unwrap();
+        assert_eq!(plan.reels.len(), timeline.events.len());
+        assert_eq!(plan.reels[0].reel_name, timeline.events[0].reel_name);
+        assert_eq!(plan.reels[0].track_type, "A1");
+        assert!(plan.reels[0].media_path.is_file());
     }
 
     #[test]

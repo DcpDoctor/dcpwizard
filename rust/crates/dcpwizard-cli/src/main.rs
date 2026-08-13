@@ -569,6 +569,11 @@ enum Commands {
         /// AnnotationText override (default: "<title> KDM for <recipient>")
         #[arg(long)]
         annotation: Option<String>,
+        /// Playback device certificate this KDM is restricted to (repeatable).
+        /// Naming any device replaces the DCI assume-trust entry, so the KDM
+        /// then plays only on the devices listed here.
+        #[arg(long = "device-cert")]
+        device_cert: Vec<String>,
     },
     /// Re-wrap a DKDM to a new recipient
     KdmRewrap {
@@ -599,6 +604,11 @@ enum Commands {
         /// Output KDM file
         #[arg(short, long)]
         output: String,
+        /// Playback device certificate the re-wrapped KDM is restricted to
+        /// (repeatable). The source DKDM's device list is never carried over,
+        /// because it names the DKDM recipient's devices, not the new one's.
+        #[arg(long = "device-cert")]
+        device_cert: Vec<String>,
     },
     /// Copy DCP to drive
     Copy {
@@ -1927,6 +1937,9 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             format,
             None,
             history,
+            // no --device-cert here: a batch spans cinemas, and one device list
+            // shared across them would lock every recipient to someone else's gear
+            Vec::new(),
         );
     }
 
@@ -1960,6 +1973,7 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             format,
             None,
             history.clone(),
+            Vec::new(),
         );
         if code != 0 {
             failures += 1;
@@ -2194,7 +2208,6 @@ fn run_kdm_template(templates_file: Option<String>, action: TemplateAction) -> i
 /// plan + conform manifest, and print the assembled reels. Per-reel encode/wrap
 /// into a DCP is the remaining step; the plan is the executable hand-off.
 fn run_conform_assembly(
-    input: &str,
     timeline: &postkit::conform::Timeline,
     media_dir: &str,
     output: Option<&str>,
@@ -2215,15 +2228,8 @@ fn run_conform_assembly(
         tracing::error!("cannot create output dir: {e}");
         return 1;
     }
-    // postkit conform writes the assembled timeline manifest
-    let opts = postkit::conform::ConformOptions {
-        timeline_file: PathBuf::from(input),
-        media_dir: media,
-        output_dir: out.clone(),
-        ..Default::default()
-    };
-    if postkit::conform::conform(&opts) != 0 {
-        tracing::error!("conform assembly failed");
+    if let Err(e) = dcpwizard_core::conform::write_conform_manifest(timeline, &out) {
+        tracing::error!("cannot write conform manifest: {e}");
         return 1;
     }
     // keep the reel plan as an artifact next to the manifest
@@ -3314,6 +3320,7 @@ fn run() {
                 fps,
                 compressor_path: grk_bin,
                 lib_dir: None,
+                ..StreamEncodeOptions::default()
             };
 
             let cancel = Arc::new(AtomicBool::new(false));
@@ -3547,6 +3554,7 @@ fn run() {
             keys,
             format,
             annotation,
+            device_cert,
         } => {
             let format = match dcpwizard_core::kdm::parse_format(&format) {
                 Ok(f) => f,
@@ -3591,6 +3599,7 @@ fn run() {
                 format,
                 annotation,
                 Some(history_path(history_file)),
+                device_cert.into_iter().map(PathBuf::from).collect(),
             );
             if code == 0 {
                 if let Some(cfg_path) = smtp_config {
@@ -3619,6 +3628,7 @@ fn run() {
             valid_from,
             valid_to,
             output,
+            device_cert,
         } => dcpwizard_core::kdm::rewrap_dkdm(
             PathBuf::from(dkdm),
             PathBuf::from(dkdm_key),
@@ -3629,6 +3639,7 @@ fn run() {
             valid_from,
             valid_to,
             PathBuf::from(output),
+            device_cert.into_iter().map(PathBuf::from).collect(),
         ),
 
         Commands::Copy { src, dst } => {
@@ -4128,7 +4139,7 @@ fn run() {
             output,
             json,
             signer_opts,
-        } => match postkit::conform::parse_timeline(std::path::Path::new(&input)) {
+        } => match dcpwizard_core::conform::parse_timeline(std::path::Path::new(&input)) {
             Err(e) => {
                 tracing::error!("Timeline parse failed: {e}");
                 1
@@ -4136,7 +4147,6 @@ fn run() {
             Ok(timeline) => {
                 if let Some(media_dir) = media_dir {
                     run_conform_assembly(
-                        &input,
                         &timeline,
                         &media_dir,
                         output.as_deref(),
@@ -4152,6 +4162,13 @@ fn run() {
                     println!("Events: {}", timeline.events.len());
                     for (i, evt) in timeline.events.iter().enumerate() {
                         println!("  [{i}] {} -> {}", evt.source_in, evt.source_out);
+                    }
+                    if !timeline.skipped.is_empty() {
+                        println!(
+                            "Skipped: {} construct(s) with no place in a reel plan, listed in \
+                             the warnings above",
+                            timeline.skipped.len()
+                        );
                     }
                     0
                 }

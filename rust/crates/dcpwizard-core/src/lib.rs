@@ -1,3 +1,4 @@
+pub mod aaf_import;
 pub mod accessibility;
 pub mod assemble;
 pub mod assetmap;

@@ -24,15 +24,21 @@ user-facing surface is here.
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
   This one cannot be closed by testing: it needs hardware.
-- conform input formats: CMX3600 EDL, FCP7 xmeml and FCPX fcpxml parse. fcpxml
-  covers the primary spine only, so connected clips in lanes, compound clips and
-  nested clips are skipped rather than guessed at. AAF errors as not-implemented
-  and OTIO routes to the otioz_import module instead of parse_timeline.
+- conform input formats: CMX3600 EDL, FCP7 xmeml, FCPX fcpxml and AAF all parse.
+  fcpxml resolves connected clips in lanes, compound clips and nested clips onto
+  the record timeline, and AAF comes from libaaf through the libaaf-sys crate.
+  Anything with no source clip behind it lands in Timeline.skipped with a reason
+  instead of being dropped: fcpxml titles, generators, captions, transitions,
+  multicam angles and auditions, and on the AAF side transitions and clips libaaf
+  resolves to no essence. Still open: AAF clip gain, pan and automation are read
+  by libaaf and ignored here, AAF video is only as good as libaaf's video support
+  and its public test corpus has video tracks but no video clips, so that path is
+  untested against a real file, and OTIO still routes to the otioz_import module
+  instead of parse_timeline.
 - Accessibility check is a real structural probe as of postkit c6406d1 (element and
   MCA-token evidence, three-state present/absent/undeterminable). Burned-in open
   captions and director commentary are undeterminable by construction: nothing in a
   package declares either.
-- Trusted Device List / DeviceList is written for no KDM, Interop or SMPTE.
 - Sony RAW / X-OCN is detected but undecodable (ffmpeg can't decode it), same as
   ARRIRAW/R3D/BRAW/Canon: a match only yields a clearer detected-but-undecodable
   error. postkit's detect_format matches Sony's private essence ULs in the .mxf
@@ -40,21 +46,63 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
+
+## Done 2026-08-12
+
 - DCP signing (`--signer-cert/--signer-key/--signer-chain`,
-  CORE/package_signature.rs) now covers `create`, `create --versions`, `assemble`,
+  CORE/package_signature.rs) covers `create`, `create --versions`, `assemble`,
   `create-vf`, `create-multi`, `combine` and `ingest-package`. `combine` and
   `ingest-package` sign only the packing list they generate, because they hash the
   CPLs rather than rewriting them, so a signature a CPL already carries stays
-  valid.
-  Three gaps in what signing covers: no optional `<Signer>` element
-  beside the `ds:Signature` (optional in both schemas and dcpdoctor does not ask for
-  it, but real DCPs carry it); Interop packages are signed rsa-sha256 like SMPTE,
-  because that is postkit's only public profile, where real Interop DCPs use
-  rsa-sha1; and the supplied chain is not checked against the ST 430-2 rules
-  (2048-bit RSA, e=65537, role prefixes, dnQualifier thumbprint), only that the
-  private key matches the leaf certificate.
+  valid. Its three gaps are closed.
 
-## Done 2026-08-12
+  Signed CPLs and PKLs carry the optional `<Signer>` beside the `ds:Signature`,
+  built by `postkit::xmldsig::dcp_signer_element` in the shape real Clipster and
+  Doremi packages use. Both schemas type it `ds:KeyInfoType`, unlike the KDM's ETM
+  `Signer`, so it wraps a `ds:X509Data` holding the signing certificate's
+  `ds:X509IssuerSerial` and no `X509SubjectName`, with `xmlns:ds` declared on
+  `Signer` and `X509Data` themselves rather than inherited from the root. It is
+  written before signing, so the enveloped reference covers it and editing it
+  breaks the signature. `xmllint` puts signed SMPTE and Interop CPLs and PKLs
+  through the vendored 429-7, 429-8 and digicine schemas.
+
+  Interop packages are signed rsa-sha1 with SHA-1 reference digests
+  (`postkit::xmldsig::SignatureProfile`), SMPTE stays rsa-sha256. The profile
+  follows the document's own root namespace rather than the `--standard` flag, so
+  a package written Interop cannot be signed as if it were SMPTE, and repackaging
+  paths that never see the flag get it right too. xmlsec1 cannot cross-check
+  rsa-sha1 on a current OpenSSL, which refuses RSA over SHA-1 outright, so that
+  test skips when it sees the refusal. The round trip was confirmed instead
+  through postkit's own verify, through `dcpdoctor_core::signature::
+  verify_signature` (which accepts the signed Interop CPL and reports
+  `signature_invalid` on a tampered copy), and out of tree by recomputing the
+  reference digest with libxml2's canonicalizer and recovering the PKCS#1 v1.5
+  block by raw modular exponentiation. The Interop KDM caveat above still applies
+  to Interop packages generally: nothing short of real legacy gear fully validates
+  them.
+
+  The chain is held to ST 430-2 at sign time by calling
+  `dcpdoctor_core::cert_rules::check_certificates` on the chain as `ds:KeyInfo`
+  embeds it, so there is one copy of those rules and not two. It covers signature
+  algorithm, RSA 2048 with e=65537, BasicConstraints and KeyUsage for the role each
+  certificate plays, a signer role token distinct from the CAs', dnQualifier
+  against the public-key thumbprint where one is present, and one Organization
+  across the chain. A violation names the rule and fails before anything is
+  written. There is no opt-out flag, because every rule is one a DCI verifier
+  applies anyway, so skipping it would only move the failure to a screening room,
+  and postkit's own generated chains pass as they are. The rules judge each
+  certificate against the role it plays rather than demanding a complete chain, so
+  a leaf on its own still signs.
+
+- KDM Trusted Device List is reachable as `kdm --device-cert <pem>` and
+  `kdm-rewrap --device-cert <pem>`, both repeatable, threaded onto postkit's
+  `KdmConfig.device_cert_files` and `RewrapConfig.device_cert_files`. The old
+  bullet claiming DeviceList is written for no KDM was stale: postkit writes
+  `AuthorizedDeviceInfo` for every KDM, Interop and SMPTE, and an empty list is the
+  DCI assume-trust thumbprint. Naming any device replaces that thumbprint instead
+  of joining it, so the KDM then plays only on the devices listed. `kdm-batch` has
+  no such flag on purpose, because one device list spanning cinemas would tie every
+  recipient to someone else's gear.
 
 - GUI HDR: the create panel authors DCI HDR DCPs, so `--hdr-dci` is no longer
   CLI-only. postkit `StreamEncodeOptions` gained `source_colour`

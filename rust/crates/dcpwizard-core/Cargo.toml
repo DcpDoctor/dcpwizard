@@ -13,6 +13,7 @@ dirs = "6"
 hound = "3.5"
 getrandom = "0.2"
 libc = "0.2"
+libaaf-sys = { path = "../libaaf-sys" }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls", "ring", "webpki-roots"] }
 postkit.workspace = true
 roxmltree = "0.20"

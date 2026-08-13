@@ -13,3 +13,6 @@
 [submodule "extern/postkit"]
 	path = extern/postkit
 	url = https://github.com/PostPerfection/postkit.git
+[submodule "extern/libaaf"]
+	path = extern/libaaf
+	url = https://github.com/agfline/LibAAF.git
