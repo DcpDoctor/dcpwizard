@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "AGPL-3.0-or-later"
-version = "1.1.0"
+version = "1.2.0"
 
 [workspace.dependencies]
 asdcplib = { git = "https://github.com/PostPerfection/asdcplib-rs.git", rev = "4f137a0" }

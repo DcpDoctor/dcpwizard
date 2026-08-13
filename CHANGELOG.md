@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-08-13
 
 ### Added
 - **KDM distribution** — cinema/screen database (`cinema add|list|remove|add-screen|remove-screen|search|import-flm`, no private keys stored), named validity templates (`kdm-template`, used via `kdm/kdm-batch --template`), generation history (`kdm-history`, metadata-only JSONL), FLM-x / SMPTE 430-7 import (`cinema import-flm`), email delivery (`kdm/kdm-batch --email-to --smtp-config`, one zipped email per cinema), and `kdm-batch --cinema/--screen/--cert-dir` recipient resolution. `cert-fetch --vendor --serial` downloads recipient certs from the credential-free public endpoints (dolby/doremi, qube)

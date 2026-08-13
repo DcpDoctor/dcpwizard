@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "dcpwizard-cli"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "dcpwizard-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "asdcplib",
  "chrono",
@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "libaaf-sys"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "cc",
  "cmake",
@@ -1956,6 +1956,7 @@ dependencies = [
  "hex",
  "hound",
  "notify",
+ "pkg-config",
  "quick-xml 0.37.5",
  "rcgen",
  "regex",

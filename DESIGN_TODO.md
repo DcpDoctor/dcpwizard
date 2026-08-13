@@ -164,9 +164,10 @@ other:
   differs). NOT moved to postkit: it is all `#[tauri::command]` wrappers and postkit
   has no tauri dep (also used by the CLI and wasm). The reusable part (MpvPlayer) is
   already in postkit::mpv. dcpwizard also keeps a windows preview_server_stub the imf
-  side lacks. The preview stays a separate mpv window for now: Wayland has no
-  foreign-window embedding. Embedded playback via the libmpv render API is planned
-  in postkit's DESIGN_TODO, shared with imfwizard.
+  side lacks. Linux builds with the embedded-preview feature draw the preview in
+  the app window via the libmpv render API (state in postkit's DESIGN_TODO, shared
+  with imfwizard); other platforms and builds without the feature spawn a separate
+  mpv window.
 - gui/src/preview.js, gui/vite.config.js — frontend files (differ only by var order /
   dev port); the GUIs don't consume JS from the postkit crate, so no home.
 - gui/src-tauri/src/lib.rs, gui/src-tauri/src/pipeline.rs — app-specific tauri setup
