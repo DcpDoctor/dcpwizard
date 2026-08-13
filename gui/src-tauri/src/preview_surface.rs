@@ -1,11 +1,9 @@
-//! Hosts libmpv's OpenGL output in a `GtkGLArea` docked above the webview.
+//! Hosts libmpv's OpenGL output in a `GtkGLArea` layered over the webview.
 //!
 //! Native Wayland cannot reparent another process's window, so the preview has
-//! to render in-process. The GL area is packed into the box tauri already put
-//! the webview in, as its sibling. Nothing may be inserted between the webview
-//! and that box, or between the box and the window: tauri-runtime-wry's
-//! undecorated-resizing hook walks exactly that chain on every mouse press and
-//! panics if it does not end at the `GtkWindow`.
+//! to render in-process. The GL area sits in a `GtkOverlay` above tauri's
+//! webview box and is positioned from the page: the frontend reports where its
+//! placeholder element sits and the area is moved to match.
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
@@ -27,24 +25,13 @@ const GL_VERSION: u32 = 0x1F02;
 /// mpv draws by default, so the image arrives upside down without this.
 const FLIP_Y: bool = true;
 
-/// A closed preview keeps a one pixel transparent strip rather than hiding:
-/// an unrealized GL area has no context, and advanced control needs the render
-/// loop still answering mpv.
-const CLOSED_PANE_HEIGHT: i32 = 1;
-
-#[derive(Clone, Copy)]
-struct PaneState {
+#[derive(Clone, Copy, Default)]
+struct SurfaceRect {
+    x: i32,
+    y: i32,
+    width: i32,
     height: i32,
     visible: bool,
-}
-
-impl Default for PaneState {
-    fn default() -> Self {
-        Self {
-            height: CLOSED_PANE_HEIGHT,
-            visible: false,
-        }
-    }
 }
 
 enum SurfaceEvent {
@@ -54,7 +41,7 @@ enum SurfaceEvent {
 
 pub struct EmbeddedPreview {
     player: Arc<MpvRenderPlayer>,
-    pane: Arc<Mutex<PaneState>>,
+    rect: Arc<Mutex<SurfaceRect>>,
     events: async_channel::Sender<SurfaceEvent>,
 }
 
@@ -63,25 +50,37 @@ impl EmbeddedPreview {
         &self.player
     }
 
-    /// Show or hide the video pane, `height` in the same logical pixels the
-    /// page lays itself out in.
-    pub fn set_pane(&self, visible: bool, height: i32) {
-        *self.pane.lock().unwrap() = PaneState { height, visible };
+    /// Move the video surface to where the page says its placeholder is, in CSS
+    /// pixels from the top-left of the webview.
+    pub fn set_surface(&self, x: i32, y: i32, width: i32, height: i32, visible: bool) {
+        *self.rect.lock().unwrap() = SurfaceRect {
+            x,
+            y,
+            width,
+            height,
+            visible,
+        };
         let _ = self.events.try_send(SurfaceEvent::Layout);
     }
 }
 
-/// Dock a GL area above the window's webview and hand back the player driving
-/// it. Everything here touches GTK, so it must run on the main thread.
-pub fn attach(window: &tauri::WebviewWindow) -> Result<EmbeddedPreview, String> {
+/// Put a GL area over the window's webview and hand back the player driving it.
+/// Everything here touches GTK, so it must run on the main thread.
+pub fn attach(window: &tauri::Window) -> Result<EmbeddedPreview, String> {
+    let gtk_window = window.gtk_window().map_err(|e| e.to_string())?;
     let webview_box = window.default_vbox().map_err(|e| e.to_string())?;
 
     let player = Arc::new(MpvRenderPlayer::new()?);
     let gl_area = gtk::GLArea::new();
     gl_area.set_has_depth_buffer(false);
     gl_area.set_has_stencil_buffer(false);
-    let pane = Arc::new(Mutex::new(PaneState::default()));
-    apply_pane(&gl_area, PaneState::default());
+    gl_area.set_halign(gtk::Align::Start);
+    gl_area.set_valign(gtk::Align::Start);
+    // The area stays realized even with no preview on screen: mpv's render
+    // context lives on its GL context, and advanced control needs the render
+    // loop answering. An inactive preview shrinks to a transparent pixel.
+    let rect = Arc::new(Mutex::new(SurfaceRect::default()));
+    apply_rect(&gl_area, SurfaceRect::default());
 
     let (events, incoming) = async_channel::unbounded::<SurfaceEvent>();
 
@@ -105,21 +104,24 @@ pub fn attach(window: &tauri::WebviewWindow) -> Result<EmbeddedPreview, String> 
         }
     });
 
-    // Signals first: packing into a box that is already on screen realizes the
-    // area right away, and a realize handler connected after that never runs,
-    // leaving every draw without a render context.
-    webview_box.pack_start(&gl_area, false, true, 0);
-    webview_box.reorder_child(&gl_area, 0);
-    gl_area.show();
+    // Signals first: adding the area to a window that is already on screen
+    // realizes it right away, and a realize handler connected after that never
+    // runs, leaving every draw without a render context.
+    let overlay = gtk::Overlay::new();
+    gtk_window.remove(&webview_box);
+    overlay.add(&webview_box);
+    overlay.add_overlay(&gl_area);
+    gtk_window.add(&overlay);
+    overlay.show_all();
     if gl_area.is_realized() {
         bind_render_context(&gl_area, &player, &events);
     }
 
-    spawn_event_pump(incoming, gl_area, Arc::clone(&player), Arc::clone(&pane));
+    spawn_event_pump(incoming, gl_area, Arc::clone(&player), Arc::clone(&rect));
 
     Ok(EmbeddedPreview {
         player,
-        pane,
+        rect,
         events,
     })
 }
@@ -159,15 +161,13 @@ fn bind_render_context(
     );
 }
 
-fn apply_pane(gl_area: &gtk::GLArea, pane: PaneState) {
-    let active = pane.visible && pane.height > 0;
+fn apply_rect(gl_area: &gtk::GLArea, rect: SurfaceRect) {
+    let active = rect.visible && rect.width > 0 && rect.height > 0;
+    gl_area.set_margin_start(if active { rect.x } else { 0 });
+    gl_area.set_margin_top(if active { rect.y } else { 0 });
     gl_area.set_size_request(
-        -1,
-        if active {
-            pane.height
-        } else {
-            CLOSED_PANE_HEIGHT
-        },
+        if active { rect.width } else { 1 },
+        if active { rect.height } else { 1 },
     );
     gl_area.set_opacity(if active { 1.0 } else { 0.0 });
 }
@@ -179,7 +179,7 @@ fn spawn_event_pump(
     incoming: async_channel::Receiver<SurfaceEvent>,
     gl_area: gtk::GLArea,
     player: Arc<MpvRenderPlayer>,
-    pane: Arc<Mutex<PaneState>>,
+    rect: Arc<Mutex<SurfaceRect>>,
 ) {
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = incoming.recv().await {
@@ -194,8 +194,8 @@ fn spawn_event_pump(
                     }
                 }
                 SurfaceEvent::Layout => {
-                    let current = *pane.lock().unwrap();
-                    apply_pane(&gl_area, current);
+                    let current = *rect.lock().unwrap();
+                    apply_rect(&gl_area, current);
                 }
             }
         }

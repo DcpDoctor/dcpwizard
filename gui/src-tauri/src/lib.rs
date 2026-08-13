@@ -3,6 +3,21 @@
 
 use tauri::Manager;
 
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(target_os = "linux")]
+const MAIN_WEBVIEW_LABEL: &str = "main-webview";
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_TITLE: &str = "DCP Wizard — DCP Creator";
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_WIDTH: f64 = 900.0;
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_HEIGHT: f64 = 700.0;
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_MINIMUM_WIDTH: f64 = 700.0;
+#[cfg(target_os = "linux")]
+const MAIN_WINDOW_MINIMUM_HEIGHT: f64 = 500.0;
+
 mod pipeline;
 mod preview_server;
 #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
@@ -48,7 +63,7 @@ fn fork_terminal_guard() {
 /// back to a separate mpv window otherwise.
 fn create_preview_player(app: &tauri::App) -> preview_server::PreviewPlayer {
     #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window(MAIN_WINDOW_LABEL) {
         match preview_surface::attach(&window) {
             Ok(preview) => return preview_server::PreviewPlayer::Embedded(preview),
             Err(error) => eprintln!("[preview] embedded playback unavailable: {error}"),
@@ -56,6 +71,22 @@ fn create_preview_player(app: &tauri::App) -> preview_server::PreviewPlayer {
     }
     let _ = app;
     preview_server::new_player()
+}
+
+#[cfg(target_os = "linux")]
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let window = tauri::window::WindowBuilder::new(app, MAIN_WINDOW_LABEL)
+        .title(MAIN_WINDOW_TITLE)
+        .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+        .min_inner_size(MAIN_WINDOW_MINIMUM_WIDTH, MAIN_WINDOW_MINIMUM_HEIGHT)
+        .build()?;
+    let size = window.inner_size()?;
+    let webview = tauri::webview::WebviewBuilder::new(
+        MAIN_WEBVIEW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    );
+    window.add_child(webview, tauri::LogicalPosition::new(0, 0), size)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -96,6 +127,8 @@ pub fn run() {
             timeline::get_timeline,
         ])
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            create_main_window(app)?;
             app.manage(create_preview_player(app));
             Ok(())
         })
