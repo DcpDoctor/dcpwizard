@@ -33,13 +33,6 @@ user-facing surface is here.
   captions and director commentary are undeterminable by construction: nothing in a
   package declares either.
 - Trusted Device List / DeviceList is written for no KDM, Interop or SMPTE.
-- GUI `--hdr-dci` is skipped: the job queue encodes through
-  postkit::pipeline::run_encode_with_ratio -> stream_encode, which hardcodes
-  apply_xyz_transform=true and has no HDR-to-DCI LUT / PQ-passthrough branch or
-  per-codestream cap. Authoring an HDR DCP there would mislabel XYZ-transformed
-  frames as ST 2084 PQ, so it stays CLI-only (grok path). HDR tonemap
-  (`--allow-generic-hdr-tonemap`, `--hdr-to-dci-lut`) is absent from the GUI panel
-  for the same reason. Every other create flag is now on the panel.
 - Sony RAW / X-OCN is detected but undecodable (ffmpeg can't decode it), same as
   ARRIRAW/R3D/BRAW/Canon: a match only yields a clearer detected-but-undecodable
   error. postkit's detect_format matches Sony's private essence ULs in the .mxf
@@ -63,6 +56,27 @@ user-facing surface is here.
 
 ## Done 2026-08-12
 
+- GUI HDR: the create panel authors DCI HDR DCPs, so `--hdr-dci` is no longer
+  CLI-only. postkit `StreamEncodeOptions` gained `source_colour`
+  (`SourceColour::DisplayRgb` | `DciLut(path)` | `AlreadyPq`) and
+  `codestream_byte_cap`; `stream_encode` runs grok's `--xyz` if and only if the
+  source is display RGB, decodes through `lut3d` in the same ffmpeg pass for the
+  LUT variant, and fails the run on a frame over the cap. There is no
+  apply-the-transform bool left to set wrong, so PQ signaling cannot land over
+  transformed frames. `pipeline::run_encode_with_options` carries the pair
+  (`run_encode`/`run_encode_with_ratio` still delegate to it unchanged for
+  imfwizard), rejects an untransformed source on the image-sequence branch
+  (encode_parallel always applies `--xyz`) and a LUT on already-compressed J2K
+  input, and caps pre-encoded frames the stream encoder never saw. GUI side:
+  `submit_job` takes the four panel controls and `resolve_hdr` turns them into the
+  source colour, rejecting the CLI's combinations up front (no PQ path, bandwidth
+  over the 450 Mbit/s ceiling, 3D, reel splitting, versions, or more than one
+  source path). run_job then tone maps only when the panel opted in
+  (`plan_hdr_source`), passes the raised cap from `hdr::hdr_codestream_byte_cap`,
+  and sets `DcpConfig.hdr_dci` so the wrap goes through the same
+  `mxf_wrap::wrap_j2k_hdr_files` the CLI uses. The CLI's own create path still
+  reaches its generic tone map for an `--hdr-already-pq` HDR video source, which
+  would tone map to SDR and then stamp PQ; the GUI cannot express that.
 - `edit` drops the signature from every document it rewrites (the CPL, any PKL
   carrying its entry, and the ASSETMAP) instead of leaving one that no longer
   covers the bytes. A stale signature is worse than none: dcpdoctor reports
@@ -201,7 +215,11 @@ other:
   routing, reel splitting, delivery profiles and versions/multi to the same path; those
   sit on dcpwizard-core (sign_language, pad, audio_route, reel, profiles, versions), so
   there is nothing to mirror there either. Upmix is postkit::upmix and would port to
-  imfwizard unchanged if its panel ever wants it.
+  imfwizard unchanged if its panel ever wants it. The HDR batch is the same shape:
+  the shared half (source colour path, codestream cap) is in postkit::pipeline /
+  postkit::encode where imfwizard picks it up by bumping its pin, and the DCI HDR
+  Addendum half is dcpwizard-only, since IMF carries HDR in its own descriptors and
+  has no DCI addendum, so nothing to mirror.
 - .github/workflows/ci.yml, release.yml, gui-release.yml — copies across dcpwizard,
   imfwizard, dcpdoctor differing by binary/artifact names + per-app build deps.
   Separate git repos, so no shared reusable-workflow without a central repo. Keep

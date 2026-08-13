@@ -618,6 +618,17 @@ document.getElementById("prop-browse-sign-language-video")?.addEventListener("cl
   if (path) document.getElementById("prop-sign-language-video").value = path;
 });
 
+document.getElementById("prop-browse-hdr-lut")?.addEventListener("click", async () => {
+  const path = await open({
+    directory: false, multiple: false,
+    filters: [
+      { name: '3D LUT', extensions: ['cube','3dl','csp','dat','m3d'] },
+      { name: 'All', extensions: ['*'] }
+    ]
+  });
+  if (path) document.getElementById("prop-hdr-lut").value = path;
+});
+
 document.getElementById("prop-browse-ccap")?.addEventListener("click", async () => {
   const path = await open({
     directory: false, multiple: false,
@@ -743,6 +754,10 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       splitAt: document.getElementById("prop-split-at")?.value || null,
       splitChapters: document.getElementById("prop-split-chapters")?.checked || false,
       versions: document.getElementById("prop-versions")?.value || null,
+      hdrDci: document.getElementById("prop-hdr-dci")?.checked || false,
+      hdrToDciLut: document.getElementById("prop-hdr-lut")?.value || null,
+      hdrAlreadyPq: document.getElementById("prop-hdr-already-pq")?.checked || false,
+      allowGenericHdrTonemap: document.getElementById("prop-hdr-generic-tonemap")?.checked || false,
     });
     setStatus("Building DCP...");
   } catch (e) {

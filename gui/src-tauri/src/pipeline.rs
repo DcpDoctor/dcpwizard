@@ -77,6 +77,13 @@ struct JobConfig {
     split_chapters: bool,
     // one CPL per entry over shared essence; empty keeps the single-CPL path
     versions: Vec<dcpwizard_core::versions::VersionSpec>,
+    // DCI HDR Addendum: stamp ST 2084 PQ / P3-D65 on the picture MXF
+    hdr_dci: bool,
+    // how the source reaches the encoder: display RGB, through an HDR-to-DCI
+    // LUT, or already PQ. Nothing but display RGB gets the X'Y'Z' transform.
+    source_colour: postkit::encode::SourceColour,
+    // tone map an HDR source down to SDR with ffmpeg's generic transform
+    allow_generic_hdr_tonemap: bool,
 }
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
@@ -145,6 +152,10 @@ pub async fn submit_job(
     split_at: Option<String>,
     split_chapters: Option<bool>,
     versions: Option<String>,
+    hdr_dci: Option<bool>,
+    hdr_to_dci_lut: Option<String>,
+    hdr_already_pq: Option<bool>,
+    allow_generic_hdr_tonemap: Option<bool>,
 ) -> Result<u64, String> {
     let queue = app.state::<JobQueue>();
     let id = queue.next_id.fetch_add(1, Ordering::Relaxed);
@@ -215,6 +226,23 @@ pub async fn submit_job(
         );
     }
 
+    let right_eye = right_eye.filter(|s| !s.is_empty());
+    let hdr_dci = hdr_dci.unwrap_or(false);
+    let allow_generic_hdr_tonemap = allow_generic_hdr_tonemap.unwrap_or(false);
+    let source_colour = resolve_hdr(
+        &HdrPanelOptions {
+            dci: hdr_dci,
+            lut: hdr_to_dci_lut,
+            already_pq: hdr_already_pq.unwrap_or(false),
+            allow_generic_tonemap: allow_generic_hdr_tonemap,
+        },
+        fps_num,
+        bandwidth.unwrap_or(250),
+        right_eye.is_some(),
+        reel_length_minutes > 0 || !reel_split_frames.is_empty() || split_chapters,
+        !versions.is_empty(),
+    )?;
+
     let job = JobConfig {
         id,
         video_path: PathBuf::from(&video_path),
@@ -231,7 +259,7 @@ pub async fn submit_job(
         encrypt: encrypt.unwrap_or(false),
         key_out: key_out.filter(|k| !k.is_empty()),
         channels: channels.unwrap_or_else(|| "5.1".into()),
-        right_eye: right_eye.filter(|s| !s.is_empty()),
+        right_eye,
         atmos: atmos.filter(|s| !s.is_empty()),
         subtitle,
         subtitle_language: subtitle_language.unwrap_or_else(|| "en".into()),
@@ -251,6 +279,9 @@ pub async fn submit_job(
         reel_split_frames,
         split_chapters,
         versions,
+        hdr_dci,
+        source_colour,
+        allow_generic_hdr_tonemap,
     };
 
     {
@@ -407,6 +438,7 @@ pub async fn create_vf(
         title: title.unwrap_or_default(),
         replacement_reels,
         subtitle_language: String::new(),
+        signer: None,
     };
 
     // create_vf does blocking IO (mxf wrap, hashing), keep it off the async runtime.
@@ -530,6 +562,143 @@ fn parse_upmixer(value: Option<&str>) -> Result<Option<postkit::upmix::Upmixer>,
         "a" => Ok(Some(postkit::upmix::Upmixer::A)),
         "b" => Ok(Some(postkit::upmix::Upmixer::B)),
         other => Err(format!("Unknown upmix variant '{other}' (use a or b)")),
+    }
+}
+
+/// The create panel's HDR controls, before validation.
+struct HdrPanelOptions {
+    dci: bool,
+    lut: Option<String>,
+    already_pq: bool,
+    allow_generic_tonemap: bool,
+}
+
+/// Resolve the HDR controls into the source colour the encoder gets, rejecting
+/// the combinations the CLI rejects before an encode starts. A DCI HDR package
+/// only leaves here with a source that never sees the X'Y'Z' transform, so PQ
+/// signaling can never end up over transformed frames.
+fn resolve_hdr(
+    panel: &HdrPanelOptions,
+    frame_rate: u32,
+    bandwidth: u32,
+    stereoscopic: bool,
+    splits_reels: bool,
+    versions: bool,
+) -> Result<postkit::encode::SourceColour, String> {
+    use dcpwizard_core::hdr;
+    use postkit::encode::SourceColour;
+
+    let lut = panel
+        .lut
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+    let source_paths = [lut.is_some(), panel.already_pq, panel.allow_generic_tonemap]
+        .into_iter()
+        .filter(|set| *set)
+        .count();
+    if source_paths > 1 {
+        return Err(
+            "Choose one HDR source path: an HDR-to-DCI LUT, an already-PQ source, or generic tone mapping".into(),
+        );
+    }
+
+    let source_colour = match (lut, panel.already_pq) {
+        (Some(path), _) => {
+            let path = PathBuf::from(path);
+            if !path.is_file() {
+                return Err(format!("HDR-to-DCI LUT not found: {}", path.display()));
+            }
+            SourceColour::DciLut(path)
+        }
+        (None, true) => SourceColour::AlreadyPq,
+        (None, false) => SourceColour::DisplayRgb,
+    };
+
+    if !panel.dci {
+        return Ok(source_colour);
+    }
+    if source_colour == SourceColour::DisplayRgb {
+        return Err(
+            "DCI HDR needs the source path to PQ: choose an HDR-to-DCI LUT or mark the source already PQ".into(),
+        );
+    }
+    if bandwidth > hdr::HDR_MAX_MBPS {
+        return Err(format!(
+            "DCI HDR caps the codestream at {} bytes/frame ({} Mbit/s at {frame_rate} fps): lower the bandwidth from {bandwidth}",
+            hdr::hdr_codestream_byte_cap(frame_rate),
+            hdr::HDR_MAX_MBPS
+        ));
+    }
+    if stereoscopic {
+        return Err("DCI HDR is not supported for stereoscopic (3D) DCPs".into());
+    }
+    if splits_reels {
+        return Err("DCI HDR is not supported with reel splitting".into());
+    }
+    if versions {
+        return Err("DCI HDR is not supported with a versions manifest".into());
+    }
+    Ok(source_colour)
+}
+
+/// What a detected HDR source needs before the J2K encode.
+#[derive(Debug, PartialEq, Eq)]
+enum HdrSourceStep {
+    EncodeDirectly,
+    TonemapToSdr,
+}
+
+/// Mirrors the CLI: an HDR source reaches the encoder through its HDR-to-DCI LUT
+/// or as already-PQ essence, and anything else needs the generic tone map
+/// opt-in. The tone map lands on SDR, so it is unreachable for a PQ source.
+fn plan_hdr_source(
+    hdr_type: postkit::dolby_vision::HdrType,
+    source_colour: &postkit::encode::SourceColour,
+    allow_generic_tonemap: bool,
+) -> Result<HdrSourceStep, String> {
+    use postkit::dolby_vision::HdrType;
+    use postkit::encode::SourceColour;
+
+    if hdr_type == HdrType::Sdr || *source_colour != SourceColour::DisplayRgb {
+        return Ok(HdrSourceStep::EncodeDirectly);
+    }
+    if allow_generic_tonemap {
+        return Ok(HdrSourceStep::TonemapToSdr);
+    }
+    Err(format!(
+        "Source is {hdr_type:?}: choose an HDR-to-DCI LUT, mark it already PQ, or allow generic tone mapping"
+    ))
+}
+
+/// Hand the encoder a source it can compress honestly: the file itself, or the
+/// generic tone map's SDR conversion when the panel opted into it.
+fn prepare_hdr_input(
+    source: &std::path::Path,
+    job: &JobConfig,
+    tonemapped: PathBuf,
+    log: impl Fn(&str),
+) -> Result<PathBuf, String> {
+    let hdr_type = dcpwizard_core::dolby_vision::detect_hdr_type(source);
+    match plan_hdr_source(hdr_type, &job.source_colour, job.allow_generic_hdr_tonemap)? {
+        HdrSourceStep::EncodeDirectly => Ok(source.to_path_buf()),
+        HdrSourceStep::TonemapToSdr => {
+            log(&format!(
+                "[ENCODE] Generic FFmpeg tone map of a {hdr_type:?} source. It is not a delivery transform."
+            ));
+            if let Some(parent) = tonemapped.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let code = dcpwizard_core::dolby_vision::convert_hdr(
+                source,
+                postkit::dolby_vision::HdrType::Sdr,
+                &tonemapped,
+            );
+            if code != 0 {
+                return Err(format!("HDR tone mapping failed (rc={code})"));
+            }
+            Ok(tonemapped)
+        }
     }
 }
 
@@ -710,6 +879,7 @@ fn build_dcp_config(
         reel_split_frames,
         sign_language_lang: job.sign_language_tag.clone(),
         sign_language_main_channels,
+        hdr_dci: job.hdr_dci,
         ..Default::default()
     }
 }
@@ -761,15 +931,32 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         })
         .unwrap_or(10.0);
 
+    // HDR source handling before the encode: the LUT and already-PQ paths reach
+    // the encoder untransformed, everything else needs the tone map opt-in.
+    let encode_input = prepare_hdr_input(
+        &job.video_path,
+        job,
+        output.join("hdr_tonemap.mov"),
+        |msg| log_to(&log_file, msg),
+    )?;
+
+    let encode_options = postkit::pipeline::EncodeRunOptions {
+        compression_ratio,
+        fps: fps_num,
+        source_colour: job.source_colour.clone(),
+        codestream_byte_cap: job
+            .hdr_dci
+            .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
+    };
+
     // Encode using shared pipeline
     let job_id = job.id;
     let app_ref = app.clone();
     let log_ref = log_file.clone();
-    let encode_result = postkit::pipeline::run_encode_with_ratio(
-        &job.video_path,
+    let encode_result = postkit::pipeline::run_encode_with_options(
+        &encode_input,
         output,
-        compression_ratio,
-        fps_num,
+        &encode_options,
         &cancel,
         &pause,
         |p| {
@@ -793,12 +980,17 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let right_eye_dir = if let Some(re) = job.right_eye.as_deref() {
         log_to(&log_file, &format!("[ENCODE] Right eye: {re}"));
         let re_out = output.join("right");
-        let log_ref = log_file.clone();
-        let re_result = postkit::pipeline::run_encode_with_ratio(
+        let re_input = prepare_hdr_input(
             std::path::Path::new(re),
+            job,
+            re_out.join("hdr_tonemap.mov"),
+            |msg| log_to(&log_file, msg),
+        )?;
+        let log_ref = log_file.clone();
+        let re_result = postkit::pipeline::run_encode_with_options(
+            &re_input,
             &re_out,
-            compression_ratio,
-            fps_num,
+            &encode_options,
             &cancel,
             &pause,
             |_p| {},
@@ -1005,6 +1197,18 @@ mod tests {
             reel_split_frames: Vec::new(),
             split_chapters: false,
             versions: Vec::new(),
+            hdr_dci: false,
+            source_colour: postkit::encode::SourceColour::DisplayRgb,
+            allow_generic_hdr_tonemap: false,
+        }
+    }
+
+    fn hdr_panel() -> HdrPanelOptions {
+        HdrPanelOptions {
+            dci: true,
+            lut: None,
+            already_pq: true,
+            allow_generic_tonemap: false,
         }
     }
 
@@ -1244,6 +1448,137 @@ mod tests {
         )
         .unwrap();
         assert!(load_version_specs(Some(missing.to_str().unwrap())).is_err());
+    }
+
+    #[test]
+    fn dci_hdr_needs_a_pq_source() {
+        let panel = HdrPanelOptions {
+            dci: true,
+            lut: None,
+            already_pq: false,
+            allow_generic_tonemap: false,
+        };
+        let error = resolve_hdr(&panel, 24, 250, false, false, false).unwrap_err();
+        assert!(error.contains("already PQ"), "{error}");
+
+        assert_eq!(
+            resolve_hdr(&hdr_panel(), 24, 250, false, false, false).unwrap(),
+            postkit::encode::SourceColour::AlreadyPq
+        );
+    }
+
+    #[test]
+    fn an_hdr_to_dci_lut_becomes_the_source_colour() {
+        let dir = tempfile::tempdir().unwrap();
+        let lut = dir.path().join("hdr_to_dci.cube");
+        std::fs::write(&lut, "LUT_3D_SIZE 2\n").unwrap();
+
+        let panel = HdrPanelOptions {
+            dci: true,
+            lut: Some(lut.to_string_lossy().into_owned()),
+            already_pq: false,
+            allow_generic_tonemap: false,
+        };
+        assert_eq!(
+            resolve_hdr(&panel, 24, 250, false, false, false).unwrap(),
+            postkit::encode::SourceColour::DciLut(lut)
+        );
+
+        let missing = HdrPanelOptions {
+            lut: Some(dir.path().join("gone.cube").to_string_lossy().into_owned()),
+            ..panel
+        };
+        assert!(resolve_hdr(&missing, 24, 250, false, false, false)
+            .unwrap_err()
+            .contains("LUT not found"));
+    }
+
+    #[test]
+    fn dci_hdr_rejects_the_combinations_the_cli_rejects() {
+        let over_cap = resolve_hdr(&hdr_panel(), 24, 500, false, false, false).unwrap_err();
+        assert!(over_cap.contains("2343750 bytes/frame"), "{over_cap}");
+
+        assert!(resolve_hdr(&hdr_panel(), 24, 250, true, false, false).is_err());
+        assert!(resolve_hdr(&hdr_panel(), 24, 250, false, true, false).is_err());
+        assert!(resolve_hdr(&hdr_panel(), 24, 250, false, false, true).is_err());
+
+        let two_paths = HdrPanelOptions {
+            allow_generic_tonemap: true,
+            ..hdr_panel()
+        };
+        assert!(resolve_hdr(&two_paths, 24, 250, false, false, false)
+            .unwrap_err()
+            .contains("Choose one HDR source path"));
+    }
+
+    #[test]
+    fn a_plain_job_keeps_display_rgb() {
+        let panel = HdrPanelOptions {
+            dci: false,
+            lut: None,
+            already_pq: false,
+            allow_generic_tonemap: false,
+        };
+        assert_eq!(
+            resolve_hdr(&panel, 24, 250, true, true, true).unwrap(),
+            postkit::encode::SourceColour::DisplayRgb
+        );
+    }
+
+    #[test]
+    fn an_hdr_source_needs_a_path_to_dci() {
+        use postkit::dolby_vision::HdrType;
+        use postkit::encode::SourceColour;
+
+        assert_eq!(
+            plan_hdr_source(HdrType::Sdr, &SourceColour::DisplayRgb, false).unwrap(),
+            HdrSourceStep::EncodeDirectly
+        );
+        assert_eq!(
+            plan_hdr_source(HdrType::Hdr10, &SourceColour::AlreadyPq, false).unwrap(),
+            HdrSourceStep::EncodeDirectly
+        );
+        assert_eq!(
+            plan_hdr_source(
+                HdrType::Hlg,
+                &SourceColour::DciLut(PathBuf::from("/luts/hdr_to_dci.cube")),
+                false,
+            )
+            .unwrap(),
+            HdrSourceStep::EncodeDirectly
+        );
+        assert_eq!(
+            plan_hdr_source(HdrType::Hdr10, &SourceColour::DisplayRgb, true).unwrap(),
+            HdrSourceStep::TonemapToSdr
+        );
+        assert!(plan_hdr_source(HdrType::Hdr10, &SourceColour::DisplayRgb, false).is_err());
+    }
+
+    #[test]
+    fn dci_hdr_reaches_the_core_config() {
+        let mut job = test_job();
+        job.hdr_dci = true;
+        job.source_colour = postkit::encode::SourceColour::AlreadyPq;
+
+        let config = build_dcp_config(
+            &job,
+            PathBuf::from("/out/j2k"),
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        assert!(config.hdr_dci);
+
+        let plain = build_dcp_config(
+            &test_job(),
+            PathBuf::from("/out/j2k"),
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        assert!(!plain.hdr_dci);
     }
 
     #[test]

@@ -2,17 +2,13 @@
 //!
 //! The addendum (s7) requires the picture MXF's Generic Picture Essence
 //! Descriptor to carry TransferCharacteristic = ST 2084 (the UL below) plus a CPL
-//! ExtensionMetadata EOTF="ST 2084" claim. The cargo-resolved asdcplib-rs jp2k
-//! writer (rev 66de9d0) exposes no way to set TransferCharacteristic, so dcpwizard
-//! cannot honestly author a DCI HDR DCP: emitting the CPL HDR claim over essence
-//! that lacks the descriptor UL would mislabel the package. Following the
-//! imfwizard precedent (HDR deliberately skipped), --hdr-dci fails loud rather
-//! than mislabel. The one honest, spec-backed constraint is enforced: the raised
-//! per-codestream byte cap.
+//! ExtensionMetadata EOTF="ST 2084" claim. The descriptor side is written by
+//! `mxf_wrap::wrap_j2k_hdr_files`, so this module holds the numbers both the CLI
+//! and the GUI validate against before an HDR encode starts: the raised
+//! per-codestream byte cap and the bitrate ceiling it comes from.
 
 /// ST 2084 (PQ) TransferCharacteristic UL (DCI HDR Addendum s7; asdcplib
-/// TransferCharacteristic_SMPTEST2084). Documented for the fail-loud message; it
-/// is not emittable through the current jp2k writer.
+/// TransferCharacteristic_SMPTEST2084).
 pub const ST2084_TRANSFER_UL: [u8; 16] = [
     0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x0d, 0x04, 0x01, 0x01, 0x01, 0x01, 0x0a, 0x00, 0x00,
 ];
