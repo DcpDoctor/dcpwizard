@@ -8,6 +8,21 @@ user-facing surface is here.
 
 ## Open
 
+- guikit extraction (confirmed 2026-08-13, not started): new PostPerfection/guikit
+  repo consumed as an extern/guikit submodule by dcpwizard and imfwizard only,
+  dcpdoctor stays out and keeps its vendored shortcuts.js copy. Phase 1 moves
+  gui/src/preview.js, gui/src/shortcuts.js and a base stylesheet (thin per-app
+  override files hold the deltas), and aligns gui/package.json and
+  gui/vite.config.js without moving them. timeline.js is decided by classifying
+  its diff during extraction: unify into guikit if the divergence is drift, keep
+  both copies if it is domain difference (225 of 330 lines shared today).
+  main.js, index.html and pipeline.rs stay per-app permanently. Pin discipline
+  mirrors postkit: every guikit change is immediately followed by a pin bump
+  commit in both wizards, plain commit pins, no tags. Phase 2, only after phase 1
+  survives one real change cycle: preview_server.rs and preview_surface.rs into a
+  small crate in guikit consumed as a path dep through the submodule (not
+  postkit, which must stay free of a tauri dep). Subsumes the preview.js and
+  vite.config.js entries in "Keep in sync" below.
 - postkit compiled twice, fixed 2026-08-12. `postkit` was a path dep on
   `extern/postkit` while `dcpdoctor-core` came from git carrying its own path dep
   on the postkit inside that checkout, so cargo resolved two copies. dcpdoctor
@@ -170,6 +185,13 @@ other:
   mpv window.
 - gui/src/preview.js, gui/vite.config.js — frontend files (differ only by var order /
   dev port); the GUIs don't consume JS from the postkit crate, so no home.
+  Planned home: guikit (see Open).
+- gui/src/shortcuts.js — byte-identical across dcpwizard, imfwizard and dcpdoctor
+  (2026-08-13). App-agnostic by design: all app specifics enter through
+  initShortcuts, so sync is a plain cp, never a per-repo edit. If an integration
+  seems to need an engine change, change the engine in one repo and cp to the
+  others. Planned home for the wizard copies: guikit (see Open); dcpdoctor keeps
+  a vendored copy.
 - gui/src-tauri/src/lib.rs, gui/src-tauri/src/pipeline.rs — app-specific tauri setup
   and build orchestration; they delegate the encode to postkit::pipeline but diverged
   enough that unifying would need per-divergence config flags. The 2026-07-23
