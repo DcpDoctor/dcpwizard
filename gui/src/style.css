@@ -602,6 +602,35 @@ body {
   overflow: hidden;
 }
 
+/* Embedded preview */
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+}
+
+.preview-panel[hidden] {
+  display: none;
+}
+
+.preview-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Video is painted over this element by the app, not by the page. */
+.preview-surface {
+  height: 360px;
+  background: #000;
+}
+
 /* Transport / Scrubber */
 .timeline-transport {
   display: flex;

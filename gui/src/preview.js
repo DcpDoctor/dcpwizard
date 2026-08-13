@@ -4,8 +4,12 @@ import { open } from '@tauri-apps/plugin-dialog';
 
 let scrubberInterval = null;
 let isSeeking = false;
+let isEmbedded = false;
+let reportSurface = () => {};
 
 export function initPreview() {
+  initEmbeddedSurface();
+
   // Keyboard shortcuts for preview (space=play/pause, arrows=seek)
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -20,6 +24,49 @@ export function initPreview() {
 
   // Initialize scrubber
   initScrubber();
+}
+
+// The video is a native surface the app draws over #preview-surface, so the
+// page's only job is telling the backend where that element ended up.
+async function initEmbeddedSurface() {
+  const panel = document.getElementById('preview-panel');
+  const surface = document.getElementById('preview-surface');
+  if (!panel || !surface) return;
+
+  isEmbedded = await invoke('preview_is_embedded').catch(() => false);
+  if (!isEmbedded) return;
+
+  const report = () => {
+    const visible = !panel.hidden;
+    const rect = surface.getBoundingClientRect();
+    invoke('preview_set_surface', {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      visible,
+    }).catch(() => {});
+  };
+
+  new ResizeObserver(report).observe(surface);
+  window.addEventListener('resize', report);
+  document.addEventListener('scroll', report, true);
+
+  document.getElementById('preview-close')?.addEventListener('click', () => {
+    invoke('preview_stop').catch(() => {});
+    panel.hidden = true;
+    report();
+  });
+
+  reportSurface = report;
+  report();
+}
+
+export function showEmbeddedPanel() {
+  if (!isEmbedded) return;
+  const panel = document.getElementById('preview-panel');
+  if (panel) panel.hidden = false;
+  reportSurface();
 }
 
 function initScrubber() {
@@ -124,6 +171,7 @@ function formatTimecode(seconds) {
 
 /// Load a file into the preview player
 export function previewFile(filePath) {
+  showEmbeddedPanel();
   invoke('preview_load', { filePath }).catch((e) => {
     console.error('[preview] Failed to load:', e);
   });
@@ -132,6 +180,7 @@ export function previewFile(filePath) {
 
 /// Load a DCP directory into the preview player
 export function previewDcp(dirPath) {
+  showEmbeddedPanel();
   invoke('preview_load_dcp', { dirPath }).catch((e) => {
     console.error('[preview] Failed to load DCP:', e);
   });

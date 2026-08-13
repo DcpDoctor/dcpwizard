@@ -1,17 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // pipeline + preview
 
-#[allow(unused_imports)]
 use tauri::Manager;
 
 mod pipeline;
-#[cfg(unix)]
 mod preview_server;
-#[cfg(not(unix))]
-mod preview_server_stub;
+#[cfg(all(target_os = "linux", feature = "embedded-preview"))]
+mod preview_surface;
 mod timeline;
-#[cfg(not(unix))]
-use preview_server_stub as preview_server;
 
 #[cfg(unix)]
 fn fork_terminal_guard() {
@@ -48,12 +44,25 @@ fn fork_terminal_guard() {
     }
 }
 
+/// Draw the preview inside the app window when libmpv is linked in, and fall
+/// back to a separate mpv window otherwise.
+fn create_preview_player(app: &tauri::App) -> preview_server::PreviewPlayer {
+    #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
+    if let Some(window) = app.get_webview_window("main") {
+        match preview_surface::attach(&window) {
+            Ok(preview) => return preview_server::PreviewPlayer::Embedded(preview),
+            Err(error) => eprintln!("[preview] embedded playback unavailable: {error}"),
+        }
+    }
+    let _ = app;
+    preview_server::new_player()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(unix)]
     fork_terminal_guard();
 
-    let mpv = preview_server::new_player();
     let job_queue = pipeline::JobQueue::new();
 
     tauri::Builder::default()
@@ -62,7 +71,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(mpv)
         .manage(job_queue)
         .invoke_handler(tauri::generate_handler![
             preview_server::preview_load,
@@ -75,6 +83,8 @@ pub fn run() {
             preview_server::preview_get_duration,
             preview_server::preview_get_metadata,
             preview_server::preview_set_parent_wid,
+            preview_server::preview_set_surface,
+            preview_server::preview_is_embedded,
             pipeline::submit_job,
             pipeline::cancel_job,
             pipeline::pause_job,
@@ -85,11 +95,14 @@ pub fn run() {
             timeline::list_cpls,
             timeline::get_timeline,
         ])
-        .setup(|_app| Ok(()))
+        .setup(|app| {
+            app.manage(create_preview_player(app));
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(mpv) = window.try_state::<preview_server::MpvPlayer>() {
-                    mpv.kill();
+                if let Some(player) = window.try_state::<preview_server::PreviewPlayer>() {
+                    player.kill();
                 }
             }
         })

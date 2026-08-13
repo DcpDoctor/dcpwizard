@@ -1,5 +1,6 @@
 // DCP Timeline View - renders multi-reel timeline with visual reel segments and playback integration
 import { invoke } from '@tauri-apps/api/core';
+import { showEmbeddedPanel } from './preview.js';
 
 let timelineData = null; // { reels: [], totalFrames, editRate }
 let currentReel = -1;
@@ -234,6 +235,7 @@ async function seekToPercent(pct) {
   // If different reel, load the new file
   if (reelIdx !== currentReel && targetReel.picture_file) {
     currentReel = reelIdx;
+    showEmbeddedPanel();
     try {
       await invoke('preview_load', { filePath: targetReel.picture_file });
     } catch (e) {
