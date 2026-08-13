@@ -16,3 +16,6 @@
 [submodule "extern/libaaf"]
 	path = extern/libaaf
 	url = https://github.com/agfline/LibAAF.git
+[submodule "extern/guikit"]
+	path = extern/guikit
+	url = https://github.com/PostPerfection/guikit.git
