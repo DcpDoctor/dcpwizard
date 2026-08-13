@@ -1,7 +1,7 @@
 # DESIGN_TODO
 
 Paths: CORE = rust/crates/dcpwizard-core/src, CLI = rust/crates/dcpwizard-cli/src/main.rs,
-PK = extern/postkit (postkit submodule, pinned at fc6cfe9; bump the pin when postkit changes).
+PK = extern/postkit (postkit submodule, pinned at 4a44a6c; bump the pin when postkit changes).
 DoM refs (dom#N = https://dcpomatic.com/bugs/view.php?id=N) are DCP-o-matic tracker
 feature requests. Shared DSP/parsers belong in postkit (see its DESIGN_TODO); the
 user-facing surface is here.
@@ -24,12 +24,11 @@ user-facing surface is here.
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
   This one cannot be closed by testing: it needs hardware.
-- conform gaps (the formats themselves are in DESIGN.md): AAF clip gain, pan and
-  automation are read by libaaf and ignored here. AAF video is code-complete but
-  untested against a real file, since libaaf's public test corpus has video
-  tracks but no video clips. OTIO still routes to the otioz_import module instead
-  of parse_timeline. libaaf is pinned at its v1.0 tag while master carries
-  large-file and calloc fixes, so a bump is worth considering.
+- conform gaps (the formats themselves are in DESIGN.md): AAF video is
+  code-complete but untested against a real file, since libaaf's public test
+  corpus has video tracks but no video clips. AAF pan and gain automation are
+  surfaced in the timeline's skipped list but not applied, deliberate scope:
+  constant clip gain is applied (see Done 2026-08-13).
 - Accessibility check is a real structural probe as of postkit c6406d1 (element and
   MCA-token evidence, three-state present/absent/undeterminable). Burned-in open
   captions and director commentary are undeterminable by construction: nothing in a
@@ -41,6 +40,33 @@ user-facing surface is here.
   SMPTE-registered, and mark the Sony RAW family without distinguishing X-OCN
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
+
+## Done 2026-08-13
+
+- libaaf bumped from v1.0 to upstream master (reversed calloc arguments, >2GB and
+  >4GB files, utf-8 paths on windows, better external essence locating). The
+  shim's API surface is unchanged between the two.
+- libaaf-sys build.rs builds the aaf-static cmake target and copies the archive
+  out of the build tree under the one name rustc links. libaaf defines install()
+  only inside a Linux guard and names the archive libaaf.a, libaaf.obj (msvc), or
+  bare aaf (macOS, no Darwin branch upstream), so the old install-target build
+  broke Windows and macOS CI the moment libaaf-sys landed.
+- AAF constant clip gain reaches the conformed audio. The shim reads clip gain,
+  automation, mute and track pan; libaaf-sys exposes gain_factor plus three
+  presence flags; aaf_import maps constant gain to EditEvent.gain_factor (a
+  postkit field, unity collapses to None, mute becomes 0.0) and surfaces
+  automation, pan and mute in Timeline.skipped; conform carries the factor
+  through ReelAsset into ffmpeg -af volume. Corpus: DR_Audio_Levels.aaf asserts
+  the -99/+6/+3 dB multipliers against libaaf's own expected output,
+  MC_Clip_Mute.aaf mute, MC_Audio_Pan.aaf pan, PR_Fades.aaf unity.
+- libaaf reads are serialized behind a mutex in AafComposition::read: two
+  concurrent reads corrupt the heap (upstream bug, parse and release paths
+  both), which had the AAF tests aborting on half of 8-thread runs.
+- OTIO conform: postkit parse_timeline parses .otio for real (postkit 6ce0bc9,
+  serde_json, per-track record positions, everything unmappable lands in
+  skipped) and the otioz string scanner is gone. dcpwizard needed only the pin
+  bump, since its parse_timeline already routes non-AAF formats to postkit.
+  imfwizard gets OTIO conform the same way on its next pin bump.
 
 ## Done 2026-08-12
 
@@ -166,7 +192,9 @@ other:
   differs). NOT moved to postkit: it is all `#[tauri::command]` wrappers and postkit
   has no tauri dep (also used by the CLI and wasm). The reusable part (MpvPlayer) is
   already in postkit::mpv. dcpwizard also keeps a windows preview_server_stub the imf
-  side lacks.
+  side lacks. The preview stays a separate mpv window for now: Wayland has no
+  foreign-window embedding. Embedded playback via the libmpv render API is planned
+  in postkit's DESIGN_TODO, shared with imfwizard.
 - gui/src/preview.js, gui/vite.config.js — frontend files (differ only by var order /
   dev port); the GUIs don't consume JS from the postkit crate, so no home.
 - gui/src-tauri/src/lib.rs, gui/src-tauri/src/pipeline.rs — app-specific tauri setup
