@@ -35,7 +35,8 @@ libc = "0.2"
 
 [features]
 # Draws the preview inside the app window through libmpv's render API. Off by
-# default because it needs libmpv development files at build time.
+# default because it needs libmpv development files at build time. Only takes
+# effect on linux, elsewhere it compiles but the spawned player is used.
 embedded-preview = ["dep:async-channel", "postkit/libmpv"]
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -7,7 +7,7 @@ const APP_NAME: &str = "DCPWizard";
 /// possible without libmpv at build time.
 pub enum PreviewPlayer {
     Spawned(MpvPlayer),
-    #[cfg(feature = "embedded-preview")]
+    #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
     Embedded(crate::preview_surface::EmbeddedPreview),
 }
 
@@ -21,7 +21,7 @@ macro_rules! dispatch {
     ($self:expr, $call:ident ( $( $argument:expr ),* )) => {
         match $self {
             PreviewPlayer::Spawned(player) => player.$call($( $argument ),*),
-            #[cfg(feature = "embedded-preview")]
+            #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
             PreviewPlayer::Embedded(preview) => preview.player().$call($( $argument ),*),
         }
     };
@@ -69,7 +69,7 @@ impl PreviewPlayer {
     pub fn kill(&self) {
         match self {
             PreviewPlayer::Spawned(player) => player.kill(),
-            #[cfg(feature = "embedded-preview")]
+            #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
             PreviewPlayer::Embedded(_) => {}
         }
     }
@@ -89,7 +89,7 @@ pub fn preview_set_parent_wid(
             }
             Ok(())
         }
-        #[cfg(feature = "embedded-preview")]
+        #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
         PreviewPlayer::Embedded(_) => Ok(()),
     }
 }
@@ -105,11 +105,11 @@ pub fn preview_set_surface(
     visible: bool,
     state: tauri::State<'_, PreviewPlayer>,
 ) -> Result<(), String> {
-    #[cfg(feature = "embedded-preview")]
+    #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
     if let PreviewPlayer::Embedded(preview) = &*state {
         preview.set_surface(x, y, width, height, visible);
     }
-    #[cfg(not(feature = "embedded-preview"))]
+    #[cfg(not(all(target_os = "linux", feature = "embedded-preview")))]
     let _ = (x, y, width, height, visible, state);
     Ok(())
 }
@@ -117,11 +117,11 @@ pub fn preview_set_surface(
 /// True when video draws inside the app window rather than a separate one.
 #[tauri::command]
 pub fn preview_is_embedded(state: tauri::State<'_, PreviewPlayer>) -> bool {
-    #[cfg(feature = "embedded-preview")]
+    #[cfg(all(target_os = "linux", feature = "embedded-preview"))]
     {
         matches!(&*state, PreviewPlayer::Embedded(_))
     }
-    #[cfg(not(feature = "embedded-preview"))]
+    #[cfg(not(all(target_os = "linux", feature = "embedded-preview")))]
     {
         let _ = state;
         false
