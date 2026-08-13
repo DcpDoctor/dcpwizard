@@ -147,6 +147,8 @@ fn log_history(
 /// `valid_from`/`valid_to` accept "now", ISO 8601 or a relative duration
 /// ("2 weeks"); the window is resolved here so a duration keeps the start offset.
 /// `history`, when set, appends one metadata record per successful KDM.
+/// `device_certs` names the playback devices the KDM is restricted to; empty
+/// emits the DCI assume-trust thumbprint, which restricts nothing.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_kdm(
     cpl_id: String,
@@ -162,6 +164,7 @@ pub fn generate_kdm(
     format: KdmFormat,
     annotation: Option<String>,
     history: Option<PathBuf>,
+    device_certs: Vec<PathBuf>,
 ) -> i32 {
     let (valid_from, valid_to) = match resolve_validity(&valid_from, &valid_to) {
         Ok(w) => w,
@@ -186,8 +189,9 @@ pub fn generate_kdm(
         formulation: "modified-transitional-1".to_string(),
         content_keys,
         format,
-        // empty is the assume-trust thumbprint, which is what that formulation means
-        device_cert_files: Vec::new(),
+        // listing real devices disables assume-trust, so an empty list is the
+        // open KDM that formulation means and a non-empty one locks it down
+        device_cert_files: device_certs,
     };
     match postkit::certificate::generate_kdm(&config) {
         Ok(()) => {
@@ -230,6 +234,7 @@ pub fn generate_kdm_batch(
     format: KdmFormat,
     annotation: Option<String>,
     history: Option<PathBuf>,
+    device_certs: Vec<PathBuf>,
 ) -> i32 {
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
         tracing::error!("Failed to create output directory: {e}");
@@ -258,6 +263,7 @@ pub fn generate_kdm_batch(
             format,
             annotation.clone(),
             history.clone(),
+            device_certs.clone(),
         );
         if code == 0 {
             tracing::info!("KDM for {} -> {}", cert.display(), output.display());
@@ -307,7 +313,9 @@ pub fn certs_in_dir(dir: &Path) -> Result<Vec<String>, String> {
 
 /// Re-wrap a DKDM to a new recipient: decrypt its content keys with the DKDM
 /// recipient's private key, re-encrypt to `recipient_cert` and sign. Empty
-/// `valid_from`/`valid_to` preserve the DKDM's validity window.
+/// `valid_from`/`valid_to` preserve the DKDM's validity window. `device_certs`
+/// names the new recipient's devices, since the DKDM's own list names someone
+/// else's.
 #[allow(clippy::too_many_arguments)]
 pub fn rewrap_dkdm(
     dkdm: PathBuf,
@@ -319,6 +327,7 @@ pub fn rewrap_dkdm(
     valid_from: String,
     valid_to: String,
     output: PathBuf,
+    device_certs: Vec<PathBuf>,
 ) -> i32 {
     let config = postkit::certificate::RewrapConfig {
         dkdm_file: dkdm,
@@ -330,8 +339,7 @@ pub fn rewrap_dkdm(
         output_file: output,
         valid_from,
         valid_to,
-        // empty is the assume-trust thumbprint, matching what kdm writes
-        device_cert_files: Vec::new(),
+        device_cert_files: device_certs,
     };
     match postkit::certificate::rewrap_dkdm_to_file(&config) {
         Ok(()) => 0,
@@ -366,6 +374,7 @@ mod tests {
             KdmFormat::Smpte,
             None,
             None,
+            Vec::new(),
         );
         assert_ne!(code, 0);
     }
@@ -399,6 +408,7 @@ mod tests {
             String::new(),
             String::new(),
             out.path().to_path_buf(),
+            Vec::new(),
         );
         assert_ne!(code, 0);
     }
@@ -445,6 +455,7 @@ mod tests {
             KdmFormat::Smpte,
             None,
             None,
+            Vec::new(),
         );
         assert_ne!(code, 0);
     }
@@ -519,6 +530,7 @@ mod tests {
             KdmFormat::Smpte,
             None,
             Some(history.clone()),
+            Vec::new(),
         );
         assert_eq!(code, 0, "batch must succeed for every recipient");
 
@@ -599,12 +611,79 @@ mod tests {
             KdmFormat::Smpte,
             Some("Release KDM <v2> & final".into()),
             None,
+            Vec::new(),
         );
         assert_eq!(code, 0, "annotated KDM must generate");
         let xml = std::fs::read_to_string(&out).unwrap();
         assert!(
             xml.contains("<AnnotationText>Release KDM &lt;v2&gt; &amp; final</AnnotationText>"),
             "the --annotation override must appear, escaped, in the KDM"
+        );
+    }
+
+    // --device-cert must reach postkit's AuthorizedDeviceInfo, and naming any
+    // device must drop the assume-trust entry rather than sit beside it.
+    #[test]
+    fn device_certs_replace_the_assume_trust_thumbprint() {
+        // DCI DCSS 9.4.3.5 assume-trust marker: base64 SHA-1 of nothing.
+        const ASSUME_TRUST: &str = "2jmj7l5rSw0yVb/vlWAYkK/YBwk=";
+
+        let dir = tempfile::tempdir().unwrap();
+        let (signer_cert, signer_key, chain, recipients) = batch_fixtures(dir.path(), 2);
+        let certs = certs_in_dir(&recipients).unwrap();
+        let recipient = PathBuf::from(&certs[0]);
+        let device = PathBuf::from(&certs[1]);
+
+        let kdm_for = |name: &str, devices: Vec<PathBuf>| {
+            let out = dir.path().join(name);
+            let code = generate_kdm(
+                "8a2b1c3d-4e5f-6071-8293-a4b5c6d7e8f9".into(),
+                "Device Test".into(),
+                recipient.clone(),
+                signer_cert.clone(),
+                signer_key.clone(),
+                chain.clone(),
+                "now".into(),
+                "7 days".into(),
+                Vec::new(),
+                out.clone(),
+                KdmFormat::Smpte,
+                None,
+                None,
+                devices,
+            );
+            assert_eq!(code, 0, "{name} must generate");
+            std::fs::read_to_string(&out).unwrap()
+        };
+
+        let open = kdm_for("open.kdm.xml", Vec::new());
+        assert!(
+            open.contains(ASSUME_TRUST),
+            "no --device-cert leaves the KDM playable on any trusted device"
+        );
+
+        let restricted = kdm_for("restricted.kdm.xml", vec![device.clone()]);
+        assert!(
+            !restricted.contains(ASSUME_TRUST),
+            "a listed device must disable assume-trust, not join it"
+        );
+        assert_eq!(
+            restricted.matches("<CertificateThumbprint>").count(),
+            1,
+            "one thumbprint for the one device named"
+        );
+        // The thumbprint has to be that device's, not the recipient's.
+        let recipient_only = kdm_for("recipient-device.kdm.xml", vec![recipient.clone()]);
+        let thumbprint_of = |xml: &str| {
+            let start =
+                xml.find("<CertificateThumbprint>").unwrap() + "<CertificateThumbprint>".len();
+            let end = xml[start..].find('<').unwrap() + start;
+            xml[start..end].to_string()
+        };
+        assert_ne!(
+            thumbprint_of(&restricted),
+            thumbprint_of(&recipient_only),
+            "the device list must follow --device-cert, not the recipient"
         );
     }
 
@@ -639,6 +718,7 @@ mod tests {
             KdmFormat::Interop,
             None,
             None,
+            Vec::new(),
         );
         assert_eq!(code, 0, "interop KDM generation must succeed");
 

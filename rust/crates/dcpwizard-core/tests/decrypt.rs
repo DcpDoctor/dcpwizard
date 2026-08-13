@@ -157,6 +157,7 @@ fn make_kdm(
         dcpwizard_core::kdm::KdmFormat::Smpte,
         None,
         None,
+        Vec::new(),
     );
     assert_eq!(code, 0, "KDM generation must succeed");
 }
