@@ -6,6 +6,33 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Default encode target in Mbit/s. Under DCI's 250 on purpose: rate allocation
+/// lands a frame either side of the target, so 250 fails the peak bitrate check.
+const DEFAULT_BANDWIDTH_MBPS: u32 = 230;
+
+/// Panel frame rate keys and the CPL edit rate numerator each stands for. Every
+/// rate the panel offers is integer, so the denominator is always 1.
+const FRAME_RATES: [(&str, u32); 9] = [
+    ("24", 24),
+    ("25", 25),
+    ("30", 30),
+    ("48", 48),
+    ("50", 50),
+    ("60", 60),
+    ("96", 96),
+    ("100", 100),
+    ("120", 120),
+];
+const FRAME_RATE_DENOMINATOR: u32 = 1;
+const DEFAULT_FRAME_RATE: (&str, u32) = FRAME_RATES[0];
+
+const DEFAULT_STANDARD: &str = "smpte";
+const DEFAULT_RESOLUTION: &str = "2k-full";
+const DEFAULT_COLOUR: &str = "xyz";
+const DEFAULT_CONTENT_KIND: &str = "feature";
+const DEFAULT_CHANNELS: &str = "5.1";
+const DEFAULT_LANGUAGE: &str = "en";
+
 // ─── Progress / Events ─────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -96,6 +123,8 @@ pub struct JobQueue {
     current_id: AtomicU64,
     current_title: Mutex<String>,
     current_status: Mutex<String>,
+    /// Output folder of the running job, so a second build cannot write into it
+    current_output: Mutex<Option<PathBuf>>,
 }
 
 impl JobQueue {
@@ -108,7 +137,20 @@ impl JobQueue {
             current_id: AtomicU64::new(0),
             current_title: Mutex::new(String::new()),
             current_status: Mutex::new(String::new()),
+            current_output: Mutex::new(None),
         }
+    }
+
+    /// Is a job already running or queued that writes into `output`?
+    fn is_building_into(&self, output: &std::path::Path) -> bool {
+        if self.current_output.lock().unwrap().as_deref() == Some(output) {
+            return true;
+        }
+        self.queue
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|job| job.output_dir == output)
     }
 }
 
@@ -165,7 +207,21 @@ pub async fn submit_job(
         return Err("Key Output File is required when encrypting".into());
     }
 
-    let framerate = framerate.unwrap_or_else(|| "24".into());
+    // packages are folders named by title, so a reused title lands in the old
+    // package. refuse now, not after the encode.
+    let output_path = PathBuf::from(&output_dir);
+    if output_path.join("ASSETMAP.xml").exists() || output_path.join("VOLINDEX.xml").exists() {
+        return Err(format!(
+            "Output folder already holds a DCP: {output_dir}. Use a new title or output folder, or delete the old package first."
+        ));
+    }
+    if queue.is_building_into(&output_path) {
+        return Err(format!(
+            "A build is already running into {output_dir}. Wait for it to finish or cancel it."
+        ));
+    }
+
+    let framerate = framerate.unwrap_or_else(|| DEFAULT_FRAME_RATE.0.into());
     let audio_input_order = parse_audio_input_order(audio_input_order.as_deref())?;
 
     let sign_language_video = sign_language_video.filter(|s| !s.is_empty());
@@ -237,7 +293,7 @@ pub async fn submit_job(
             allow_generic_tonemap: allow_generic_hdr_tonemap,
         },
         fps_num,
-        bandwidth.unwrap_or(250),
+        bandwidth.unwrap_or(DEFAULT_BANDWIDTH_MBPS),
         right_eye.is_some(),
         reel_length_minutes > 0 || !reel_split_frames.is_empty() || split_chapters,
         !versions.is_empty(),
@@ -250,21 +306,21 @@ pub async fn submit_job(
         output_dir: PathBuf::from(&output_dir),
         audio_path,
         validate: validate.unwrap_or(false),
-        standard: standard.unwrap_or_else(|| "smpte".into()),
-        resolution: resolution.unwrap_or_else(|| "2k-full".into()),
+        standard: standard.unwrap_or_else(|| DEFAULT_STANDARD.into()),
+        resolution: resolution.unwrap_or_else(|| DEFAULT_RESOLUTION.into()),
         framerate,
-        bandwidth: bandwidth.unwrap_or(250),
-        colour: colour.unwrap_or_else(|| "xyz".into()),
-        content_kind: content_kind.unwrap_or_else(|| "feature".into()),
+        bandwidth: bandwidth.unwrap_or(DEFAULT_BANDWIDTH_MBPS),
+        colour: colour.unwrap_or_else(|| DEFAULT_COLOUR.into()),
+        content_kind: content_kind.unwrap_or_else(|| DEFAULT_CONTENT_KIND.into()),
         encrypt: encrypt.unwrap_or(false),
         key_out: key_out.filter(|k| !k.is_empty()),
-        channels: channels.unwrap_or_else(|| "5.1".into()),
+        channels: channels.unwrap_or_else(|| DEFAULT_CHANNELS.into()),
         right_eye,
         atmos: atmos.filter(|s| !s.is_empty()),
         subtitle,
-        subtitle_language: subtitle_language.unwrap_or_else(|| "en".into()),
+        subtitle_language: subtitle_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
         ccap,
-        ccap_language: ccap_language.unwrap_or_else(|| "en".into()),
+        ccap_language: ccap_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
         loudness_target: loudness_target.filter(|s| !s.is_empty()),
         true_peak_ceiling,
         audio_channel_dir: audio_channel_dir.filter(|s| !s.is_empty()),
@@ -468,6 +524,7 @@ async fn run_queue_worker(app: AppHandle) {
         let Some(job) = job else {
             let queue = app.state::<JobQueue>();
             queue.current_id.store(0, Ordering::Relaxed);
+            *queue.current_output.lock().unwrap() = None;
             break;
         };
 
@@ -475,6 +532,7 @@ async fn run_queue_worker(app: AppHandle) {
             let queue = app.state::<JobQueue>();
             queue.current_id.store(job.id, Ordering::Relaxed);
             *queue.current_title.lock().unwrap() = job.title.clone();
+            *queue.current_output.lock().unwrap() = Some(job.output_dir.clone());
             *queue.current_status.lock().unwrap() = "running".to_string();
             queue.cancel.store(false, Ordering::Relaxed);
             queue.pause.store(false, Ordering::Relaxed);
@@ -494,16 +552,29 @@ async fn run_queue_worker(app: AppHandle) {
                 emit_progress(&app, job.id, "done", "Complete", 0, 0, 0.0, 0.0, 100.0);
             }
             Ok(Err(e)) => {
-                let status = if queue.cancel.load(Ordering::Relaxed) {
+                let cancelled = queue.cancel.load(Ordering::Relaxed);
+                *queue.current_status.lock().unwrap() = if cancelled {
                     "cancelled".to_string()
                 } else {
                     format!("failed: {e}")
                 };
-                *queue.current_status.lock().unwrap() = status;
-                emit_progress(&app, job.id, "error", &e, 0, 0, 0.0, 0.0, 0.0);
+                let stage = if cancelled { "cancelled" } else { "error" };
+                emit_progress(&app, job.id, stage, &e, 0, 0, 0.0, 0.0, 0.0);
             }
+            // a panic leaves no error event, so the panel would wait forever
             Err(e) => {
                 *queue.current_status.lock().unwrap() = format!("panic: {e}");
+                emit_progress(
+                    &app,
+                    job.id,
+                    "error",
+                    &format!("Build panicked: {e}"),
+                    0,
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                );
             }
         }
 
@@ -743,17 +814,12 @@ fn resolve_reel_splits(job: &JobConfig, fps: u32) -> Result<Vec<u64>, String> {
 
 // Frame rate drives both the J2K encode (video demux rate) and the CPL.
 fn frame_rate_of(framerate: &str) -> (u32, u32) {
-    match framerate {
-        "25" => (25, 1),
-        "30" => (30, 1),
-        "48" => (48, 1),
-        "50" => (50, 1),
-        "60" => (60, 1),
-        "96" => (96, 1),
-        "100" => (100, 1),
-        "120" => (120, 1),
-        _ => (24, 1),
-    }
+    let numerator = FRAME_RATES
+        .iter()
+        .find(|(key, _)| *key == framerate)
+        .map(|(_, rate)| *rate)
+        .unwrap_or(DEFAULT_FRAME_RATE.1);
+    (numerator, FRAME_RATE_DENOMINATOR)
 }
 
 fn count_frames(j2k_dir: &std::path::Path) -> u64 {
@@ -1063,7 +1129,10 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     };
     if rc != 0 {
         log_to(&log_file, &format!("[PACKAGE] FAILED (rc={rc})"));
-        return Err(format!("DCP packaging failed (rc={rc})"));
+        return Err(format!(
+            "DCP packaging failed (rc={rc}), see {}",
+            log_path.display()
+        ));
     }
     log_to(&log_file, "[PACKAGE] Done");
 
@@ -1224,6 +1293,26 @@ mod tests {
             writer.write_sample(value).unwrap();
         }
         writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn a_second_build_into_the_same_folder_is_refused() {
+        // clicking Build twice must not queue a second job into the first
+        // job's folder.
+        let queue = JobQueue::new();
+        let output = PathBuf::from("/out");
+        assert!(!queue.is_building_into(&output));
+
+        queue.queue.lock().unwrap().push_back(test_job());
+        assert!(queue.is_building_into(&output));
+        assert!(!queue.is_building_into(&PathBuf::from("/other")));
+
+        queue.queue.lock().unwrap().clear();
+        *queue.current_output.lock().unwrap() = Some(output.clone());
+        assert!(queue.is_building_into(&output));
+
+        *queue.current_output.lock().unwrap() = None;
+        assert!(!queue.is_building_into(&output));
     }
 
     #[test]

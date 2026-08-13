@@ -113,12 +113,17 @@ refreshButtonTooltips();
 
 // === Preferences (localStorage) ===
 const PREFS_KEY = "dcpwizard-preferences";
-const PREFS_VERSION = 3;
+const PREFS_VERSION = 4;
+
+// clear of DCI's 250 on purpose: at 250 exactly, rate allocation overshoot is a
+// peak bitrate failure, and validators warn from 230 up
+const DEFAULT_BANDWIDTH_MBPS = 230;
+const DEFAULT_FRAMERATE = 24;
 
 const PREF_DEFAULTS = {
-  standard: "SMPTE", resolution: "2K", framerate: 24,
+  standard: "SMPTE", resolution: "2K", framerate: DEFAULT_FRAMERATE,
   encrypt: false, stereo3d: false, validate: true,
-  creator: "", facility: "", bandwidth: 250, gpu: -1,
+  creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: -1,
   signingCert: "", signingKey: "", outputDir: "", naming: "",
   channels: "5.1",
 };
@@ -128,6 +133,8 @@ function getPrefs() {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
     if ((stored._version || 0) < PREFS_VERSION) {
       const migrated = { ...PREF_DEFAULTS, ...stored, _version: PREFS_VERSION };
+      // a saved 250 encodes at the DCI ceiling and fails validation
+      migrated.bandwidth = Math.min(migrated.bandwidth, DEFAULT_BANDWIDTH_MBPS);
       savePrefs(migrated);
       return migrated;
     }
@@ -166,10 +173,10 @@ document.getElementById("settings-form")?.addEventListener("submit", (e) => {
   const prefs = {
     standard: document.getElementById("set-standard")?.value,
     resolution: document.getElementById("set-resolution")?.value,
-    framerate: parseInt(document.getElementById("set-framerate")?.value) || 24,
+    framerate: parseInt(document.getElementById("set-framerate")?.value) || DEFAULT_FRAMERATE,
     creator: document.getElementById("set-creator")?.value,
     facility: document.getElementById("set-facility")?.value,
-    bandwidth: parseInt(document.getElementById("set-bandwidth")?.value) || 250,
+    bandwidth: parseInt(document.getElementById("set-bandwidth")?.value) || DEFAULT_BANDWIDTH_MBPS,
     signingCert: document.getElementById("set-signing-cert")?.value,
     signingKey: document.getElementById("set-signing-key")?.value,
     outputDir: document.getElementById("set-output-dir")?.value,
@@ -499,8 +506,14 @@ renderCplTabs();
 document.getElementById("browse-output")?.addEventListener("click", async () => {
   const dir = await open({ directory: true });
   if (dir) {
-    document.getElementById("prop-output").value = dir;
+    const outputEl = document.getElementById("prop-output");
+    outputEl.value = dir;
+    delete outputEl.dataset.autoFilled;
   }
+});
+
+document.getElementById("prop-output")?.addEventListener("input", (event) => {
+  delete event.target.dataset.autoFilled;
 });
 
 // === Open existing DCP ===
@@ -674,6 +687,9 @@ document.getElementById("prop-browse-ccap")?.addEventListener("click", async () 
 });
 
 document.getElementById("btn-build")?.addEventListener("click", async () => {
+  // a second build would queue behind the first and encode all over again
+  if (buildInFlight) return;
+
   const title = document.getElementById("prop-title")?.value?.trim();
   if (!title) { tauriMessage("Enter a project title in Properties"); return; }
 
@@ -689,11 +705,16 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
 
   const video = reel.picture.path;
   const audio = reel.sound?.path || null;
-  let output = document.getElementById("prop-output")?.value;
-  if (!output) {
+  // re-derive an auto-filled output folder so it follows the current title
+  const outputEl = document.getElementById("prop-output");
+  let output = outputEl?.value;
+  if (!output || outputEl?.dataset.autoFilled) {
     const docs = await documentDir();
     output = await join(docs, title);
-    document.getElementById("prop-output").value = output;
+    if (outputEl) {
+      outputEl.value = output;
+      outputEl.dataset.autoFilled = "1";
+    }
   }
 
   // Show progress
@@ -706,6 +727,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
   stageEl.textContent = "Queued...";
   statsEl.textContent = "";
   paused = false;
+  resetStatusBar();
 
   const unlisten = await listen("pipeline-progress", (event) => {
     const p = event.payload;
@@ -729,12 +751,22 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       setTitleProgress(-1);
       notifyBuildComplete(true, title);
       addRecentProject(output, title);
+      endBuild();
+      unlisten();
+      unlistenVal();
+    } else if (p.stage === "cancelled") {
+      setStatus("Cancelled");
+      stageEl.textContent = "Cancelled";
+      setTitleProgress(-1);
+      endBuild();
       unlisten();
       unlistenVal();
     } else if (p.stage === "error") {
       setStatus("Build failed: " + p.message);
       setTitleProgress(-1);
       notifyBuildComplete(false, title);
+      tauriMessage(p.message, { title: "Build failed", kind: "error" });
+      endBuild();
       unlisten();
       unlistenVal();
     }
@@ -743,7 +775,9 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
   const unlistenVal = await listen("validation-result", (event) => {
     const v = event.payload;
     if (currentJobId && v.job_id !== currentJobId) return;
+    lastValidation = v;
     const validEl = document.getElementById("status-validation");
+    validEl.title = "Click for details";
     if (v.valid) {
       validEl.textContent = "✓ Valid";
       validEl.style.color = "#34d399";
@@ -754,6 +788,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
   });
 
   try {
+    beginBuild();
     currentJobId = await invoke("submit_job", {
       videoPath: video,
       title,
@@ -762,8 +797,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       validate: document.getElementById("prop-validate")?.checked || false,
       standard: document.getElementById("prop-standard")?.value || "smpte",
       resolution: document.getElementById("prop-resolution")?.value || "2k-full",
-      framerate: document.getElementById("prop-framerate")?.value || "24",
-      bandwidth: parseInt(document.getElementById("prop-bandwidth")?.value) || 250,
+      framerate: document.getElementById("prop-framerate")?.value || String(DEFAULT_FRAMERATE),
+      bandwidth: parseInt(document.getElementById("prop-bandwidth")?.value) || DEFAULT_BANDWIDTH_MBPS,
       contentKind: document.getElementById("prop-content-kind")?.value || "feature",
       encrypt,
       keyOut: keyOut || null,
@@ -796,6 +831,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
   } catch (e) {
     stageEl.textContent = "Failed";
     setStatus("Error: " + e);
+    tauriMessage(String(e), { title: "Build failed", kind: "error" });
+    endBuild();
     unlisten();
     unlistenVal();
   }
@@ -1112,8 +1149,38 @@ document.getElementById("jobs-refresh")?.addEventListener("click", refreshJobs);
 // === Status bar ===
 function setStatus(text) {
   const el = document.getElementById("status-text");
-  if (el) el.textContent = text;
+  if (el) {
+    el.textContent = text;
+    el.title = text;
+  }
 }
+
+let lastValidation = null;
+
+function resetStatusBar() {
+  setStatus("");
+  lastValidation = null;
+  const validEl = document.getElementById("status-validation");
+  if (validEl) {
+    validEl.textContent = "";
+    validEl.title = "";
+  }
+}
+
+document.getElementById("status-validation")?.addEventListener("click", () => {
+  if (!lastValidation) return;
+  const errors = lastValidation.errors || [];
+  const warnings = lastValidation.warnings || [];
+  const text = [
+    ...errors.map((e) => `ERROR: ${e}`),
+    ...warnings.map((w) => `WARNING: ${w}`),
+  ].join("\n\n");
+  if (!text) return;
+  tauriMessage(text, {
+    title: "Validation",
+    kind: errors.length ? "error" : "warning",
+  });
+});
 
 function formatTime(secs) {
   const m = Math.floor(secs / 60);
@@ -1358,12 +1425,24 @@ function updateStatusStats() {
 }
 
 // === Toolbar Button State ===
+let buildInFlight = false;
+
+function beginBuild() {
+  buildInFlight = true;
+  updateToolbarState();
+}
+
+function endBuild() {
+  buildInFlight = false;
+  updateToolbarState();
+}
+
 function updateToolbarState() {
   const hasVideo = project.reels.some(r => r.picture);
   const hasTitle = !!(document.getElementById("prop-title")?.value?.trim());
   const buildBtn = document.getElementById("btn-build");
   const previewBtn = document.getElementById("btn-preview");
-  if (buildBtn) buildBtn.disabled = !(hasVideo && hasTitle);
+  if (buildBtn) buildBtn.disabled = buildInFlight || !(hasVideo && hasTitle);
   if (previewBtn) previewBtn.disabled = !hasVideo && !document.getElementById("prop-output")?.value;
 }
 
@@ -1481,7 +1560,7 @@ document.getElementById("srt-convert")?.addEventListener("click", async () => {
   const input = document.getElementById("srt-input").value;
   const output = document.getElementById("srt-output").value;
   const lang = document.getElementById("srt-language").value || "en";
-  const fps = document.getElementById("srt-framerate").value || "24";
+  const fps = document.getElementById("srt-framerate").value || String(DEFAULT_FRAMERATE);
   const vposition = document.getElementById("srt-vposition").value || "8";
   if (!input) return;
 

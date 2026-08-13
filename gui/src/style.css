@@ -1,5 +1,18 @@
 @import "../../extern/guikit/src/base.css";
 
+.status-section {
+  min-width: 0;
+}
+.status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.status-validation {
+  cursor: pointer;
+}
+
 /* a control whose value came from the selected delivery profile */
 .prop-field .profile-driven {
   border-left: 3px solid var(--primary);

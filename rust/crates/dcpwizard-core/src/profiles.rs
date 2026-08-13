@@ -6,6 +6,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Encode target in Mbit/s for a full-quality DCP. Under DCI's 250 on purpose:
+/// rate allocation lands a frame either side of the target, so 250 fails the
+/// peak bitrate check.
+pub const FULL_QUALITY_MBPS: u32 = 230;
+
+/// Encode target in Mbit/s for content that does not need the full rate.
+const REDUCED_QUALITY_MBPS: u32 = 200;
+
+/// DCI base frame rate, and the only rate these presets ship at.
+const STANDARD_FRAME_RATE: u32 = 24;
+
+/// DCI audio sample rate.
+const AUDIO_SAMPLE_RATE: u32 = 48_000;
+
 /// A DCP creation profile with preset settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -29,10 +43,10 @@ impl Default for Profile {
             standard: "SMPTE".into(),
             resolution_width: 2048,
             resolution_height: 1080,
-            frame_rate: 24,
-            bitrate_mbps: 250,
+            frame_rate: STANDARD_FRAME_RATE,
+            bitrate_mbps: FULL_QUALITY_MBPS,
             audio_channels: 6,
-            audio_sample_rate: 48000,
+            audio_sample_rate: AUDIO_SAMPLE_RATE,
             content_kind: "feature".into(),
         }
     }
@@ -53,10 +67,10 @@ pub fn all_profiles() -> Vec<Profile> {
             standard: "SMPTE".into(),
             resolution_width: 2048,
             resolution_height: 1080,
-            frame_rate: 24,
-            bitrate_mbps: 250,
+            frame_rate: STANDARD_FRAME_RATE,
+            bitrate_mbps: FULL_QUALITY_MBPS,
             audio_channels: 6,
-            audio_sample_rate: 48000,
+            audio_sample_rate: AUDIO_SAMPLE_RATE,
             content_kind: "feature".into(),
         },
         Profile {
@@ -65,10 +79,10 @@ pub fn all_profiles() -> Vec<Profile> {
             standard: "SMPTE".into(),
             resolution_width: 4096,
             resolution_height: 2160,
-            frame_rate: 24,
+            frame_rate: STANDARD_FRAME_RATE,
             bitrate_mbps: 500,
             audio_channels: 6,
-            audio_sample_rate: 48000,
+            audio_sample_rate: AUDIO_SAMPLE_RATE,
             content_kind: "feature".into(),
         },
         Profile {
@@ -77,10 +91,10 @@ pub fn all_profiles() -> Vec<Profile> {
             standard: "SMPTE".into(),
             resolution_width: 2048,
             resolution_height: 858,
-            frame_rate: 24,
-            bitrate_mbps: 250,
+            frame_rate: STANDARD_FRAME_RATE,
+            bitrate_mbps: FULL_QUALITY_MBPS,
             audio_channels: 6,
-            audio_sample_rate: 48000,
+            audio_sample_rate: AUDIO_SAMPLE_RATE,
             content_kind: "trailer".into(),
         },
         Profile {
@@ -89,10 +103,10 @@ pub fn all_profiles() -> Vec<Profile> {
             standard: "SMPTE".into(),
             resolution_width: 2048,
             resolution_height: 1080,
-            frame_rate: 24,
-            bitrate_mbps: 200,
+            frame_rate: STANDARD_FRAME_RATE,
+            bitrate_mbps: REDUCED_QUALITY_MBPS,
             audio_channels: 2,
-            audio_sample_rate: 48000,
+            audio_sample_rate: AUDIO_SAMPLE_RATE,
             content_kind: "advertisement".into(),
         },
     ]
