@@ -118,6 +118,7 @@ button.shortcuts-binding:hover {
 
 let storageKey = "";
 let actions = [];
+let onChange = null;
 let overrides = {};
 let overlay = null;
 let listElement = null;
@@ -127,9 +128,15 @@ let capturingId = null;
 export function initShortcuts(config) {
   storageKey = config.storageKey;
   actions = config.actions;
+  onChange = config.onChange || null;
   overrides = loadOverrides();
   buildOverlay();
   document.addEventListener("keydown", onKeyDown);
+}
+
+export function getBinding(id) {
+  const action = actions.find((candidate) => candidate.id === id);
+  return action ? bindingOf(action) : null;
 }
 
 function loadOverrides() {
@@ -160,17 +167,21 @@ function bindingOf(action) {
   return action.id in overrides ? overrides[action.id] : defaultBinding(action);
 }
 
+function commitChange() {
+  saveOverrides();
+  renderList();
+  if (onChange) onChange();
+}
+
 function setBinding(action, binding) {
   if (binding === defaultBinding(action)) delete overrides[action.id];
   else overrides[action.id] = binding;
-  saveOverrides();
-  renderList();
+  commitChange();
 }
 
 function resetAction(action) {
   delete overrides[action.id];
-  saveOverrides();
-  renderList();
+  commitChange();
 }
 
 function keyName(key) {
@@ -306,8 +317,9 @@ function buildOverlay() {
   warningElement = overlay.querySelector(".shortcuts-warning");
   overlay.querySelector(".shortcuts-reset-all").addEventListener("click", () => {
     overrides = {};
-    saveOverrides();
-    endCapture();
+    capturingId = null;
+    showWarning("");
+    commitChange();
   });
   overlay.addEventListener("mousedown", (event) => {
     if (event.target === overlay) closeOverlay();

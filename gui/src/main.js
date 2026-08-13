@@ -7,7 +7,7 @@ import { open as _open, save, confirm as tauriConfirm, message as tauriMessage }
 import { documentDir, join } from "@tauri-apps/api/path";
 import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible } from "./preview.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
-import { initShortcuts } from "./shortcuts.js";
+import { initShortcuts, getBinding } from "./shortcuts.js";
 
 // === Browse wrapper (remembers last directory) ===
 let lastBrowseDir = null;
@@ -59,7 +59,17 @@ function switchView(viewName) {
 const SHORTCUTS_KEY = "dcpwizard-shortcuts";
 const PREVIEW_SEEK_SECONDS = 5;
 
-function clickAction(id, label, category, binding, buttonId) {
+const PROJECT_BUTTON_SHORTCUTS = [
+  { id: "new-project", label: "New project", binding: "Ctrl+N", buttonId: "btn-new-project" },
+  { id: "open-project", label: "Open DCP", binding: "Ctrl+O", buttonId: "btn-open-project" },
+  { id: "build", label: "Build DCP", binding: "Ctrl+B", buttonId: "btn-build" },
+  { id: "preview", label: "Preview", binding: "Ctrl+P", buttonId: "btn-preview" },
+  { id: "import-video", label: "Import video", binding: "Ctrl+I", buttonId: "import-video" },
+];
+const THEME_BUTTON_SHORTCUT = { id: "toggle-theme", label: "Toggle light / dark theme", binding: "Ctrl+Shift+T", buttonId: "theme-toggle" };
+const BUTTON_SHORTCUTS = [...PROJECT_BUTTON_SHORTCUTS, THEME_BUTTON_SHORTCUT];
+
+function clickAction({ id, label, binding, buttonId }, category) {
   return { id, label, category, binding, handler: () => document.getElementById(buttonId)?.click() };
 }
 
@@ -71,14 +81,20 @@ function previewAction(id, label, binding, handler) {
   return { id, label, category: "Preview", binding, when: isPreviewVisible, handler };
 }
 
+function refreshButtonTooltips() {
+  for (const { id, label, buttonId } of BUTTON_SHORTCUTS) {
+    const button = document.getElementById(buttonId);
+    if (!button) continue;
+    const binding = getBinding(id);
+    button.title = binding ? `${label} (${binding})` : label;
+  }
+}
+
 initShortcuts({
   storageKey: SHORTCUTS_KEY,
+  onChange: refreshButtonTooltips,
   actions: [
-    clickAction("new-project", "New project", "Project", "Ctrl+N", "btn-new-project"),
-    clickAction("open-project", "Open DCP", "Project", "Ctrl+O", "btn-open-project"),
-    clickAction("build", "Build DCP", "Project", "Ctrl+B", "btn-build"),
-    clickAction("preview", "Preview", "Project", "Ctrl+P", "btn-preview"),
-    clickAction("import-video", "Import video", "Project", "Ctrl+I", "import-video"),
+    ...PROJECT_BUTTON_SHORTCUTS.map((shortcut) => clickAction(shortcut, "Project")),
     viewAction("project", "Project", "Ctrl+1"),
     viewAction("reels", "Reels & Timeline", "Ctrl+2"),
     viewAction("verify", "Verify", "Ctrl+3"),
@@ -90,9 +106,10 @@ initShortcuts({
     previewAction("preview-back", `Back ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowLeft", () => previewSeek(-PREVIEW_SEEK_SECONDS)),
     previewAction("preview-forward", `Forward ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowRight", () => previewSeek(PREVIEW_SEEK_SECONDS)),
     previewAction("preview-start", "Go to start", "Home", () => previewSeekAbsolute(0)),
-    clickAction("toggle-theme", "Toggle light / dark theme", "Appearance", "Ctrl+Shift+T", "theme-toggle"),
+    clickAction(THEME_BUTTON_SHORTCUT, "Appearance"),
   ],
 });
+refreshButtonTooltips();
 
 // === Preferences (localStorage) ===
 const PREFS_KEY = "dcpwizard-preferences";
