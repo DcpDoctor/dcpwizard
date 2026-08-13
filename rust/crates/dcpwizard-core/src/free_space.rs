@@ -6,8 +6,14 @@ use std::path::Path;
 
 /// bytes available to an unprivileged user on the filesystem containing `path`.
 /// `path` must exist (a directory is fine).
-#[cfg(unix)]
 pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
+    volume_bytes(path).map(|(available, _)| available)
+}
+
+/// bytes available to an unprivileged user, and total bytes, on the filesystem
+/// containing `path`. `path` must exist (a directory is fine).
+#[cfg(unix)]
+pub fn volume_bytes(path: &Path) -> std::io::Result<(u64, u64)> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -18,12 +24,14 @@ pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
         return Err(std::io::Error::last_os_error());
     }
     // f_bavail: blocks free for unprivileged users; f_frsize: bytes per block
-    Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
+    let block = stat.f_frsize as u64;
+    Ok((stat.f_bavail as u64 * block, stat.f_blocks as u64 * block))
 }
 
-/// bytes available on the volume containing `path`, via GetDiskFreeSpaceExW.
+/// bytes available and total on the volume containing `path`, via
+/// GetDiskFreeSpaceExW.
 #[cfg(windows)]
-pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
+pub fn volume_bytes(path: &Path) -> std::io::Result<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
 
     // kernel32; always linked, so no extra dependency
@@ -42,18 +50,19 @@ pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
         .chain(std::iter::once(0))
         .collect();
     let mut free_to_caller: u64 = 0;
+    let mut total: u64 = 0;
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),
             &mut free_to_caller,
-            std::ptr::null_mut(),
+            &mut total,
             std::ptr::null_mut(),
         )
     };
     if ok == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(free_to_caller)
+    Ok((free_to_caller, total))
 }
 
 /// total size in bytes of `path`: a plain file's length, or the sum of all files
@@ -108,6 +117,15 @@ fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_volume_reports_available_within_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let (available, total) = volume_bytes(dir.path()).unwrap();
+        assert!(total > 0);
+        assert!(available <= total, "{available} > {total}");
+        assert_eq!(available_bytes(dir.path()).unwrap(), available);
+    }
 
     #[test]
     fn passes_when_space_is_ample() {

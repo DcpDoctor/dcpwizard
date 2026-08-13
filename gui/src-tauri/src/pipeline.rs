@@ -423,8 +423,8 @@ pub async fn disk_space(path: String) -> Result<DiskSpace, String> {
             None => return Err(format!("no existing folder above {path}")),
         }
     }
-    let stats = fs4::statvfs(&dir).map_err(|e| format!("Could not read free space: {e}"))?;
-    let (free, total) = (stats.available_space(), stats.total_space());
+    let (free, total) = dcpwizard_core::free_space::volume_bytes(&dir)
+        .map_err(|e| format!("Could not read free space: {e}"))?;
     Ok(DiskSpace {
         free_bytes: free,
         total_bytes: total,
