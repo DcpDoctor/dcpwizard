@@ -16,6 +16,7 @@ gui/src-tauri/target/
 gui/src-tauri/gen/
 gui/src-tauri/Cargo.lock
 gui/src-tauri/dcpwizard-*
+gui/src-tauri/grokj2k.dll
 
 # Test DCP downloads (large files)
 tests/dcps/

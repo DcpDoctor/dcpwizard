@@ -89,7 +89,6 @@ jobs:
       # build grok (jpeg 2000 codec) from source once per tag, cached.
       # provides libgrokj2k on the pkg-config + loader paths and grk_compress on PATH.
       - name: Cache grok
-        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/grok-install
@@ -114,6 +113,50 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$prefix/lib:$prefix/lib64:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
           echo "$prefix/bin" >> "$GITHUB_PATH"
 
+      # windows: msvc build mirroring grok's own ci (x64 generator, no libcurl);
+      # pkgconfiglite provides pkg-config for grokj2k-sys and the runner's LLVM
+      # provides libclang for bindgen.
+      - name: Setup grok (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GROK_TAG: v20.3.10
+        run: |
+          # choco puts its shim directory on the machine PATH, which this
+          # already-running bash cannot see, so add it by hand
+          choco_bin="$(cygpath -u "${ChocolateyInstall:-C:/ProgramData/chocolatey}")/bin"
+          export PATH="$choco_bin:$PATH"
+          echo "$(cygpath -w "$choco_bin")" >> "$GITHUB_PATH"
+          # choco sometimes reports success while installing nothing, so gate
+          # the retries on pkg-config actually answering, not choco's exit code
+          for attempt in 1 2 3 4 5; do
+            pkg-config --version >/dev/null 2>&1 && break
+            choco install -y --no-progress --force pkgconfiglite || true
+            hash -r
+            pkg-config --version >/dev/null 2>&1 && break
+            if [ "$attempt" = 5 ]; then
+              echo "pkg-config still missing after $attempt pkgconfiglite installs." >&2
+              echo "$choco_bin holds:" >&2
+              ls -1 "$choco_bin" >&2 || echo "  (no such directory)" >&2
+              exit 1
+            fi
+            sleep $((30 * attempt))
+          done
+          prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
+          if [ ! -f "$prefix/bin/grokj2k.dll" ]; then
+            git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
+              https://github.com/GrokImageCompression/grok.git "$RUNNER_TEMP/grok-src"
+            cmake -S "$RUNNER_TEMP/grok-src" -B "$RUNNER_TEMP/grok-build" \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+              -DCMAKE_GENERATOR_PLATFORM=x64 -DGRK_ENABLE_LIBCURL=OFF \
+              -DGRK_BUILD_PKGCONFIG_FILES=ON -DGRK_BUILD_CORE_SWIG_BINDINGS=OFF
+            cmake --build "$RUNNER_TEMP/grok-build" --config Release --parallel 4
+            cmake --install "$RUNNER_TEMP/grok-build" --config Release
+          fi
+          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+          echo "$(cygpath -w "$prefix")\\bin" >> "$GITHUB_PATH"
+
       - name: Install frontend dependencies
         working-directory: gui
         run: pnpm install --frozen-lockfile
@@ -136,6 +179,13 @@ jobs:
         run: |
           cargo build --release -p dcpwizard-cli
           Copy-Item "target/release/dcpwizard.exe" "../gui/src-tauri/dcpwizard-x86_64-pc-windows-msvc.exe"
+
+      # the app and its cli sidecar both link grokj2k.dll at load time.
+      # tauri.windows.conf.json lists it as a bundle resource, which the
+      # installer drops next to the exes, so it has to exist before the build.
+      - name: Stage grok dll (Windows)
+        if: runner.os == 'Windows'
+        run: Copy-Item "$env:GITHUB_WORKSPACE/grok-install/bin/grokj2k.dll" "gui/src-tauri/"
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
