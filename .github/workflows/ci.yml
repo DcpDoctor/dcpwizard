@@ -76,12 +76,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.8
+          key: grok-${{ runner.os }}-v20.3.10
 
       - name: Setup grok
         if: runner.os != 'Windows'
         env:
-          GROK_TAG: v20.3.8
+          GROK_TAG: v20.3.10
         run: |
           prefix="$GITHUB_WORKSPACE/grok-install"
           if [ ! -x "$prefix/bin/grk_compress" ]; then
@@ -105,7 +105,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         env:
-          GROK_TAG: v20.3.8
+          GROK_TAG: v20.3.10
         run: |
           # choco puts its shim directory on the machine PATH, which this
           # already-running bash cannot see, so add it by hand
@@ -193,12 +193,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.8
+          key: grok-${{ runner.os }}-v20.3.10
 
       - name: Setup grok
         if: runner.os != 'Windows'
         env:
-          GROK_TAG: v20.3.8
+          GROK_TAG: v20.3.10
         run: |
           prefix="$GITHUB_WORKSPACE/grok-install"
           if [ ! -x "$prefix/bin/grk_compress" ]; then
