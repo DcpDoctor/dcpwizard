@@ -8,44 +8,22 @@ user-facing surface is here.
 
 ## Open
 
-- Cross-platform embedded preview. guikit phase 2 landed 2026-08-13: the host
-  lives in the guikit crate at extern/guikit/rust, both wizards take it as a path
-  dep, the spawned floating mpv player and the embedded-preview feature are gone,
-  and embedded is the only path. Linux works. macos and windows are stubs whose
-  `attach` returns Err, so those builds run with the preview panel hidden.
-  Remaining, one slice each:
-  - macos host in guikit rust/src/preview/macos.rs. Handle comes from
-    `tauri::Window::ns_view()`, which returns the content NSView as
-    `*mut c_void`. Add an NSOpenGLView (or an NSView owning an
-    NSOpenGLContext) as a subview above the WKWebView and move it from
-    set_surface. Crates, matching what tauri 2.11 already links so there is one
-    native stack: objc2 0.6, objc2-app-kit 0.3 with the NSOpenGL and
-    NSOpenGLView features (they carry NSOpenGLContext, NSOpenGLPixelFormat and
-    NSOpenGLView), objc2-foundation 0.3. mpv's render API needs CGL, meaning
-    CGLGetCurrentContext must be non-null, which an NSOpenGLContext satisfies.
-    Resolve GL entry points with dlsym against the OpenGL framework.
-  - windows host in guikit rust/src/preview/windows.rs. Handle comes from
-    `tauri::Window::hwnd()`. Create a WS_CHILD window over the WebView2 child,
-    then GetDC, ChoosePixelFormat, SetPixelFormat, wglCreateContext,
-    wglMakeCurrent, and SwapBuffers per frame. Crate: windows 0.61 with
-    Win32_Foundation, Win32_Graphics_Gdi, Win32_Graphics_OpenGL and
-    Win32_UI_WindowsAndMessaging, all four confirmed present in 0.61.3. Resolve
-    GL entry points with wglGetProcAddress falling back to GetProcAddress on
-    opengl32.dll, which the 1.1 entry points need. Windows also needs libmpv at
-    build time: postkit's build.rs reads MPV_LIB_DIR and the msvc toolchain
-    needs an mpv.lib import library built from libmpv-2.dll with gendef and
-    lib.exe. Prebuilt libmpv comes from shinchiro's mpv-dev archives (no .pc) or
-    MSYS2's mingw-w64 mpv package (ships mpv.pc).
-  Neither host can be compiled or run on the linux dev machine, so CI is the only
-  check and both should be expected to need a pass on real hardware. The whole
-  platform contract is three items: `attach(&tauri::Window) -> Result<EmbeddedPreview, String>`,
-  `EmbeddedPreview::player()` and `EmbeddedPreview::set_surface(x, y, w, h, visible)`.
-  The public shape must stay identical on every platform.
-- Windows release builds now block the run. continue-on-error was removed from
-  release.yml and gui-release.yml on 2026-08-13, so the windows job failing fails
-  the workflow. It was there because the grok source build is not wired up on
-  windows and the build needs grok-ffi. Wire grok up for windows, or the windows
-  job stays red and holds up releases.
+- Cross-platform embedded preview: all three hosts are implemented in guikit
+  (linux GtkGLArea verified live, macos NSOpenGLView layered over the WKWebView,
+  windows WS_CHILD window with wgl over the WebView2 child), pinned here and in
+  imfwizard, and CI compiles all three platforms green. Remaining: neither the
+  macos nor the windows host has run on real hardware, so a hand pass there is
+  the last step. The platform contract stays three items: `attach(&tauri::Window)
+  -> Result<EmbeddedPreview, String>`, `EmbeddedPreview::player()` and
+  `EmbeddedPreview::set_surface(x, y, w, h, visible)`, identical on every
+  platform.
+- Windows release builds: grok is wired into release.yml and gui-release.yml as
+  of 2026-08-14 (the msvc setup step ported verbatim from ci.yml, the cli zip
+  ships grokj2k.dll beside the exe, and tauri.windows.conf.json bundles it into
+  the installer next to the exes). Unproven until the next tag run. Watch on
+  that run: if grok's msvc install drops more dlls that grokj2k.dll depends on,
+  copy bin/*.dll in both places instead, and a local windows tauri build now
+  fails at bundle time unless the dll is staged at gui/src-tauri/grokj2k.dll.
 - postkit compiled twice, fixed 2026-08-12. `postkit` was a path dep on
   `extern/postkit` while `dcpdoctor-core` came from git carrying its own path dep
   on the postkit inside that checkout, so cargo resolved two copies. dcpdoctor
