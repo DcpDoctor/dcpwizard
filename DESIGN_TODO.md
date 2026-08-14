@@ -8,12 +8,44 @@ user-facing surface is here.
 
 ## Open
 
-- guikit phase 2 (phase 1 landed 2026-08-13): preview_server.rs and
-  preview_surface.rs into a small crate in guikit, consumed as a path dep through
-  the extern/guikit submodule (not postkit, which must stay free of a tauri dep).
-  Gated on phase 1 surviving one real change cycle, meaning a guikit edit that
-  reaches both wizards through a pin bump. Subsumes the preview_server.rs entry
-  in "Keep in sync" below.
+- Cross-platform embedded preview. guikit phase 2 landed 2026-08-13: the host
+  lives in the guikit crate at extern/guikit/rust, both wizards take it as a path
+  dep, the spawned floating mpv player and the embedded-preview feature are gone,
+  and embedded is the only path. Linux works. macos and windows are stubs whose
+  `attach` returns Err, so those builds run with the preview panel hidden.
+  Remaining, one slice each:
+  - macos host in guikit rust/src/preview/macos.rs. Handle comes from
+    `tauri::Window::ns_view()`, which returns the content NSView as
+    `*mut c_void`. Add an NSOpenGLView (or an NSView owning an
+    NSOpenGLContext) as a subview above the WKWebView and move it from
+    set_surface. Crates, matching what tauri 2.11 already links so there is one
+    native stack: objc2 0.6, objc2-app-kit 0.3 with the NSOpenGL and
+    NSOpenGLView features (they carry NSOpenGLContext, NSOpenGLPixelFormat and
+    NSOpenGLView), objc2-foundation 0.3. mpv's render API needs CGL, meaning
+    CGLGetCurrentContext must be non-null, which an NSOpenGLContext satisfies.
+    Resolve GL entry points with dlsym against the OpenGL framework.
+  - windows host in guikit rust/src/preview/windows.rs. Handle comes from
+    `tauri::Window::hwnd()`. Create a WS_CHILD window over the WebView2 child,
+    then GetDC, ChoosePixelFormat, SetPixelFormat, wglCreateContext,
+    wglMakeCurrent, and SwapBuffers per frame. Crate: windows 0.61 with
+    Win32_Foundation, Win32_Graphics_Gdi, Win32_Graphics_OpenGL and
+    Win32_UI_WindowsAndMessaging, all four confirmed present in 0.61.3. Resolve
+    GL entry points with wglGetProcAddress falling back to GetProcAddress on
+    opengl32.dll, which the 1.1 entry points need. Windows also needs libmpv at
+    build time: postkit's build.rs reads MPV_LIB_DIR and the msvc toolchain
+    needs an mpv.lib import library built from libmpv-2.dll with gendef and
+    lib.exe. Prebuilt libmpv comes from shinchiro's mpv-dev archives (no .pc) or
+    MSYS2's mingw-w64 mpv package (ships mpv.pc).
+  Neither host can be compiled or run on the linux dev machine, so CI is the only
+  check and both should be expected to need a pass on real hardware. The whole
+  platform contract is three items: `attach(&tauri::Window) -> Result<EmbeddedPreview, String>`,
+  `EmbeddedPreview::player()` and `EmbeddedPreview::set_surface(x, y, w, h, visible)`.
+  The public shape must stay identical on every platform.
+- Windows release builds now block the run. continue-on-error was removed from
+  release.yml and gui-release.yml on 2026-08-13, so the windows job failing fails
+  the workflow. It was there because the grok source build is not wired up on
+  windows and the build needs grok-ffi. Wire grok up for windows, or the windows
+  job stays red and holds up releases.
 - postkit compiled twice, fixed 2026-08-12. `postkit` was a path dep on
   `extern/postkit` while `dcpdoctor-core` came from git carrying its own path dep
   on the postkit inside that checkout, so cargo resolved two copies. dcpdoctor
@@ -166,14 +198,10 @@ escape_xml, parse_srt, pipeline::run_encode). What remains duplicated is app/fra
 glue with no clean cross-repo home, left as copies. If you edit one side, mirror the
 other:
 
-- gui/src-tauri/src/preview_server.rs — near-identical (only the MpvPlayer app name
-  differs). NOT moved to postkit: it is all `#[tauri::command]` wrappers and postkit
-  has no tauri dep (also used by the CLI and wasm). The reusable part (MpvPlayer) is
-  already in postkit::mpv. dcpwizard also keeps a windows preview_server_stub the imf
-  side lacks. Linux builds with the embedded-preview feature draw the preview in
-  the app window via the libmpv render API (state in postkit's DESIGN_TODO, shared
-  with imfwizard); other platforms and builds without the feature spawn a separate
-  mpv window.
+- gui/src-tauri/src/preview_server.rs and preview_surface.rs — moved to the guikit
+  crate 2026-08-13, no longer duplicated. Both wizards depend on
+  extern/guikit/rust and register its commands. It did not go to postkit, which
+  must stay free of a tauri dep since the CLI and wasm use it too.
 - gui/src/preview.js — moved to guikit 2026-08-13, no longer duplicated. Both
   wizards import extern/guikit/src/preview.js from their own gui/src.
 - gui/vite.config.js — still per-app, only partially aligned: the dev port differs,

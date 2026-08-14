@@ -229,4 +229,4 @@ jobs:
           cp target/release/dcpwizard ../gui/src-tauri/dcpwizard-${TRIPLE}
 
       - name: Check Tauri backend
-        run: cargo check --manifest-path gui/src-tauri/Cargo.toml --features embedded-preview
+        run: cargo check --manifest-path gui/src-tauri/Cargo.toml

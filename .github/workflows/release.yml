@@ -28,9 +28,6 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
-    # windows: grok source build not wired up and the build needs grok-ffi, so
-    # allow it to fail rather than block the run.
-    continue-on-error: ${{ matrix.os == 'windows-2022' }}
 
     steps:
       - name: Enable long paths (Windows)
