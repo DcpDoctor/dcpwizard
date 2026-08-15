@@ -179,8 +179,10 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
 
     let mut cpl_reels: Vec<crate::cpl::CplReel> = Vec::new();
     let mut shipped: Vec<ShippedAsset> = Vec::new();
+    // the output is the same composition, so it keeps the source's markers
+    let source_markers = crate::markers::markers_from_cpl(&cpl_content);
 
-    for entry in &timeline {
+    for (reel_index, entry) in timeline.iter().enumerate() {
         let src_pic = PathBuf::from(&entry.picture_file);
         if entry.picture_file.is_empty() || !src_pic.exists() {
             return Err(format!("reel {} picture MXF not found", entry.reel_number));
@@ -233,6 +235,7 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
             subtitle_language: subtitle_lang,
             stereoscopic: false,
             aux_data: None,
+            markers: source_markers.get(reel_index).cloned().unwrap_or_default(),
             ..Default::default()
         });
 

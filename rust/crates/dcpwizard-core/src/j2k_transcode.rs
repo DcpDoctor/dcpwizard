@@ -123,8 +123,10 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
 
     let mut cpl_reels: Vec<crate::cpl::CplReel> = Vec::new();
     let mut shipped: Vec<ShippedAsset> = Vec::new();
+    // re-encoding keeps the frame count, so marker offsets carry over unchanged
+    let source_markers = crate::markers::markers_from_cpl(&cpl_content);
 
-    for entry in &timeline {
+    for (reel_index, entry) in timeline.iter().enumerate() {
         let src_pic = PathBuf::from(&entry.picture_file);
         if entry.picture_file.is_empty() || !src_pic.exists() {
             tracing::error!("reel {} picture MXF not found", entry.reel_number);
@@ -200,6 +202,7 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             subtitle_language: subtitle_lang,
             stereoscopic: false,
             aux_data: None,
+            markers: source_markers.get(reel_index).cloned().unwrap_or_default(),
             ..Default::default()
         });
 

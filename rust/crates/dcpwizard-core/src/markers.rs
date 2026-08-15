@@ -174,9 +174,81 @@ pub fn markers_to_xml(markers: &[MarkerEntry], indent: &str) -> String {
     xml
 }
 
+/// Read each reel's markers back out of a CPL, in reel order. The read side of
+/// [`markers_to_xml`], for the paths that rebuild a package's CPL: without it a
+/// rewrite drops the marker track.
+///
+/// A marker whose label is not one of the ten defined ones, or that carries no
+/// offset, is skipped: it cannot be rewritten faithfully. The Label's optional
+/// scope attribute is ignored, so CPLs from other tools parse too.
+pub fn markers_from_cpl(cpl_xml: &str) -> Vec<Vec<MarkerEntry>> {
+    let Ok(doc) = roxmltree::Document::parse(cpl_xml) else {
+        return Vec::new();
+    };
+    doc.descendants()
+        .filter(|node| node.has_tag_name("Reel"))
+        .map(|reel| {
+            reel.descendants()
+                .filter(|node| node.has_tag_name("Marker"))
+                .filter_map(|marker| {
+                    let child_text = |name: &str| {
+                        marker
+                            .children()
+                            .find(|c| c.has_tag_name(name))
+                            .and_then(|c| c.text())
+                            .map(str::trim)
+                    };
+                    let label = Marker::from_label(child_text("Label")?)?;
+                    let frame = child_text("Offset")?.parse().ok()?;
+                    Some(MarkerEntry::new(label, frame))
+                })
+                .collect()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markers_survive_a_write_then_read() {
+        let written = vec![
+            MarkerEntry::new(Marker::Ffoc, 1),
+            MarkerEntry::new(Marker::Ffec, 240),
+        ];
+        let cpl = format!(
+            "<CompositionPlaylist><ReelList><Reel><AssetList><MainMarkers>\n{}\
+             </MainMarkers></AssetList></Reel></ReelList></CompositionPlaylist>",
+            markers_to_xml(&written, "")
+        );
+        let read = markers_from_cpl(&cpl);
+        assert_eq!(read.len(), 1, "one reel");
+        assert_eq!(read[0].len(), 2);
+        assert_eq!(read[0][0].marker, Marker::Ffoc);
+        assert_eq!(read[0][1].marker, Marker::Ffec);
+        assert_eq!(read[0][1].frame, 240);
+    }
+
+    #[test]
+    fn foreign_marker_forms_and_junk_are_handled() {
+        // libdcp writes a scope attribute on some CPLs; an unknown label or a
+        // marker with no offset cannot be rewritten faithfully, so it is dropped
+        let cpl = r#"<CompositionPlaylist><ReelList>
+            <Reel><AssetList><MainMarkers><MarkerList>
+              <Marker><Label scope="http://www.smpte-ra.org/schemas/429-7/2006/CPL#standard-markers">LFOC</Label><Offset>99</Offset></Marker>
+              <Marker><Label>XXXX</Label><Offset>5</Offset></Marker>
+              <Marker><Label>FFMC</Label></Marker>
+            </MarkerList></MainMarkers></AssetList></Reel>
+            <Reel><AssetList><MainPicture><Id>urn:uuid:x</Id></MainPicture></AssetList></Reel>
+        </ReelList></CompositionPlaylist>"#;
+        let read = markers_from_cpl(cpl);
+        assert_eq!(read.len(), 2, "a reel with no markers still holds its slot");
+        assert_eq!(read[0].len(), 1);
+        assert_eq!(read[0][0].marker, Marker::Lfoc);
+        assert_eq!(read[0][0].frame, 99);
+        assert!(read[1].is_empty());
+    }
 
     #[test]
     fn marker_xml_is_the_form_validators_read() {

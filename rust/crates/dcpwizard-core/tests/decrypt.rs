@@ -348,3 +348,94 @@ fn transcode_dcp_decrypts_encrypted_source() {
         "encrypted source without keys must fail loud"
     );
 }
+
+/// Markers a package was authored with, as (label, offset) pairs in file order.
+fn cpl_markers(dcp_dir: &Path) -> Vec<(String, u64)> {
+    let cpl = std::fs::read_dir(dcp_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("CPL_"))
+        })
+        .expect("CPL written");
+    let xml = std::fs::read_to_string(cpl).unwrap();
+    dcpwizard_core::markers::markers_from_cpl(&xml)
+        .into_iter()
+        .flatten()
+        .map(|entry| (entry.marker.label().to_string(), entry.frame))
+        .collect()
+}
+
+/// A CPL rebuilt from an existing package must keep the markers it carried:
+/// decrypt and transcode-dcp both re-author the CPL around the same composition.
+#[test]
+fn markers_survive_decrypt_and_transcode() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let j2k = root.join("frames");
+    make_frames(&j2k);
+    let wav = root.join("audio.wav");
+    make_wav(&wav);
+    let enc_dcp = root.join("enc");
+    let keys_file = root.join("KEYS.json");
+    let mut config = base_config(&enc_dcp, j2k, wav, &keys_file);
+    // a distributor-requested set, not the FFOC/LFOC default, so a rebuild that
+    // silently re-derived the defaults would not pass
+    config.markers = vec!["FFEC=00:00:00:04".into(), "LFEC=20".into()];
+    assert_eq!(
+        dcpwizard_core::dcp::create_dcp(&config),
+        0,
+        "create encrypted DCP with markers"
+    );
+    let source_markers = cpl_markers(&enc_dcp);
+    assert_eq!(
+        source_markers,
+        vec![("FFEC".to_string(), 4), ("LFEC".to_string(), 20)],
+        "the source package carries the authored markers"
+    );
+
+    let dec_dcp = root.join("dec");
+    assert_eq!(
+        decrypt_dcp(&DcpDecryptConfig {
+            input_dir: enc_dcp.clone(),
+            output_dir: dec_dcp.clone(),
+            kdm: None,
+            recipient_key: None,
+            keys: Some(keys_file.clone()),
+        }),
+        0,
+        "decrypt must succeed"
+    );
+    assert_eq!(
+        cpl_markers(&dec_dcp),
+        source_markers,
+        "decrypt must carry the markers through"
+    );
+
+    let transcoded = root.join("transcoded");
+    assert_eq!(
+        dcpwizard_core::j2k_transcode::transcode_dcp(
+            &dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
+                input_dir: enc_dcp,
+                output_dir: transcoded.clone(),
+                target_bitrate_mbps: 50,
+                target_width: 0,
+                target_height: 0,
+                kdm: None,
+                recipient_key: None,
+                keys: Some(keys_file),
+            }
+        ),
+        0,
+        "transcode must succeed"
+    );
+    assert_eq!(
+        cpl_markers(&transcoded),
+        source_markers,
+        "re-encoding keeps the frame count, so it keeps the offsets"
+    );
+}
