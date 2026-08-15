@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- **Encrypted DCPs shipped cleartext subtitles and Atmos** — picture and sound were encrypted at wrap time while the timed-text and Atmos tracks went out in the clear, with nothing in the package saying so. `--encrypt` now refuses a package carrying either track. Encrypting them needs the content key threaded through postkit's timed-text and Atmos wraps
 - **`--twok` / `--fourk` misframed a source of another size** — the flags overwrote the encode raster with the container size while ffmpeg kept decoding at the source raster, so every frame of e.g. a 1998x1080 flat master was read misaligned and the CPL declared a size the J2K frames did not have. The mismatch is now refused up front, naming both rasters. Fitting the source automatically is still to come; use `convert` meanwhile
 - **3D encoded at twice the requested bit rate** — `create --right-eye` encoded both eyes at the full `--video-bit-rate`, so the delivered stereoscopic track ran at double the requested rate (500 Mbps for `--video-bit-rate 250`) and could breach the DCI cap. The ceiling covers the whole stereoscopic track, so each eye now gets half the budget, as libdcp does
 

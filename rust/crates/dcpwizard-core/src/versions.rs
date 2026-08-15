@@ -151,6 +151,19 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         );
         return -1;
     }
+    if config.encrypt {
+        let timed_text = versions
+            .iter()
+            .any(|v| v.subtitle.is_some() || v.ccap.is_some())
+            || config.subtitle_path.is_some()
+            || config.ccap_path.is_some();
+        if let Err(e) =
+            crate::encrypt::check_encryptable_tracks(timed_text, config.atmos_path.is_some())
+        {
+            tracing::error!("{e}");
+            return -1;
+        }
+    }
     if config.right_eye_dir.is_some() {
         tracing::error!("stereoscopic 3D is not supported with --versions");
         return -1;

@@ -280,19 +280,19 @@ fn encrypted_two_versions_write_per_cpl_keys() {
     make_content_frames(&j2k, 48);
     let wav = root.path().join("base.wav");
     make_wav(&wav, 48);
-    let sub_en = root.path().join("en.srt");
-    let sub_fr = root.path().join("fr.srt");
-    make_srt(&sub_en, "Hello");
-    make_srt(&sub_fr, "Bonjour");
+    let fr_wav = root.path().join("fr.wav");
+    make_wav(&fr_wav, 48);
 
     let out = root.path().join("pkg");
     let keys = root.path().join("keys.json");
     let mut config = base_config(&out, j2k, Some(wav));
     config.encrypt = true;
     config.key_out = Some(keys);
+    // the versions differ by sound, not subtitle: an encrypted package cannot
+    // carry timed text, which the wrap layer has no way to encrypt
     let versions = vec![
-        version("English", Some(sub_en), None),
-        version("French", Some(sub_fr), None),
+        version("English", None, None),
+        version("French", None, Some(fr_wav)),
     ];
     assert_eq!(create_versioned_dcp(&config, &versions), 0);
 

@@ -393,6 +393,15 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
         );
         return -1;
     }
+    if config.encrypt
+        && let Err(e) = crate::encrypt::check_encryptable_tracks(
+            comps.iter().any(|c| c.subtitle.is_some()),
+            config.atmos_path.is_some(),
+        )
+    {
+        tracing::error!("{e}");
+        return -1;
+    }
 
     let fps = if config.frame_rate_num > 0 {
         config.frame_rate_num

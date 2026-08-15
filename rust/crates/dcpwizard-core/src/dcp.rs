@@ -310,6 +310,16 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         );
         return -1;
     }
+    if config.encrypt {
+        let exists = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| p.exists());
+        if let Err(e) = crate::encrypt::check_encryptable_tracks(
+            exists(&config.subtitle_path) || exists(&config.ccap_path),
+            config.atmos_path.is_some(),
+        ) {
+            tracing::error!("{e}");
+            return -1;
+        }
+    }
 
     let fps = if config.frame_rate_num > 0 {
         config.frame_rate_num
