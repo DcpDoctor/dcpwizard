@@ -238,6 +238,12 @@ enum Commands {
         /// source range metadata (video input only).
         #[arg(long, value_parser = ["full", "legal"])]
         input_range: Option<String>,
+        /// Place a CPL marker: LABEL=timecode (repeatable). LABEL is one of FFOC,
+        /// LFOC, FFTC, LFTC, FFOI, LFOI, FFEC, LFEC, FFMC, LFMC; the timecode is
+        /// a frame number or HH:MM:SS:FF. Given markers replace the default
+        /// FFOC/LFOC pair. Not supported with reel splitting.
+        #[arg(long = "marker", value_name = "LABEL=TIMECODE")]
+        markers: Vec<String>,
         // boxed so the Create variant stays small (clippy large_enum_variant).
         #[command(flatten)]
         audio_qol: Box<CreateAudioQol>,
@@ -2481,6 +2487,7 @@ fn run() {
             split_at,
             split_chapters,
             input_range,
+            markers,
             audio_qol,
             signer_opts,
         } => {
@@ -3083,6 +3090,7 @@ fn run() {
                     sign_language_main_channels: sl_main_channels,
                     hdr_dci,
                     signer: package_signer.clone(),
+                    markers: markers.clone(),
                 };
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
@@ -3225,6 +3233,7 @@ fn run() {
                     sign_language_main_channels: sl_main_channels,
                     hdr_dci,
                     signer: package_signer,
+                    markers,
                 };
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
@@ -4556,23 +4565,16 @@ fn run() {
             fps,
             xml,
         } => {
-            let entries = if markers.is_empty() {
-                dcpwizard_core::markers::default_markers(frames)
-            } else {
-                let mut out = Vec::with_capacity(markers.len());
-                for arg in &markers {
-                    match dcpwizard_core::markers::parse_marker_arg(arg, fps, frames) {
-                        Ok(e) => out.push(e),
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            std::process::exit(1);
-                        }
+            let entries =
+                match dcpwizard_core::markers::markers_for_composition(&markers, fps, frames) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
                     }
-                }
-                out
-            };
+                };
             if xml {
-                println!("{}", dcpwizard_core::markers::markers_to_xml(&entries));
+                print!("{}", dcpwizard_core::markers::markers_to_xml(&entries, ""));
             } else if entries.is_empty() {
                 println!("No markers (composition length is 0 frames)");
             } else {

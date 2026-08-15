@@ -41,10 +41,6 @@ impl Marker {
         }
     }
 
-    pub fn scope(&self) -> &'static str {
-        "http://www.smpte-ra.org/schemas/429-10/2008/Main-Stereo-Picture-CPL#"
-    }
-
     /// Parse a marker label (case-insensitive) against the defined ST 429-10 set.
     pub fn from_label(label: &str) -> Option<Marker> {
         Some(match label.to_ascii_uppercase().as_str() {
@@ -129,16 +125,6 @@ impl MarkerEntry {
     pub fn new(marker: Marker, frame: u64) -> Self {
         Self { marker, frame }
     }
-
-    /// Generate the XML element for this marker entry.
-    pub fn to_xml(&self) -> String {
-        format!(
-            "<Marker>\n  <Label Scope=\"{}\">{}</Label>\n  <Offset>{}</Offset>\n</Marker>",
-            self.marker.scope(),
-            self.marker.label(),
-            self.frame
-        )
-    }
 }
 
 /// Generate default markers for a composition of the given frame count.
@@ -154,22 +140,68 @@ pub fn default_markers(total_frames: u64) -> Vec<MarkerEntry> {
     ]
 }
 
-/// Generate the XML MarkerList block for a set of markers.
-pub fn markers_to_xml(markers: &[MarkerEntry]) -> String {
-    let mut xml = String::new();
-    xml.push_str("<MarkerList>\n");
-    for entry in markers {
-        xml.push_str("  ");
-        xml.push_str(&entry.to_xml());
-        xml.push('\n');
+/// The markers a composition of `total_frames` carries: the parsed
+/// `LABEL=timecode` specs, or the default FFOC/LFOC pair when none were given.
+pub fn markers_for_composition(
+    specs: &[String],
+    fps: u32,
+    total_frames: u64,
+) -> Result<Vec<MarkerEntry>, String> {
+    if specs.is_empty() {
+        return Ok(default_markers(total_frames));
     }
-    xml.push_str("</MarkerList>");
+    specs
+        .iter()
+        .map(|spec| parse_marker_arg(spec, fps, total_frames))
+        .collect()
+}
+
+/// Generate the XML MarkerList block for a set of markers, every line prefixed
+/// with `indent`. The Label carries no scope attribute: ST 429-7 defaults it to
+/// the standard-markers scope, and that is the form libdcp writes.
+pub fn markers_to_xml(markers: &[MarkerEntry], indent: &str) -> String {
+    let mut xml = format!("{indent}<MarkerList>\n");
+    for entry in markers {
+        xml.push_str(&format!("{indent}  <Marker>\n"));
+        xml.push_str(&format!(
+            "{indent}    <Label>{}</Label>\n",
+            entry.marker.label()
+        ));
+        xml.push_str(&format!("{indent}    <Offset>{}</Offset>\n", entry.frame));
+        xml.push_str(&format!("{indent}  </Marker>\n"));
+    }
+    xml.push_str(&format!("{indent}</MarkerList>\n"));
     xml
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_xml_is_the_form_validators_read() {
+        let xml = markers_to_xml(&default_markers(100), "  ");
+        // a bare <Label>: validators (ours included) match the tag with no
+        // attribute, and ST 429-7 supplies the standard-markers scope by default
+        assert!(xml.contains("  <MarkerList>\n"), "{xml}");
+        assert!(xml.contains("    <Marker>\n"), "{xml}");
+        assert!(xml.contains("      <Label>FFOC</Label>\n"), "{xml}");
+        assert!(xml.contains("      <Offset>1</Offset>\n"), "{xml}");
+        assert!(!xml.contains("Scope"), "no scope attribute: {xml}");
+    }
+
+    #[test]
+    fn given_markers_replace_the_default_pair() {
+        let specs = vec!["FFEC=00:00:10:00".to_string()];
+        let entries = markers_for_composition(&specs, 24, 1000).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].marker, Marker::Ffec);
+        assert_eq!(entries[0].frame, 240);
+        // no specs falls back to FFOC/LFOC
+        assert_eq!(markers_for_composition(&[], 24, 1000).unwrap().len(), 2);
+        // a bad spec is an error, not a silent default
+        assert!(markers_for_composition(&["nope".to_string()], 24, 1000).is_err());
+    }
 
     #[test]
     fn ffoc_is_one_lfoc_is_last_frame() {

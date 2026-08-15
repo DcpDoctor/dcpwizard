@@ -36,6 +36,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Decrypt** an encrypted DCP to cleartext via `decrypt --input --output` with `--kdm --recipient-key` or `--keys`
 - **Sign-language video** track via `create --sign-language-video <file> --sign-language-lang <rfc5646>` (ISDCF Doc 13, SLVS on sound channel 15)
 - **Bv2.1 CompositionMetadataAsset** (ST 429-16) in the first reel of SMPTE CPLs, with `MainSoundConfiguration` derived from the packaged channel count
+- **CPL markers** (ST 429-7 `MainMarkers`) in every created composition: FFOC/LFOC by default, or place any of the ten defined markers with `create --marker LABEL=timecode` (repeatable, frame number or HH:MM:SS:FF; single-reel only)
 - **Re-ingest packaging** via `ingest-package <dir>`: rebuild ASSETMAP and PKL to cover every asset file present (for exported OV/VF folders whose ASSETMAP/PKL omit hardlinked assets), no re-wrap
 - **SHA-1 hashing** for integrity verification
 
@@ -574,6 +575,9 @@ dcpwizard markers --frames 172800        # FFOC/LFOC list
 dcpwizard markers --frames 172800 --xml  # XML MarkerList
 # place any of the ten markers (frame number or HH:MM:SS:FF; validated <= length)
 dcpwizard markers --frames 172800 --marker FFEC=01:59:00:00 --marker LFEC=02:00:00:00 --xml
+# the same markers written into a real CPL MainMarkers asset at create time
+dcpwizard create --title "My Film" --video movie.mov --output ./dcp \
+    --marker FFEC=01:59:00:00 --marker LFEC=02:00:00:00
 
 # Check accessibility compliance
 dcpwizard accessibility ./my_dcp --standard cvaa   # cvaa|eaa|aoda|ofcom

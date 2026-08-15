@@ -187,6 +187,8 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
         tracing::error!("no reels found in the input DCPs");
         return -1;
     }
+    // the assembled program is a new composition, so it gets its own FFOC/LFOC
+    crate::cpl::apply_default_markers(&mut cpl_reels);
 
     let title = if config.title.is_empty() {
         "Assembled OV".to_string()

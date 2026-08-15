@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
+
 ### Fixed
 - **Encrypted DCPs shipped cleartext subtitles and Atmos** — picture and sound were encrypted at wrap time while the timed-text and Atmos tracks went out in the clear, with nothing in the package saying so. `--encrypt` now refuses a package carrying either track. Encrypting them needs the content key threaded through postkit's timed-text and Atmos wraps
 - **`--twok` / `--fourk` misframed a source of another size** — the flags overwrote the encode raster with the container size while ffmpeg kept decoding at the source raster, so every frame of e.g. a 1998x1080 flat master was read misaligned and the CPL declared a size the J2K frames did not have. The mismatch is now refused up front, naming both rasters. Fitting the source automatically is still to come; use `convert` meanwhile

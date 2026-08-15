@@ -75,6 +75,10 @@ pub struct CplReel {
     /// Auxiliary data (ST 429-18) track, e.g. Dolby Atmos. When present, an
     /// AuxData element is added to the reel's AssetList.
     pub aux_data: Option<AuxData>,
+    /// ST 429-7 markers for this reel, emitted as its MainMarkers asset. Bv2.1
+    /// expects one in reel 1 carrying at least FFOC/LFOC.
+    #[serde(default)]
+    pub markers: Vec<crate::markers::MarkerEntry>,
 }
 
 /// Auxiliary-data (ST 429-18) track for a CPL reel.
@@ -145,12 +149,16 @@ pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i
     };
 
     // postkit's DcpCplReel only writes MainPicture/MainSound, so splice the extra
-    // per-reel assets (subtitle, aux data, metadata) and rewrite the picture
-    // element for stereoscopic reels. Reel order is preserved.
+    // per-reel assets (markers, subtitle, aux data, metadata) and rewrite the
+    // picture element for stereoscopic reels. Reel order is preserved.
     let mut xml = cpl.to_xml();
     let needs_splice = metadata_block.is_some()
         || config.reels.iter().any(|r| {
-            r.subtitle_id.is_some() || r.ccap_id.is_some() || r.aux_data.is_some() || r.stereoscopic
+            r.subtitle_id.is_some()
+                || r.ccap_id.is_some()
+                || r.aux_data.is_some()
+                || r.stereoscopic
+                || !r.markers.is_empty()
         });
     if needs_splice {
         xml = splice_reel_extras(
@@ -177,8 +185,8 @@ const NS_STEREO_429_10: &str =
 const NS_AUX_DATA: &str = "http://www.dolby.com/schemas/2012/AD";
 
 /// Rewrite each reel's picture element and add the extra AssetList entries
-/// (subtitle, aux data, first-reel metadata) that postkit's writer does not
-/// emit. Walks the reel segments in order between `</AssetList>` markers.
+/// (markers, subtitle, aux data, first-reel metadata) that postkit's writer does
+/// not emit. Walks the reel segments in order between `</AssetList>` markers.
 fn splice_reel_extras(
     xml: &str,
     reels: &[CplReel],
@@ -196,6 +204,9 @@ fn splice_reel_extras(
         let mut segment = xml[idx..end].to_string();
         if reel.stereoscopic {
             segment = rewrite_stereoscopic(&segment, reel, standard);
+        }
+        if !reel.markers.is_empty() {
+            segment = insert_main_markers(&segment, reel);
         }
         out.push_str(&segment);
         if let Some(ref sid) = reel.subtitle_id {
@@ -461,6 +472,56 @@ fn aux_data_block(aux: &AuxData) -> String {
         aux.data_type
     ));
     b.push_str("        </axd:AuxData>\n");
+    b
+}
+
+/// Give a composition the Bv2.1 marker pair: FFOC at frame 1 of the first reel,
+/// LFOC one before the end of the last reel. Each offset is relative to the reel
+/// that carries it, which is how validators read them.
+pub fn apply_default_markers(reels: &mut [CplReel]) {
+    use crate::markers::{Marker, MarkerEntry};
+    if let Some(first) = reels.first_mut() {
+        first.markers.push(MarkerEntry::new(Marker::Ffoc, 1));
+    }
+    if let Some(last) = reels.last_mut() {
+        let end = last.picture_duration.saturating_sub(1);
+        last.markers.push(MarkerEntry::new(Marker::Lfoc, end));
+    }
+}
+
+/// Put the reel's MainMarkers asset at the head of its AssetList. ST 429-7
+/// orders the list (MainMarkers, MainPicture, MainSound, MainSubtitle), so it
+/// cannot go with the other spliced assets at the end.
+fn insert_main_markers(segment: &str, reel: &CplReel) -> String {
+    const ASSET_LIST_OPEN: &str = "      <AssetList>\n";
+    let block = main_markers_block(reel);
+    match segment.find(ASSET_LIST_OPEN) {
+        Some(pos) => {
+            let head = pos + ASSET_LIST_OPEN.len();
+            format!("{}{block}{}", &segment[..head], &segment[head..])
+        }
+        None => format!("{segment}{block}"),
+    }
+}
+
+/// ST 429-7 MainMarkers asset. It is an inline track with no essence file, so
+/// nothing references it from the PKL or ASSETMAP. Its EditRate matches the
+/// picture's, or a marker Offset would count in different units than the reel.
+fn main_markers_block(reel: &CplReel) -> String {
+    let id = uuid::Uuid::new_v4();
+    let mut b = String::new();
+    b.push_str("        <MainMarkers>\n");
+    b.push_str(&format!("          <Id>urn:uuid:{id}</Id>\n"));
+    b.push_str(&format!(
+        "          <EditRate>{} {}</EditRate>\n",
+        reel.picture_edit_rate_num, reel.picture_edit_rate_den
+    ));
+    b.push_str(&format!(
+        "          <IntrinsicDuration>{}</IntrinsicDuration>\n",
+        reel.picture_duration
+    ));
+    b.push_str(&crate::markers::markers_to_xml(&reel.markers, "          "));
+    b.push_str("        </MainMarkers>\n");
     b
 }
 

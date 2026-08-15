@@ -641,6 +641,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             subtitle_language: (subtitle_duration > 0).then(|| sub_lang.clone()),
             stereoscopic: false,
             aux_data: None,
+            markers: crate::markers::default_markers(total),
             ..Default::default()
         };
         let cpl_uuid = uuid::Uuid::new_v4().to_string();

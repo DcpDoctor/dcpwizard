@@ -626,8 +626,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 ccap_language: ccap_duration.gt(&0).then(|| sub_lang.clone()),
                 stereoscopic: false,
                 aux_data: aux_data.clone(),
+                markers: Vec::new(),
             });
         }
+        crate::cpl::apply_default_markers(&mut cpl_reels);
 
         // sound layout for this version's CompositionMetadataAsset
         let main_sound = own_audio

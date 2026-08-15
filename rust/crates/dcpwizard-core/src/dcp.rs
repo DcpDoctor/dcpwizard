@@ -90,6 +90,11 @@ pub struct DcpConfig {
     /// Signer for the CPL and PKL ds:Signature. None leaves them unsigned.
     #[serde(default)]
     pub signer: Option<crate::package_signature::PackageSigner>,
+    /// Composition markers as `LABEL=timecode` specs (e.g. `FFEC=00:58:12:03`),
+    /// written into the CPL as the first reel's MainMarkers asset. Empty gives
+    /// the default FFOC/LFOC pair.
+    #[serde(default)]
+    pub markers: Vec<String>,
 }
 
 /// Validate custom container dimensions against the resolution bounds.
@@ -435,6 +440,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         }
         if config.hdr_dci {
             tracing::error!("--hdr-dci is not supported with reel splitting");
+            return -1;
+        }
+        if !config.markers.is_empty() {
+            tracing::error!(
+                "--marker is not supported with reel splitting: a marker offset is relative to \
+                 its own reel. A split composition gets the default FFOC/LFOC pair"
+            );
             return -1;
         }
         let mut reel_config = config.clone();
@@ -915,6 +927,15 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         (config.resolution.width(), config.resolution.height())
     };
 
+    let markers =
+        match crate::markers::markers_for_composition(&config.markers, fps, picture_duration) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("{e}");
+                return -1;
+            }
+        };
+
     let reel = crate::cpl::CplReel {
         reel_id: uuid::Uuid::new_v4().to_string(),
         picture_id: picture_uuid.to_string(),
@@ -965,6 +986,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         },
         stereoscopic,
         aux_data: aux_data.clone(),
+        markers,
     };
 
     let cpl_path = config.output_dir.join(format!("CPL_{cpl_uuid}.xml"));

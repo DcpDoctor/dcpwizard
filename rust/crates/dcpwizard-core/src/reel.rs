@@ -612,8 +612,13 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             ccap_language: ccap.as_ref().map(|_| ccap_lang.to_string()),
             stereoscopic: false,
             aux_data: None,
+            markers: Vec::new(),
         });
     }
+
+    // explicit --marker specs are refused for a split composition, so the reels
+    // carry the default pair
+    crate::cpl::apply_default_markers(&mut cpl_reels);
 
     // the shared embedded font is now inside each reel's MXF
     if let Some(plan) = &subtitle_plan

@@ -235,8 +235,10 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             ccap_language: ccap.as_ref().map(|_| sub_lang.to_string()),
             stereoscopic: false,
             aux_data: None,
+            markers: Vec::new(),
         });
     }
+    crate::cpl::apply_default_markers(&mut cpl_reels);
 
     let title = if config.title.is_empty() {
         format!("{}_VF", ov_cpl.content_title)
