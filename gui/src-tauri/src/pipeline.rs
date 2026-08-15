@@ -1090,17 +1090,20 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         );
     }
 
-    // Map the target bandwidth (Mbps) to a J2K compression ratio, matching the
-    // CLI convention (raw = w*h*36 bits/frame). Only honoured for video input;
-    // image/J2K sequences fall back to the encoder default.
+    // Map the target bandwidth (Mbps) to a J2K compression ratio. Only honoured
+    // for video input; image/J2K sequences fall back to the encoder default. A 3D
+    // job encodes both eyes with this ratio, so the halving is part of it.
     let compression_ratio = dcpwizard_core::probe::probe_video(&job.video_path)
         .map(|info| {
-            let fps = (fps_num as f64).max(1.0);
-            let raw_bits = info.width as f64 * info.height as f64 * 36.0;
-            let target_bits = (job.bandwidth as f64 * 1_000_000.0) / fps;
-            (raw_bits / target_bits).max(1.0)
+            dcpwizard_core::encode::video_compression_ratio(
+                info.width,
+                info.height,
+                fps_num,
+                Some(job.bandwidth),
+                job.right_eye.is_some(),
+            )
         })
-        .unwrap_or(10.0);
+        .unwrap_or(dcpwizard_core::encode::DEFAULT_COMPRESSION_RATIO);
 
     // HDR source handling before the encode: the LUT and already-PQ paths reach
     // the encoder untransformed, everything else needs the tone map opt-in.
