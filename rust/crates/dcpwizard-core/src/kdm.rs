@@ -7,6 +7,55 @@
 use std::path::{Path, PathBuf};
 
 pub use postkit::certificate::KdmFormat;
+use postkit::certificate::{AudioForensicMarking, KdmFormulation, PictureForensicMarking};
+
+/// The KDM choices beyond the certificates and the validity window: which
+/// devices the KDM names, and how each essence is forensically marked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KdmOptions {
+    /// None derives the formulation from the device certificates, so a caller
+    /// that names none keeps the assume-trust KDM it always got.
+    pub formulation: Option<KdmFormulation>,
+    pub picture_forensic_marking: PictureForensicMarking,
+    pub audio_forensic_marking: AudioForensicMarking,
+}
+
+/// The formulation a KDM carries: the caller's explicit choice, or the one
+/// derived from whether any device certificate was supplied.
+///
+/// A choice that disagrees with the device list is refused here, naming the
+/// flags a dcpwizard user would change. postkit refuses the same combination,
+/// but it cannot know what those flags are called on this command line.
+pub fn resolve_formulation(
+    explicit: Option<KdmFormulation>,
+    device_cert_count: usize,
+) -> Result<KdmFormulation, String> {
+    let has_devices = device_cert_count > 0;
+    let Some(formulation) = explicit else {
+        let assume_trust = KdmFormulation::default();
+        return Ok(if has_devices {
+            assume_trust.device_list_counterpart()
+        } else {
+            assume_trust
+        });
+    };
+    if formulation.lists_supplied_devices() == has_devices {
+        return Ok(formulation);
+    }
+    let counterpart = formulation.device_list_counterpart();
+    Err(if has_devices {
+        format!(
+            "--formulation {formulation} carries the assume-trust thumbprint instead of a device \
+             list, so the {device_cert_count} --device-cert certificate(s) would be dropped: use \
+             --formulation {counterpart}, or drop --device-cert"
+        )
+    } else {
+        format!(
+            "--formulation {formulation} lists the devices given by --device-cert, but none were \
+             given: pass --device-cert, or use --formulation {counterpart}"
+        )
+    })
+}
 
 /// Parse the `--format` flag ("smpte" default, or "interop").
 pub fn parse_format(s: &str) -> Result<KdmFormat, String> {
@@ -165,9 +214,17 @@ pub fn generate_kdm(
     annotation: Option<String>,
     history: Option<PathBuf>,
     device_certs: Vec<PathBuf>,
+    options: KdmOptions,
 ) -> i32 {
     let (valid_from, valid_to) = match resolve_validity(&valid_from, &valid_to) {
         Ok(w) => w,
+        Err(e) => {
+            tracing::error!("{e}");
+            return 1;
+        }
+    };
+    let formulation = match resolve_formulation(options.formulation, device_certs.len()) {
+        Ok(f) => f,
         Err(e) => {
             tracing::error!("{e}");
             return 1;
@@ -184,14 +241,14 @@ pub fn generate_kdm(
         output_file: output,
         valid_from,
         valid_to,
-        // formulation stays constant; the SMPTE MessageType is fixed (ST 430-1
-        // 6.1) and Interop uses the digicine ETM instead. `format` selects which.
-        formulation: "modified-transitional-1".to_string(),
+        formulation,
         content_keys,
         format,
-        // listing real devices disables assume-trust, so an empty list is the
-        // open KDM that formulation means and a non-empty one locks it down
+        // the formulation above decides whether these are listed or the
+        // assume-trust thumbprint is written instead
         device_cert_files: device_certs,
+        picture_forensic_marking: options.picture_forensic_marking,
+        audio_forensic_marking: options.audio_forensic_marking,
     };
     match postkit::certificate::generate_kdm(&config) {
         Ok(()) => {
@@ -235,6 +292,7 @@ pub fn generate_kdm_batch(
     annotation: Option<String>,
     history: Option<PathBuf>,
     device_certs: Vec<PathBuf>,
+    options: KdmOptions,
 ) -> i32 {
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
         tracing::error!("Failed to create output directory: {e}");
@@ -264,6 +322,7 @@ pub fn generate_kdm_batch(
             annotation.clone(),
             history.clone(),
             device_certs.clone(),
+            options.clone(),
         );
         if code == 0 {
             tracing::info!("KDM for {} -> {}", cert.display(), output.display());
@@ -328,7 +387,15 @@ pub fn rewrap_dkdm(
     valid_to: String,
     output: PathBuf,
     device_certs: Vec<PathBuf>,
+    options: KdmOptions,
 ) -> i32 {
+    let formulation = match resolve_formulation(options.formulation, device_certs.len()) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("{e}");
+            return 1;
+        }
+    };
     let config = postkit::certificate::RewrapConfig {
         dkdm_file: dkdm,
         dkdm_recipient_key_file: dkdm_key,
@@ -340,6 +407,9 @@ pub fn rewrap_dkdm(
         valid_from,
         valid_to,
         device_cert_files: device_certs,
+        formulation,
+        picture_forensic_marking: options.picture_forensic_marking,
+        audio_forensic_marking: options.audio_forensic_marking,
     };
     match postkit::certificate::rewrap_dkdm_to_file(&config) {
         Ok(()) => 0,
@@ -375,6 +445,7 @@ mod tests {
             None,
             None,
             Vec::new(),
+            Default::default(),
         );
         assert_ne!(code, 0);
     }
@@ -409,6 +480,7 @@ mod tests {
             String::new(),
             out.path().to_path_buf(),
             Vec::new(),
+            Default::default(),
         );
         assert_ne!(code, 0);
     }
@@ -448,14 +520,15 @@ mod tests {
             PathBuf::from("/dev/null"),
             PathBuf::from("/dev/null"),
             Vec::new(),
-            "now".into(),
-            "7 days".into(),
+            signable_window().0,
+            signable_window().1,
             Vec::new(),
             dir.path().join("out"),
             KdmFormat::Smpte,
             None,
             None,
             Vec::new(),
+            Default::default(),
         );
         assert_ne!(code, 0);
     }
@@ -486,6 +559,19 @@ mod tests {
             dir.join("signer.key"),
             vec![dir.join("intermediate.pem"), dir.join("root.pem")],
             recipients,
+        )
+    }
+
+    /// A KDM window a freshly minted chain can actually sign: postkit follows
+    /// libdcp and compares at day granularity, counting an equal day as a
+    /// failure, so a certificate minted today cannot sign a window starting
+    /// today. Real chains are years old; test chains are minutes old.
+    fn signable_window() -> (String, String) {
+        let start = chrono::Utc::now() + chrono::Duration::days(1);
+        let end = start + chrono::Duration::days(7);
+        (
+            start.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+            end.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
         )
     }
 
@@ -523,14 +609,15 @@ mod tests {
             signer_cert,
             signer_key,
             chain,
-            "now".into(),
-            "7 days".into(),
+            signable_window().0,
+            signable_window().1,
             content_keys,
             out.clone(),
             KdmFormat::Smpte,
             None,
             Some(history.clone()),
             Vec::new(),
+            Default::default(),
         );
         assert_eq!(code, 0, "batch must succeed for every recipient");
 
@@ -604,14 +691,15 @@ mod tests {
             signer_cert,
             signer_key,
             chain,
-            "now".into(),
-            "7 days".into(),
+            signable_window().0,
+            signable_window().1,
             Vec::new(),
             out.clone(),
             KdmFormat::Smpte,
             Some("Release KDM <v2> & final".into()),
             None,
             Vec::new(),
+            Default::default(),
         );
         assert_eq!(code, 0, "annotated KDM must generate");
         let xml = std::fs::read_to_string(&out).unwrap();
@@ -643,14 +731,15 @@ mod tests {
                 signer_cert.clone(),
                 signer_key.clone(),
                 chain.clone(),
-                "now".into(),
-                "7 days".into(),
+                signable_window().0,
+                signable_window().1,
                 Vec::new(),
                 out.clone(),
                 KdmFormat::Smpte,
                 None,
                 None,
                 devices,
+                Default::default(),
             );
             assert_eq!(code, 0, "{name} must generate");
             std::fs::read_to_string(&out).unwrap()
@@ -711,14 +800,15 @@ mod tests {
             signer_cert,
             signer_key,
             chain,
-            "now".into(),
-            "7 days".into(),
+            signable_window().0,
+            signable_window().1,
             content_keys,
             out.clone(),
             KdmFormat::Interop,
             None,
             None,
             Vec::new(),
+            Default::default(),
         );
         assert_eq!(code, 0, "interop KDM generation must succeed");
 

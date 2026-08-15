@@ -1946,6 +1946,7 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             // no --device-cert here: a batch spans cinemas, and one device list
             // shared across them would lock every recipient to someone else's gear
             Vec::new(),
+            Default::default(),
         );
     }
 
@@ -1980,6 +1981,7 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             None,
             history.clone(),
             Vec::new(),
+            Default::default(),
         );
         if code != 0 {
             failures += 1;
@@ -3626,6 +3628,7 @@ fn run() {
                 annotation,
                 Some(history_path(history_file)),
                 device_cert.into_iter().map(PathBuf::from).collect(),
+                Default::default(),
             );
             if code == 0 {
                 if let Some(cfg_path) = smtp_config {
@@ -3666,6 +3669,7 @@ fn run() {
             valid_to,
             PathBuf::from(output),
             device_cert.into_iter().map(PathBuf::from).collect(),
+            Default::default(),
         ),
 
         Commands::Copy { src, dst } => {
@@ -4347,7 +4351,7 @@ fn run() {
                 println!("Key Size:    {} bits", info.key_bits);
                 println!("Is CA:       {}", info.is_ca);
                 println!("Expired:     {}", info.is_expired);
-                println!("Thumbprint:  {}", info.thumbprint_sha1);
+                println!("Thumbprint:  {}", info.thumbprint);
                 0
             }
         },

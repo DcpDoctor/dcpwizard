@@ -131,6 +131,16 @@ fn is_encrypted(mxf: &Path, kind: &str) -> bool {
     info.encrypted_essence
 }
 
+/// A KDM window a chain minted moments ago can sign.
+fn tomorrow_for_seven_days() -> (String, String) {
+    let start = chrono::Utc::now() + chrono::Duration::days(1);
+    let end = start + chrono::Duration::days(7);
+    (
+        start.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+        end.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+    )
+}
+
 /// Generate a signer chain and a KDM covering `content_keys` for `recipient_cert`.
 #[allow(clippy::too_many_arguments)]
 fn make_kdm(
@@ -150,14 +160,17 @@ fn make_kdm(
             chain_dir.join("intermediate.pem"),
             chain_dir.join("root.pem"),
         ],
-        "now".into(),
-        "1 day".into(),
+        // postkit follows libdcp and compares at day granularity, so a chain
+        // minted today cannot sign a window that starts today
+        tomorrow_for_seven_days().0,
+        tomorrow_for_seven_days().1,
         content_keys,
         out.to_path_buf(),
         dcpwizard_core::kdm::KdmFormat::Smpte,
         None,
         None,
         Vec::new(),
+        Default::default(),
     );
     assert_eq!(code, 0, "KDM generation must succeed");
 }

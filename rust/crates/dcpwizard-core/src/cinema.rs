@@ -128,7 +128,7 @@ impl CinemaDb {
             name: name.to_string(),
             cert,
             cert_serial: info.serial,
-            cert_thumbprint: info.thumbprint_sha1,
+            cert_thumbprint: info.thumbprint,
             cert_subject: info.subject_cn,
         })
     }
@@ -217,7 +217,7 @@ impl CinemaDb {
                         name: fs.name.clone(),
                         cert: CertSource::Inline(pem.clone()),
                         cert_serial: info.serial,
-                        cert_thumbprint: info.thumbprint_sha1,
+                        cert_thumbprint: info.thumbprint,
                         cert_subject: info.subject_cn,
                     });
                     break;

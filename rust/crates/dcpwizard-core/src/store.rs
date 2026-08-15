@@ -48,7 +48,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// so an empty thumbprint means "not a valid certificate".
 pub fn cert_info_from_file(path: &Path) -> Result<CertInfo, String> {
     let info = postkit::certificate::read_certificate(path);
-    if info.thumbprint_sha1.is_empty() {
+    if info.thumbprint.is_empty() {
         return Err(format!(
             "{} is not a parseable X.509 certificate",
             path.display()
