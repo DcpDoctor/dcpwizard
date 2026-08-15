@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **3D encoded at twice the requested bit rate** — `create --right-eye` encoded both eyes at the full `--video-bit-rate`, so the delivered stereoscopic track ran at double the requested rate (500 Mbps for `--video-bit-rate 250`) and could breach the DCI cap. The ceiling covers the whole stereoscopic track, so each eye now gets half the budget, as libdcp does
+
 ## [1.2.0] - 2026-08-13
 
 ### Added

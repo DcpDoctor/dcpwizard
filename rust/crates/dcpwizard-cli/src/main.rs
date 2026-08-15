@@ -2786,13 +2786,15 @@ fn run() {
                     );
                 }
 
-                // Compute compression ratio from bitrate if specified
-                let compression_ratio = match video_bit_rate {
-                    Some(mbps) => {
-                        dcpwizard_core::encode::bandwidth_to_ratio(width, height, fps, mbps)
-                    }
-                    None => 10.0,
-                };
+                // Compute compression ratio from bitrate if specified. Both eyes
+                // of a 3D encode use these params, so the 3D budget is split here.
+                let compression_ratio = dcpwizard_core::encode::video_compression_ratio(
+                    width,
+                    height,
+                    fps,
+                    video_bit_rate,
+                    right_eye.is_some(),
+                );
 
                 let _num_threads = threads.unwrap_or(0); // reserved for future use
 

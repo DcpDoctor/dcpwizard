@@ -26,6 +26,37 @@ pub fn bandwidth_to_ratio(width: u32, height: u32, fps: u32, mbps: u32) -> f64 {
     (raw_bits / target_bits).max(1.0)
 }
 
+/// Compression ratio used when no target bandwidth is given: 10:1 is the
+/// conventional visually-lossless DCI mastering ratio.
+pub const DEFAULT_COMPRESSION_RATIO: f64 = 10.0;
+
+/// Eyes sharing one stereoscopic (ST 429-10) picture track. DCI DCSS 4.3.1 caps
+/// the picture bit rate for the whole track, both eyes together, so each eye
+/// gets half the budget (libdcp halves max_cs_size the same way).
+const STEREOSCOPIC_EYES: f64 = 2.0;
+
+/// Compression ratio for a video encode at `width`x`height`/`fps`. A higher
+/// ratio is a smaller codestream, so halving a 3D encode's per-eye budget means
+/// doubling its ratio: both eyes are encoded with these parameters and the cap
+/// covers their sum.
+pub fn video_compression_ratio(
+    width: u32,
+    height: u32,
+    fps: u32,
+    mbps: Option<u32>,
+    stereoscopic: bool,
+) -> f64 {
+    let ratio = match mbps {
+        Some(mbps) => bandwidth_to_ratio(width, height, fps, mbps),
+        None => DEFAULT_COMPRESSION_RATIO,
+    };
+    if stereoscopic {
+        ratio * STEREOSCOPIC_EYES
+    } else {
+        ratio
+    }
+}
+
 /// Encode image sequence to JPEG 2000 using in-process Grok FFI pipeline.
 pub fn encode_j2k(config: &EncodeConfig) -> i32 {
     let mut frames: Vec<PathBuf> = std::fs::read_dir(&config.input_dir)
@@ -53,7 +84,7 @@ pub fn encode_j2k(config: &EncodeConfig) -> i32 {
         let uncompressed_mbps = 2048.0 * 1080.0 * 3.0 * 12.0 * 24.0 / 1_000_000.0;
         uncompressed_mbps / config.bandwidth_mbps as f64
     } else {
-        10.0
+        DEFAULT_COMPRESSION_RATIO
     };
 
     let params = CompressParams {
@@ -142,5 +173,31 @@ mod tests {
         // doubling fps halves per-frame budget, doubling the ratio
         let hfr = bandwidth_to_ratio(2048, 1080, 48, 250);
         assert!((hfr / two_k - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn stereoscopic_splits_the_bit_rate_between_the_eyes() {
+        // both eyes are encoded with these parameters, so a 3D encode at the
+        // requested 250 Mbps must give each eye a 125 Mbps budget: the ratio is
+        // exactly the one a 2D encode at half the bandwidth would get.
+        let flat = video_compression_ratio(2048, 1080, 24, Some(250), false);
+        let per_eye = video_compression_ratio(2048, 1080, 24, Some(250), true);
+        assert!(
+            (per_eye / flat - 2.0).abs() < 1e-9,
+            "3D must halve the per-eye budget: flat {flat}, per eye {per_eye}"
+        );
+        assert!((per_eye - bandwidth_to_ratio(2048, 1080, 24, 125)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stereoscopic_halves_the_default_ratio_budget_too() {
+        assert_eq!(
+            video_compression_ratio(2048, 1080, 24, None, false),
+            DEFAULT_COMPRESSION_RATIO
+        );
+        assert_eq!(
+            video_compression_ratio(2048, 1080, 24, None, true),
+            DEFAULT_COMPRESSION_RATIO * 2.0
+        );
     }
 }
