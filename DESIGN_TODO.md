@@ -32,6 +32,18 @@ user-facing surface is here.
   references collapse onto the submodule this workspace already builds. The
   edit-the-submodule-and-rebuild loop is unchanged and `cargo tree -d` reports no
   postkit duplicate. imfwizard has the same shape.
+- Encrypted timed text and Atmos (PK mxf_wrap.rs): `wrap_timed_text` and
+  `wrap_atmos` never call `setup_encryption` and pass no AES/HMAC contexts to the
+  writers, though asdcplib-rs takes them on `write_timed_text_resource`,
+  `write_ancillary_resource` and the Atmos `write_frame`. Until that lands,
+  `--encrypt` refuses a package carrying a subtitle, closed-caption or Atmos track
+  (CORE/encrypt.rs `check_encryptable_tracks`). Then: an MDSK key type for timed
+  text, the key ids into the CPL/AuxData and the keys file, and a KDM covering them.
+- Automatic source fitting for `create --twok/--fourk` (PK grok_encoder.rs): the
+  ffmpeg decode has no scale/pad filter, so the source raster must already equal the
+  encode raster and a mismatch is refused (CORE/encode.rs `check_encode_raster`).
+  Fitting means scaling to the container preserving aspect and padding with black in
+  the decode command, then dropping the guard.
 - Distributed encoding across machines (dom#155, dom#1635, dom#2605). Out of scope
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is
