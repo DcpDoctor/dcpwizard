@@ -203,10 +203,17 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         ranges.len()
     );
 
-    let (pic_w, pic_h) = if config.container_width > 0 && config.container_height > 0 {
-        (config.container_width, config.container_height)
-    } else {
-        (config.resolution.width(), config.resolution.height())
+    // the CPL declares the raster the encoder produced, shared by every version
+    let geometry = match crate::cpl::picture_geometry(
+        j2k_dir,
+        config.container_width,
+        config.container_height,
+    ) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("{e}");
+            return -1;
+        }
     };
 
     let mut pkl_entries = Vec::new();
@@ -599,8 +606,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             cpl_reels.push(crate::cpl::CplReel {
                 reel_id: uuid::Uuid::new_v4().to_string(),
                 picture_id: ess.picture_uuid.clone(),
-                picture_width: pic_w,
-                picture_height: pic_h,
+                picture_width: geometry.stored_width,
+                picture_height: geometry.stored_height,
+                picture_active_width: geometry.active_width,
+                picture_active_height: geometry.active_height,
                 picture_edit_rate_num: fps,
                 picture_edit_rate_den: 1,
                 picture_duration: ess.reel_frames,

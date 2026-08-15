@@ -24,7 +24,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Frame rates** 24, 25, 30 fps (2K/4K); HFR 48, 50, 60, 96, 100, 120 fps (2K only)
 - **Reel splitting** via `create --reel-length <minutes>` (multi-reel CPL, sample-accurate audio and per-reel subtitle boundaries)
 - **Explicit reel splits** via `create --split-at <tc>[,<tc>...]` (HH:MM:SS or HH:MM:SS:FF) or `create --split-chapters` (source chapter marks via ffprobe)
-- **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound)
+- **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): declares the active area a projector masks to. The CPL's stored area and aspect always come from the coded raster the encoder produced, so a container larger than the frames is refused
 - **Head/tail padding** via `create --pad-head <dur> --pad-tail <dur>` (`48f`/`2s`), with `--pad-color <RRGGBB>` for a filled pad instead of black
 - **Input decode range** override via `create --input-range full|legal`, correcting wrong or absent source range flags
 - **High Bitrate (HBR)**, up to 500 Mbps for demanding content

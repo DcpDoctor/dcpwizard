@@ -383,10 +383,17 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         &config.ccap_language
     };
 
-    let (pic_w, pic_h) = if config.container_width > 0 && config.container_height > 0 {
-        (config.container_width, config.container_height)
-    } else {
-        (config.resolution.width(), config.resolution.height())
+    // every reel is cut from the same encode, so one geometry read covers them all
+    let geometry = match crate::cpl::picture_geometry(
+        j2k_dir,
+        config.container_width,
+        config.container_height,
+    ) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("{e}");
+            return -1;
+        }
     };
 
     let mut cpl_reels = Vec::new();
@@ -585,8 +592,10 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         cpl_reels.push(crate::cpl::CplReel {
             reel_id: uuid::Uuid::new_v4().to_string(),
             picture_id: picture_uuid.to_string(),
-            picture_width: pic_w,
-            picture_height: pic_h,
+            picture_width: geometry.stored_width,
+            picture_height: geometry.stored_height,
+            picture_active_width: geometry.active_width,
+            picture_active_height: geometry.active_height,
             picture_edit_rate_num: fps,
             picture_edit_rate_den: 1,
             picture_duration: reel_frames,

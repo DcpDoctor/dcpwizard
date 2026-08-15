@@ -16,8 +16,9 @@ pub struct DcpConfig {
     /// encryption; keys are never written next to the DCP by default.
     pub key_out: Option<PathBuf>,
     pub stereo_3d: bool,
-    /// Explicit CPL container dimensions (e.g. 2048x858 scope, 1998x1080 flat).
-    /// Zero falls back to the `resolution` preset (full-container 2K/4K).
+    /// Container the picture is masked to (e.g. 2048x858 scope, 1998x1080 flat),
+    /// declared as the CPL's active area. Zero means the whole coded raster is
+    /// active. It can never exceed the raster the encoder produced.
     pub container_width: u32,
     pub container_height: u32,
     pub output_dir: PathBuf,
@@ -122,24 +123,6 @@ pub fn validate_container_dims(width: u32, height: u32, is_4k: bool) -> Result<(
 
 /// Dolby Atmos IAB bitstream data-essence UL, as used in real Atmos DCP AuxData.
 const ATMOS_DATA_TYPE_UL: &str = "urn:smpte:ul:060e2b34.04010105.0e090604.00000000";
-
-/// Sorted J2K codestream paths in a directory (frame order).
-fn sorted_j2k_frames(dir: &std::path::Path) -> Vec<PathBuf> {
-    let mut frames: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|x| x.to_str())
-                .map(|x| x.to_ascii_lowercase())
-                .is_some_and(|x| x == "j2c" || x == "j2k")
-        })
-        .collect();
-    frames.sort();
-    frames
-}
 
 /// Wrap a timed-text input into an MXF: SRT/styled formats are converted to
 /// DCST (cues shifted by `head_frames`, fonts/PNGs embedded), a supplied SMPTE
@@ -493,7 +476,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     };
 
     {
-        let left_frames = sorted_j2k_frames(j2k_dir);
+        let left_frames = crate::reel::collect_frames(j2k_dir);
         let content_count = left_frames.len() as u64;
         if content_count == 0 {
             tracing::error!("J2K input directory contains no codestreams");
@@ -565,7 +548,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             picture_duration = content_count;
             // left eye is j2k_dir, right eye its own dir; both must match frame counts
             let right_dir = config.right_eye_dir.as_ref().unwrap();
-            let right_frames = sorted_j2k_frames(right_dir);
+            let right_frames = crate::reel::collect_frames(right_dir);
             if right_frames.len() as u64 != picture_duration {
                 tracing::error!(
                     "3D eye frame count mismatch: left={picture_duration}, right={}",
@@ -594,7 +577,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else if config.hdr_dci {
             picture_duration = content_count;
             if crate::mxf_wrap::wrap_j2k_hdr_files(
-                sorted_j2k_frames(j2k_dir),
+                crate::reel::collect_frames(j2k_dir),
                 &picture_mxf_path,
                 fps,
                 encryption,
@@ -920,11 +903,18 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let cpl_uuid = uuid::Uuid::new_v4().to_string();
     let pkl_uuid = uuid::Uuid::new_v4().to_string();
 
-    // honour an explicit scope/flat container; else the full-container preset
-    let (pic_w, pic_h) = if config.container_width > 0 && config.container_height > 0 {
-        (config.container_width, config.container_height)
-    } else {
-        (config.resolution.width(), config.resolution.height())
+    // the CPL declares the raster the encoder produced; the container is the
+    // active area inside it
+    let geometry = match crate::cpl::picture_geometry(
+        j2k_dir,
+        config.container_width,
+        config.container_height,
+    ) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("{e}");
+            return -1;
+        }
     };
 
     let markers =
@@ -939,8 +929,10 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let reel = crate::cpl::CplReel {
         reel_id: uuid::Uuid::new_v4().to_string(),
         picture_id: picture_uuid.to_string(),
-        picture_width: pic_w,
-        picture_height: pic_h,
+        picture_width: geometry.stored_width,
+        picture_height: geometry.stored_height,
+        picture_active_width: geometry.active_width,
+        picture_active_height: geometry.active_height,
         picture_edit_rate_num: fps,
         picture_edit_rate_den: 1,
         picture_duration,

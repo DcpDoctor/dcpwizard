@@ -33,8 +33,17 @@ pub struct MainSound {
 pub struct CplReel {
     pub reel_id: String,
     pub picture_id: String,
+    /// Coded raster of the picture essence: how big the frames are. Declared as
+    /// MainPictureStoredArea and as the ScreenAspectRatio, and it must match the
+    /// AspectRatio the picture MXF carries. Never a container preset.
     pub picture_width: u32,
     pub picture_height: u32,
+    /// Active image rectangle inside the coded raster: what a projector masks to.
+    /// Zero means the whole coded raster is active. Never larger than it.
+    #[serde(default)]
+    pub picture_active_width: u32,
+    #[serde(default)]
+    pub picture_active_height: u32,
     pub picture_edit_rate_num: u32,
     pub picture_edit_rate_den: u32,
     pub picture_duration: u64,
@@ -81,6 +90,17 @@ pub struct CplReel {
     pub markers: Vec<crate::markers::MarkerEntry>,
 }
 
+impl CplReel {
+    /// The active image rectangle, defaulting to the whole coded raster.
+    pub fn active_area(&self) -> (u32, u32) {
+        if self.picture_active_width > 0 && self.picture_active_height > 0 {
+            (self.picture_active_width, self.picture_active_height)
+        } else {
+            (self.picture_width, self.picture_height)
+        }
+    }
+}
+
 /// Auxiliary-data (ST 429-18) track for a CPL reel.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuxData {
@@ -92,6 +112,73 @@ pub struct AuxData {
     pub key_id: Option<String>,
     /// SMPTE data-essence UL (e.g. Dolby Atmos IAB bitstream).
     pub data_type: String,
+}
+
+/// The picture geometry a CPL declares for one composition.
+///
+/// `stored` is the coded raster the encoder actually produced, read back from the
+/// codestream: MainPictureStoredArea and ScreenAspectRatio declare it, and it is
+/// the ratio the picture MXF descriptor carries. `active` is the image rectangle
+/// inside it that a projector masks to, from `--container` / `--container-dims`.
+/// Active defaults to the whole coded raster and can never exceed it (ST 429-16,
+/// libdcp INVALID_MAIN_PICTURE_ACTIVE_AREA).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PictureGeometry {
+    pub stored_width: u32,
+    pub stored_height: u32,
+    pub active_width: u32,
+    pub active_height: u32,
+}
+
+/// Read the coded raster from the first codestream in `j2k_dir` and pair it with
+/// the requested container. A CPL declares the essence that was written, so an
+/// unreadable codestream is an error here rather than a fall back to a preset.
+pub fn picture_geometry(
+    j2k_dir: &Path,
+    container_width: u32,
+    container_height: u32,
+) -> Result<PictureGeometry, String> {
+    let frame = crate::reel::collect_frames(j2k_dir)
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no J2K codestream in {}", j2k_dir.display()))?;
+    let (stored_width, stored_height) = crate::pad::read_j2k_dimensions(&frame)?;
+    let (active_width, active_height) = if container_width > 0 && container_height > 0 {
+        (container_width, container_height)
+    } else {
+        (stored_width, stored_height)
+    };
+    if active_width > stored_width || active_height > stored_height {
+        return Err(format!(
+            "container {active_width}x{active_height} is larger than the \
+             {stored_width}x{stored_height} picture the encoder produced: the CPL would \
+             declare an active area the essence does not have. Encode at the container \
+             size, or pick a container that fits inside the frames"
+        ));
+    }
+    Ok(PictureGeometry {
+        stored_width,
+        stored_height,
+        active_width,
+        active_height,
+    })
+}
+
+/// The active area a CPL declares, when it carries a CompositionMetadataAsset.
+/// Used by the paths that rebuild a CPL from an existing package, so a masked
+/// composition keeps its masking.
+pub fn active_area_from_cpl(cpl_xml: &str) -> Option<(u32, u32)> {
+    let doc = roxmltree::Document::parse(cpl_xml).ok()?;
+    let area = doc
+        .descendants()
+        .find(|n| n.has_tag_name("MainPictureActiveArea"))?;
+    let edge = |name: &str| -> Option<u32> {
+        area.descendants()
+            .find(|n| n.has_tag_name(name))
+            .and_then(|n| n.text())
+            .and_then(|t| t.trim().parse().ok())
+    };
+    Some((edge("Width")?, edge("Height")?))
 }
 
 /// Generate a Composition Playlist XML via the shared postkit writer.
@@ -313,14 +400,13 @@ fn composition_metadata_block(config: &CplConfig, reel: &CplReel, sound: &MainSo
         reel.picture_height
     ));
     b.push_str("          </meta:MainPictureStoredArea>\n");
+    let (active_width, active_height) = reel.active_area();
     b.push_str("          <meta:MainPictureActiveArea>\n");
     b.push_str(&format!(
-        "            <meta:Width>{}</meta:Width>\n",
-        reel.picture_width
+        "            <meta:Width>{active_width}</meta:Width>\n"
     ));
     b.push_str(&format!(
-        "            <meta:Height>{}</meta:Height>\n",
-        reel.picture_height
+        "            <meta:Height>{active_height}</meta:Height>\n"
     ));
     b.push_str("          </meta:MainPictureActiveArea>\n");
     if let Some(ref lang) = reel.subtitle_language {

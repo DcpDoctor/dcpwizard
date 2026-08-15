@@ -110,6 +110,10 @@ pub fn create_vf(config: &VfConfig) -> i32 {
     };
     // vf inherits the ov's picture dimensions (reel coherence keeps them uniform).
     let (pic_w, pic_h) = parse_screen_aspect(&ov_cpl_content);
+    // keep the OV's masking: without this a VF over a letterboxed OV would
+    // declare the whole raster active
+    let (active_w, active_h) =
+        crate::cpl::active_area_from_cpl(&ov_cpl_content).unwrap_or((pic_w, pic_h));
 
     let mut cpl_reels: Vec<crate::cpl::CplReel> = Vec::new();
     let mut new_assets: Vec<NewAsset> = Vec::new();
@@ -210,6 +214,8 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             picture_id,
             picture_width: pic_w,
             picture_height: pic_h,
+            picture_active_width: active_w,
+            picture_active_height: active_h,
             picture_edit_rate_num: edit_num,
             picture_edit_rate_den: edit_den,
             picture_duration,
