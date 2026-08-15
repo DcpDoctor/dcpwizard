@@ -121,10 +121,25 @@ mod tests {
     #[test]
     fn a_volume_reports_available_within_total() {
         let dir = tempfile::tempdir().unwrap();
+        // one reading, so the two numbers describe the same instant: a mounted
+        // filesystem has a size, and what a user may still write is part of it.
+        // Two readings can never be compared for equality, since anything else
+        // writing to the volume moves the available figure between the calls.
         let (available, total) = volume_bytes(dir.path()).unwrap();
-        assert!(total > 0);
+        assert!(total > 0, "a mounted filesystem has a size");
         assert!(available <= total, "{available} > {total}");
-        assert_eq!(available_bytes(dir.path()).unwrap(), available);
+        assert!(available_bytes(dir.path()).unwrap() <= total);
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_directory");
+        assert!(volume_bytes(&missing).is_err());
+        assert!(available_bytes(&missing).is_err());
+        // the caller keeps going when the volume cannot be read: refusing a write
+        // over a failed stat would block more than it protects
+        assert!(check_destination_space(&missing, u64::MAX).is_ok());
     }
 
     #[test]
