@@ -273,3 +273,75 @@ fn create_rejects_a_key_that_does_not_match_the_certificate() {
         .stdout(predicate::str::contains("does not match"));
     assert!(!out.exists(), "a bad signer must stop before any output");
 }
+
+// ── create raster fitting ───────────────────────────────────────────────────
+
+/// A few frames of colour bars at `width`x`height`, 24 fps, as an mp4.
+fn write_test_video(path: &std::path::Path, width: u32, height: u32) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-y", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "testsrc=size={width}x{height}:rate=24:duration=0.25"
+        ))
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("ffmpeg must be installed to build the test source");
+    assert!(status.success(), "ffmpeg failed to write the test source");
+}
+
+#[test]
+fn create_refuses_a_source_that_is_not_the_forced_container_raster() {
+    let dir = TempDir::new().unwrap();
+    // a flat master: 1998 wide, so --twok would read 2048-wide frames out of it
+    let video = dir.path().join("flat.mp4");
+    write_test_video(&video, 1998, 1080);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--twok",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("1998x1080").and(predicate::str::contains("2048x1080")));
+}
+
+#[test]
+fn create_encodes_a_source_that_already_is_the_forced_container_raster() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("full.mp4");
+    write_test_video(&video, 2048, 1080);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--twok",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("encode raster").not());
+    assert!(
+        std::fs::read_dir(&out)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("CPL_")),
+        "a matching source must still produce a package"
+    );
+}

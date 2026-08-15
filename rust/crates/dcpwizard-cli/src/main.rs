@@ -2767,12 +2767,22 @@ fn run() {
                 }
 
                 // Apply resolution override
-                if fourk {
-                    width = 4096;
-                    height = 2160;
-                } else if twok {
-                    width = 2048;
-                    height = 1080;
+                let (source_width, source_height) = (width, height);
+                if let Some(forced) = fourk
+                    .then_some(dcpwizard_core::Resolution::FourK)
+                    .or(twok.then_some(dcpwizard_core::Resolution::TwoK))
+                {
+                    width = forced.width();
+                    height = forced.height();
+                }
+                if let Err(e) = dcpwizard_core::encode::check_encode_raster(
+                    source_width,
+                    source_height,
+                    width,
+                    height,
+                ) {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
                 }
 
                 if let Some(ref info) = video_info {

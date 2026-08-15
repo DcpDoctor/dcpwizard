@@ -57,6 +57,32 @@ pub fn video_compression_ratio(
     }
 }
 
+/// Refuse a video encode whose source raster is not the raster the encoder will
+/// read. The pipeline decodes with ffmpeg and slices its raw output into
+/// width*height frames with no scaling filter, so any other source size is read
+/// misaligned and the CPL then declares a size the J2K frames do not have.
+///
+/// TODO: fit the source automatically instead (scale preserving aspect, pad to
+/// the container with black); that needs the scale/pad filter in postkit's
+/// ffmpeg invocation.
+pub fn check_encode_raster(
+    source_width: u32,
+    source_height: u32,
+    encode_width: u32,
+    encode_height: u32,
+) -> Result<(), String> {
+    if (source_width, source_height) == (encode_width, encode_height) {
+        return Ok(());
+    }
+    Err(format!(
+        "source is {source_width}x{source_height} but the encode raster is \
+         {encode_width}x{encode_height}; the encoder reads the source raster and does not \
+         scale. Fit the source first, e.g. `dcpwizard convert -i <source> -o <fitted> \
+         --target <container> --method letterbox`, or drop --twok/--fourk to encode at \
+         {source_width}x{source_height}"
+    ))
+}
+
 /// Encode image sequence to JPEG 2000 using in-process Grok FFI pipeline.
 pub fn encode_j2k(config: &EncodeConfig) -> i32 {
     let mut frames: Vec<PathBuf> = std::fs::read_dir(&config.input_dir)
@@ -173,6 +199,24 @@ mod tests {
         // doubling fps halves per-frame budget, doubling the ratio
         let hfr = bandwidth_to_ratio(2048, 1080, 48, 250);
         assert!((hfr / two_k - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_source_that_is_not_the_encode_raster_is_refused() {
+        // 1998x1080 flat master with --twok: the frames are not 2048 wide, so
+        // reading them as 2048x1080 shears every frame
+        let err = check_encode_raster(1998, 1080, 2048, 1080).unwrap_err();
+        assert!(err.contains("1998x1080"), "must name the source: {err}");
+        assert!(
+            err.contains("2048x1080"),
+            "must name the encode raster: {err}"
+        );
+    }
+
+    #[test]
+    fn a_source_that_matches_the_encode_raster_passes() {
+        assert!(check_encode_raster(2048, 1080, 2048, 1080).is_ok());
+        assert!(check_encode_raster(4096, 2160, 4096, 2160).is_ok());
     }
 
     #[test]
