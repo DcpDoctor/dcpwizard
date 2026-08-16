@@ -29,6 +29,12 @@ fn make_frames(dir: &Path, count: usize) {
     std::fs::remove_file(&seed).unwrap();
 }
 
+/// A font in the repo, so these packages do not depend on what faces the machine
+/// running the test carries.
+fn fixture_font() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/LiberationSans-Regular.ttf")
+}
+
 fn base(out: &Path, j2k: PathBuf, sub: PathBuf, opts: SubtitleOptions) -> DcpConfig {
     DcpConfig {
         title: "Subs".into(),
@@ -66,6 +72,7 @@ fn ass_dcst_validates_against_st428_7_schema() {
     let opts = SubtitleOptions {
         valign: Some("top".into()),
         wrap_cols: Some(6),
+        font_path: Some(fixture_font()),
         ..Default::default()
     };
     let prepared = dcpwizard_core::subtitle::prepare_subtitle_track(
@@ -103,48 +110,16 @@ fn create_dcp_with_ass_subtitles_is_dcpdoctor_clean() {
     let out = dir.path().join("dcp");
     let opts = SubtitleOptions {
         rtl: RtlMode::Auto,
+        font_path: Some(fixture_font()),
         ..Default::default()
     };
     assert_eq!(create_dcp(&base(&out, j2k, ass, opts)), 0);
     verify_clean(&out);
 }
 
-/// Find a known glyf+Unicode-cmap TTF (subsettable). Restricting to these
-/// families avoids CFF/symbol fonts the subsetter rejects.
-fn find_ttf() -> Option<PathBuf> {
-    const GOOD: &[&str] = &[
-        "DejaVuSans",
-        "LiberationSans-Regular",
-        "NotoSans-Regular",
-        "FreeSans",
-        "Arial",
-    ];
-    let mut stack = vec![PathBuf::from("/usr/share/fonts")];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
-                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if GOOD.contains(&stem) {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
-}
-
 #[test]
 fn create_dcp_with_embedded_subset_font_is_dcpdoctor_clean() {
-    let Some(font) = find_ttf() else {
-        eprintln!("skipping: no usable .ttf under /usr/share/fonts");
-        return;
-    };
+    let font = fixture_font();
     let dir = tempfile::tempdir().unwrap();
     let j2k = dir.path().join("j2k");
     make_frames(&j2k, 48);
@@ -161,10 +136,7 @@ fn create_dcp_with_embedded_subset_font_is_dcpdoctor_clean() {
 
 #[test]
 fn reel_split_shares_embedded_font_across_reels() {
-    let Some(font) = find_ttf() else {
-        eprintln!("skipping: no usable .ttf under /usr/share/fonts");
-        return;
-    };
+    let font = fixture_font();
     let dir = tempfile::tempdir().unwrap();
     let j2k = dir.path().join("j2k");
     make_frames(&j2k, 48);
@@ -245,6 +217,7 @@ fn a_named_appearance_reaches_the_packaged_timed_text_mxf() {
             Some(200),
         )
         .unwrap(),
+        font_path: Some(fixture_font()),
         ..Default::default()
     };
     assert_eq!(create_dcp(&base(&out, j2k, srt, opts)), 0);
@@ -283,6 +256,10 @@ fn a_named_appearance_reaches_the_packaged_timed_text_mxf() {
 /// form, the second namespace, and the CPL Hash on the subtitle asset.
 #[test]
 fn create_dcp_with_no_named_font_clears_the_timed_text_findings() {
+    if postkit::subtitle_raster::find_system_sans_font().is_none() {
+        eprintln!("skipping: this machine carries no system sans font");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let j2k = dir.path().join("j2k");
     std::fs::create_dir_all(&j2k).unwrap();

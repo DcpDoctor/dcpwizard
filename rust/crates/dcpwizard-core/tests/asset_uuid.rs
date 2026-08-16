@@ -246,6 +246,11 @@ fn every_track_file_id_agrees_on_the_main_create_path() {
     let mut config = base_config(&out, j2k);
     config.audio_path = Some(wav);
     config.subtitle_path = Some(srt);
+    // a font in the repo, so the package does not depend on the machine's
+    config.subtitle_opts.font_path = Some(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/LiberationSans-Regular.ttf"),
+    );
     config.ccap_path = Some(ccap);
     assert_eq!(dcpwizard_core::dcp::create_dcp(&config), 0, "create DCP");
 

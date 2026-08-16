@@ -77,6 +77,9 @@ fn mxf_names(dir: &Path) -> Vec<String> {
 // Reel splitting must emit a MainClosedCaption per reel, alongside the picture.
 #[test]
 fn multi_reel_carries_closed_captions() {
+    if no_system_font() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 48);
@@ -127,6 +130,9 @@ fn multi_reel_carries_closed_captions() {
 // A version with a ccap track emits MainClosedCaption in its CPL.
 #[test]
 fn version_carries_closed_captions() {
+    if no_system_font() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 24);
@@ -165,6 +171,9 @@ fn version_carries_closed_captions() {
 // A VF that adds a ccap track references the OV picture and ships one ccap MXF.
 #[test]
 fn vf_adds_closed_caption_track() {
+    if no_system_font() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let ov_j2k = root.path().join("ov_j2k");
     make_content_frames(&ov_j2k, 24);
@@ -212,4 +221,14 @@ fn vf_adds_closed_caption_track() {
         .filter(|n| n.starts_with("ccap_"))
         .collect();
     assert_eq!(ccap_mxfs.len(), 1, "VF ships one ccap MXF: {ccap_mxfs:?}");
+}
+
+/// A packaged text track has to embed a font, and the paths these tests exercise
+/// take no `--subtitle-font`, so they need a face on the machine running them.
+fn no_system_font() -> bool {
+    if postkit::subtitle_raster::find_system_sans_font().is_none() {
+        eprintln!("skipping: this machine carries no system sans font");
+        return true;
+    }
+    false
 }

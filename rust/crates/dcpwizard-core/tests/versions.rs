@@ -183,6 +183,9 @@ fn pkl_count(dir: &Path) -> usize {
 
 #[test]
 fn two_versions_share_essence_and_validate() {
+    if no_system_font() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 48);
@@ -246,6 +249,9 @@ fn two_versions_share_essence_and_validate() {
 
 #[test]
 fn multi_reel_versions_share_picture_per_reel() {
+    if no_system_font() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     // 1 minute = 1440 frames per reel; 1470 forces two reels (30-frame tail)
@@ -277,8 +283,8 @@ fn multi_reel_versions_share_picture_per_reel() {
         assert_eq!(a[r].sound, b[r].sound, "reel {r} sound shared");
     }
 
-    // both cues sit in reel 1, so reel 2 carries an empty document; every reel of
-    // a subtitled composition still has to carry a subtitle spanning it
+    // both cues sit in reel 1, so reel 2 carries the placeholder; every reel of a
+    // subtitled composition has to carry a subtitle spanning it
     for reels in [&a, &b] {
         for (index, reel) in reels.iter().enumerate() {
             let subtitle = reel
@@ -303,19 +309,20 @@ fn multi_reel_versions_share_picture_per_reel() {
                 "reel {} essence spans the reel",
                 index + 1
             );
-            if index == 0 {
-                assert!(
-                    asset.xml.contains("<dcst:Subtitle "),
-                    "reel 1 carries the cue: {}",
-                    asset.xml
-                );
-            } else {
-                assert!(
-                    asset.xml.contains("<dcst:SubtitleList/>"),
-                    "reel 2 document is empty: {}",
-                    asset.xml
-                );
-            }
+            assert_eq!(
+                asset.xml.matches("<dcst:Subtitle ").count(),
+                1,
+                "reel {} carries one cue",
+                index + 1
+            );
+            let placeholder = asset.xml.contains("> </dcst:Text>");
+            assert_eq!(
+                placeholder,
+                index > 0,
+                "reel {} placeholder: {}",
+                index + 1,
+                asset.xml
+            );
         }
     }
 
@@ -428,4 +435,14 @@ fn per_version_audio_overrides_base_sound() {
 
     let result = dcpwizard_core::verify::verify_dcp(&out);
     assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
+}
+
+/// A packaged text track has to embed a font, and the paths these tests exercise
+/// take no `--subtitle-font`, so they need a face on the machine running them.
+fn no_system_font() -> bool {
+    if postkit::subtitle_raster::find_system_sans_font().is_none() {
+        eprintln!("skipping: this machine carries no system sans font");
+        return true;
+    }
+    false
 }

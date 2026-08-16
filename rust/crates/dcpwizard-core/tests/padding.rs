@@ -140,6 +140,9 @@ fn tail_only_padding_grows_picture_but_not_head() {
 
 #[test]
 fn head_padding_shifts_srt_cues() {
+    if no_system_font() {
+        return;
+    }
     // direct proof: a cue at 00:00:01,000 (frame 24 at 24fps) shifted by 2 frames
     // of head padding lands at frame 26 = 00:00:01:02.
     let dir = tempfile::tempdir().unwrap();
@@ -176,6 +179,14 @@ fn head_padding_with_srt_shifts_subtitle_track_end() {
         j2k_dir: Some(content),
         subtitle_path: Some(srt),
         subtitle_language: "en".into(),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            // a font in the repo, so the package does not depend on the machine's
+            font_path: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
         pad_head: Some("2f".into()),
         ..Default::default()
     };
@@ -251,4 +262,14 @@ fn unpadded_content_matches_expected_frame_math() {
     assert_eq!(create_dcp(&config), 0);
     let cpl = read_cpl(&out);
     assert!(cpl.contains("<Duration>5</Duration>"), "{cpl}");
+}
+
+/// A packaged text track has to embed a font, and the paths these tests exercise
+/// take no `--subtitle-font`, so they need a face on the machine running them.
+fn no_system_font() -> bool {
+    if postkit::subtitle_raster::find_system_sans_font().is_none() {
+        eprintln!("skipping: this machine carries no system sans font");
+        return true;
+    }
+    false
 }

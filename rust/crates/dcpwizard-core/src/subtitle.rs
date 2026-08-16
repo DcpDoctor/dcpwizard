@@ -23,6 +23,13 @@ const DCST_START_TIME: &str = "00:00:00:00";
 /// what Deluxe QC accepts and libdcp warns about.
 const DCST_ISSUE_DATE_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
+/// What a reel with nothing to show says: a space, which draws nothing but is
+/// still a cue, so the document has the `Subtitle` element ST 428-7 requires.
+const PLACEHOLDER_CUE_TEXT: &str = " ";
+
+/// How long the placeholder cue runs from the reel start.
+const PLACEHOLDER_CUE_SECONDS: u64 = 1;
+
 /// What a text subtitle track says when this machine has no font to embed.
 const NO_FONT_TO_EMBED: &str =
     "no font to embed for the subtitle track: install one or pass --subtitle-font";
@@ -470,17 +477,14 @@ pub fn prepare_subtitle_track(
 /// and gives the subsetter glyphs to keep. A bitmap-only track has neither.
 fn cues_have_text(cues: &[StyledCue]) -> bool {
     cues.iter()
-        .any(|c| c.image.is_none() && !c.plain_text().trim().is_empty())
+        .any(|c| c.image.is_none() && !c.plain_text().is_empty())
 }
 
 /// The font file a track embeds: the caller's, or a system sans face found the
-/// way the burn rasteriser finds one. `None` for a track with no cues or no text
-/// at all. A text track with no font anywhere is refused, because a `Font` naming
-/// a face the package does not carry is what players fall back from.
+/// way the burn rasteriser finds one. `None` only for a track with no text at
+/// all. A text track with no font anywhere is refused, because a `Font` naming a
+/// face the package does not carry is what players fall back from.
 fn font_to_embed(opts: &SubtitleOptions, cues: &[StyledCue]) -> Result<Option<PathBuf>, String> {
-    if cues.is_empty() {
-        return Ok(None);
-    }
     if let Some(path) = opts.font_path.as_ref() {
         return Ok(Some(path.clone()));
     }
@@ -942,6 +946,24 @@ pub fn write_dcst_frames(
     write_dcst_styled(&styled, lang, fps, &SubtitleOptions::default(), 0, out)
 }
 
+/// The cues a reel of a subtitled composition carries when none of its own fall
+/// inside it: one space at the reel start, one second long. ST 428-7 has no
+/// document without a cue in it, and a composition with subtitles needs a track
+/// on every reel, so this is the placeholder DCP-o-matic writes for such a reel.
+pub fn placeholder_cues(fps: u32) -> Vec<SubCue> {
+    let rate = fps.max(1) as u64;
+    vec![SubCue {
+        start_frame: 0,
+        end_frame: rate * PLACEHOLDER_CUE_SECONDS,
+        text: PLACEHOLDER_CUE_TEXT.to_string(),
+    }]
+}
+
+/// [`placeholder_cues`] for the callers that work in styled cues.
+pub fn placeholder_styled_cues(fps: u32) -> Vec<StyledCue> {
+    styled_from_frames(&placeholder_cues(fps), fps)
+}
+
 /// Frame-based cues as styled cues. The millisecond time rounds up, so the
 /// renderer's own truncating conversion back to frames at the same rate lands on
 /// the frame the cue came from.
@@ -1241,13 +1263,6 @@ fn render_dcst_styled(
             uuid::Uuid::from_bytes(id).hyphenated()
         ));
     }
-    if cues.is_empty() {
-        // ST 428-7 wants a SubtitleList child, but libdcp writes this for a reel
-        // with no cues and dcpdoctor reads it, so it stays out of the schema test
-        xml.push_str("  <dcst:SubtitleList/>\n");
-        xml.push_str("</dcst:SubtitleReel>\n");
-        return xml;
-    }
     let font_id_attribute = match font_ref {
         Some(_) => format!(" ID=\"{SUBTITLE_FONT_ID}\""),
         None => String::new(),
@@ -1363,18 +1378,44 @@ mod tests {
     use super::*;
 
     /// A reel of a subtitled composition that no cue falls into still carries a
-    /// subtitle asset, and what it carries is a document with nothing in it.
+    /// subtitle asset, and what it carries is one space from the reel start.
     #[test]
-    fn a_reel_with_no_cues_writes_an_empty_subtitle_list() {
+    fn a_reel_with_no_cues_writes_the_placeholder_cue() {
+        let placeholder = placeholder_styled_cues(24);
+        assert!(
+            cues_have_text(&placeholder),
+            "a space is text, so the reel embeds a font like any other"
+        );
+
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("subtitle.xml");
-        let resources = write_dcst_frames(&[], "de", 24, &out).unwrap();
-        assert!(resources.is_empty(), "no font to embed: {resources:?}");
+        let opts = SubtitleOptions {
+            font_path: Some(fixture_font()),
+            ..Default::default()
+        };
+        let resources = write_dcst_styled(&placeholder, "de", 24, &opts, 0, &out).unwrap();
+        assert_eq!(resources.len(), 1, "the font is embedded: {resources:?}");
 
         let xml = std::fs::read_to_string(&out).unwrap();
-        assert!(xml.contains("<dcst:SubtitleList/>"), "{xml}");
-        assert!(!xml.contains("LoadFont"), "no font is referenced: {xml}");
-        assert!(!xml.contains("<dcst:Font"), "no Font wrapper: {xml}");
+        assert!(
+            xml.contains("TimeIn=\"00:00:00:00\" TimeOut=\"00:00:01:00\""),
+            "one second from the reel start: {xml}"
+        );
+        assert!(
+            xml.contains(
+                "<dcst:Text Vposition=\"8.0\" Valign=\"bottom\" Halign=\"center\"> </dcst:Text>"
+            ),
+            "the space survives serialisation: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<dcst:Subtitle ").count(),
+            1,
+            "one cue and no more: {xml}"
+        );
+        assert!(
+            xml.contains(&format!("<dcst:LoadFont ID=\"{SUBTITLE_FONT_ID}\">")),
+            "a font is loaded like any text cue: {xml}"
+        );
         for element in [
             "dcst:Id",
             "dcst:ContentTitleText",
@@ -1388,7 +1429,6 @@ mod tests {
             assert!(xml.contains(&format!("<{element}>")), "{element} in {xml}");
         }
         assert!(xml.contains("<dcst:Language>de</dcst:Language>"), "{xml}");
-        assert!(xml.ends_with("</dcst:SubtitleReel>\n"), "{xml}");
     }
 
     #[test]
@@ -1446,10 +1486,22 @@ mod tests {
         p
     }
 
+    /// A font in the repo, so a test that only needs some font does not depend on
+    /// what faces the machine running it carries.
+    fn fixture_font() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/LiberationSans-Regular.ttf")
+    }
+
+    /// Convert `input` and hand back the DCST. A text track has to embed a font,
+    /// so one is named here unless the test named its own.
     fn render(input: &std::path::Path, opts: &SubtitleOptions) -> String {
+        let opts = SubtitleOptions {
+            font_path: opts.font_path.clone().or_else(|| Some(fixture_font())),
+            ..opts.clone()
+        };
         let out = input.with_extension("out.xml");
         let prepared =
-            prepare_subtitle_track(input, CueTiming::default(), "en", 24, opts, &out).unwrap();
+            prepare_subtitle_track(input, CueTiming::default(), "en", 24, &opts, &out).unwrap();
         let xml = std::fs::read_to_string(&prepared.dcst_path).unwrap();
         std::fs::remove_file(&out).ok();
         xml
@@ -1701,6 +1753,10 @@ mod tests {
     /// resource the LoadFont urn names.
     #[test]
     fn a_track_with_no_named_font_embeds_a_system_one() {
+        if postkit::subtitle_raster::find_system_sans_font().is_none() {
+            eprintln!("skipping: this machine carries no system sans font");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let srt = write(dir.path(), "in.srt", SRT2);
         let out = dir.path().join("out.xml");
@@ -1758,7 +1814,11 @@ mod tests {
             .collect();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("frames.xml");
-        write_dcst_frames(&cues, "en", FPS, &out).unwrap();
+        let opts = SubtitleOptions {
+            font_path: Some(fixture_font()),
+            ..Default::default()
+        };
+        write_dcst_styled(&styled_from_frames(&cues, FPS), "en", FPS, &opts, 0, &out).unwrap();
         let xml = std::fs::read_to_string(&out).unwrap();
         for cue in &cues {
             let time_in = frames_to_dcst(cue.start_frame, FPS);

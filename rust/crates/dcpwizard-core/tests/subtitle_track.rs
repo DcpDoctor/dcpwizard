@@ -98,3 +98,99 @@ fn srt_wraps_into_a_registered_timed_text_track() {
     );
     assert!(cpl.contains("<Language>de</Language>"), "subtitle language");
 }
+
+/// Reel splitting with a subtitle whose cues all sit in the first reel: the
+/// second reel still has to carry a MainSubtitle, or dcpdoctor reports
+/// `subtitle_missing_from_reel` on the composition.
+#[test]
+fn every_reel_of_a_split_subtitled_dcp_carries_a_subtitle() {
+    use dcpwizard_core::dcp::{DcpConfig, create_dcp};
+
+    const FPS: u32 = 24;
+    // 1 minute = 1440 frames per reel; 1470 forces two reels (30-frame tail)
+    const FRAMES: usize = 1470;
+
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = dir.path().join("j2k");
+    std::fs::create_dir_all(&j2k).unwrap();
+    let seed = j2k.join("seed.j2c");
+    dcpwizard_core::pad::generate_black_frame(2048, 1080, FPS, &seed).expect("black frame");
+    for index in 0..FRAMES {
+        std::fs::copy(&seed, j2k.join(format!("frame_{index:05}.j2c"))).unwrap();
+    }
+    std::fs::remove_file(&seed).unwrap();
+
+    let wav = dir.path().join("audio.wav");
+    write_silent_wav(&wav, FRAMES as u64 * 48_000 / FPS as u64);
+
+    let srt = dir.path().join("in.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:02,000\nHello\n").unwrap();
+
+    let out = dir.path().join("dcp");
+    let config = DcpConfig {
+        title: "Split Subs".into(),
+        standard: dcpwizard_core::Standard::Smpte,
+        resolution: dcpwizard_core::Resolution::TwoK,
+        frame_rate_num: FPS,
+        frame_rate_den: 1,
+        output_dir: out.clone(),
+        j2k_dir: Some(j2k),
+        audio_path: Some(wav),
+        subtitle_path: Some(srt),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            // a font in the repo, so the package does not depend on the machine's
+            font_path: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
+        reel_length_minutes: 1,
+        ..Default::default()
+    };
+    assert_eq!(create_dcp(&config), 0);
+
+    let cpl = std::fs::read_dir(&out)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("CPL_"))
+        })
+        .expect("a CPL");
+    let xml = std::fs::read_to_string(&cpl).unwrap();
+    assert_eq!(
+        xml.matches("<MainSubtitle>").count(),
+        2,
+        "both reels carry a subtitle: {xml}"
+    );
+
+    let result = dcpwizard_core::verify::verify_dcp(&out);
+    assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
+}
+
+/// A stereo 24-bit 48 kHz WAV of `samples` silent frames.
+fn write_silent_wav(path: &Path, samples: u64) {
+    let channels = 2u16;
+    let bits = 24u16;
+    let block_align = (bits / 8) * channels;
+    let sample_rate = 48_000u32;
+    let data_len = samples * block_align as u64;
+    let mut w = Vec::new();
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes());
+    w.extend_from_slice(&channels.to_le_bytes());
+    w.extend_from_slice(&sample_rate.to_le_bytes());
+    w.extend_from_slice(&(sample_rate * block_align as u32).to_le_bytes());
+    w.extend_from_slice(&block_align.to_le_bytes());
+    w.extend_from_slice(&bits.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(data_len as u32).to_le_bytes());
+    w.resize(w.len() + data_len as usize, 0);
+    std::fs::write(path, &w).unwrap();
+}

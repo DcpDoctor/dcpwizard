@@ -163,6 +163,14 @@ fn an_unencrypted_dcp_still_packages_a_subtitle() {
 
     let config = DcpConfig {
         subtitle_path: Some(srt),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            // a font in the repo, so the package does not depend on the machine's
+            font_path: Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
         ..base_config(dir.path(), &out)
     };
     assert_eq!(create_dcp(&config), 0, "an unencrypted DCP is unchanged");

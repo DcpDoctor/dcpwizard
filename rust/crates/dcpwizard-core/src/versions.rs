@@ -530,8 +530,11 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 }
             } else if let Some(cues) = sub_cues.as_ref() {
                 // a composition with subtitles needs one on every reel, so a reel
-                // no cue falls into gets an empty document spanning it
-                let rebased = crate::reel::rebase_cues_for_reel(cues, *range);
+                // no cue falls into carries a placeholder spanning it
+                let mut rebased = crate::reel::rebase_cues_for_reel(cues, *range);
+                if rebased.is_empty() {
+                    rebased = crate::subtitle::placeholder_cues(fps);
+                }
                 match wrap_subtitle_cues(
                     "subtitle",
                     &rebased,
@@ -579,9 +582,12 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     }
                 }
             } else if let Some(cues) = ccap_cues.as_ref() {
-                // every reel carries the same number of closed captions, so an
-                // empty reel gets an empty document spanning it
-                let rebased = crate::reel::rebase_cues_for_reel(cues, *range);
+                // every reel carries the same number of closed captions, so a reel
+                // no cue falls into carries a placeholder spanning it
+                let mut rebased = crate::reel::rebase_cues_for_reel(cues, *range);
+                if rebased.is_empty() {
+                    rebased = crate::subtitle::placeholder_cues(fps);
+                }
                 match wrap_subtitle_cues(
                     "ccap",
                     &rebased,

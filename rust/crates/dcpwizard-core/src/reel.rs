@@ -547,101 +547,105 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         // ── subtitle ──────────────────────────────────────────────────
         let mut sub = None;
         if let Some(plan) = &subtitle_plan {
-            let rebased =
+            let mut rebased =
                 crate::subtitle::rebase_styled_for_reel(&plan.cues, range.start, range.end, fps);
-            if !rebased.is_empty() {
-                let subtitle_uuid = uuid::Uuid::new_v4();
-                let dcst = config
-                    .output_dir
-                    .join(format!("subtitle_{subtitle_uuid}.xml"));
-                let (xml, resources) = crate::subtitle::render_reel_dcst(
-                    &rebased,
-                    subtitle_lang,
-                    fps,
-                    &config.subtitle_opts,
-                    plan.font.as_ref(),
-                );
-                if let Err(e) = std::fs::write(&dcst, xml) {
-                    tracing::error!("subtitle write failed for reel {}: {e}", i + 1);
-                    return -1;
-                }
-                let sub_name = format!("subtitle_{subtitle_uuid}.mxf");
-                let sub_path = config.output_dir.join(&sub_name);
-                let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
-                    &dcst,
-                    &resources,
-                    &sub_path,
-                    fps,
-                    Some(*subtitle_uuid.as_bytes()),
-                    None,
-                );
-                temps.push(dcst);
-                let Some(track) = wrapped else {
-                    tracing::error!("Failed to wrap subtitle MXF for reel {}", i + 1);
-                    return -1;
-                };
-                register_asset(
-                    &mut pkl_entries,
-                    &mut am_entries,
-                    &subtitle_uuid.to_string(),
-                    &sub_name,
-                    &sub_path,
-                );
-                sub = Some(crate::versions::WrappedTimedText {
-                    id: subtitle_uuid.to_string(),
-                    duration: track.duration,
-                    hash: crate::hash::hash_file(&sub_path).unwrap_or_default(),
-                });
+            // a reel no cue falls into carries a placeholder spanning it
+            if rebased.is_empty() {
+                rebased = crate::subtitle::placeholder_styled_cues(fps);
             }
+            let subtitle_uuid = uuid::Uuid::new_v4();
+            let dcst = config
+                .output_dir
+                .join(format!("subtitle_{subtitle_uuid}.xml"));
+            let (xml, resources) = crate::subtitle::render_reel_dcst(
+                &rebased,
+                subtitle_lang,
+                fps,
+                &config.subtitle_opts,
+                plan.font.as_ref(),
+            );
+            if let Err(e) = std::fs::write(&dcst, xml) {
+                tracing::error!("subtitle write failed for reel {}: {e}", i + 1);
+                return -1;
+            }
+            let sub_name = format!("subtitle_{subtitle_uuid}.mxf");
+            let sub_path = config.output_dir.join(&sub_name);
+            let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+                &dcst,
+                &resources,
+                &sub_path,
+                fps,
+                Some(*subtitle_uuid.as_bytes()),
+                Some(reel_frames as u32),
+            );
+            temps.push(dcst);
+            let Some(track) = wrapped else {
+                tracing::error!("Failed to wrap subtitle MXF for reel {}", i + 1);
+                return -1;
+            };
+            register_asset(
+                &mut pkl_entries,
+                &mut am_entries,
+                &subtitle_uuid.to_string(),
+                &sub_name,
+                &sub_path,
+            );
+            sub = Some(crate::versions::WrappedTimedText {
+                id: subtitle_uuid.to_string(),
+                duration: track.duration,
+                hash: crate::hash::hash_file(&sub_path).unwrap_or_default(),
+            });
         }
 
         // ── closed caption ────────────────────────────────────────────
         let mut ccap = None;
         if let Some(plan) = &ccap_plan {
-            let rebased =
+            let mut rebased =
                 crate::subtitle::rebase_styled_for_reel(&plan.cues, range.start, range.end, fps);
-            if !rebased.is_empty() {
-                let ccap_uuid = uuid::Uuid::new_v4();
-                let dcst = config.output_dir.join(format!("ccap_{ccap_uuid}.xml"));
-                let (xml, resources) = crate::subtitle::render_reel_dcst(
-                    &rebased,
-                    ccap_lang,
-                    fps,
-                    &crate::subtitle::SubtitleOptions::default(),
-                    plan.font.as_ref(),
-                );
-                if let Err(e) = std::fs::write(&dcst, xml) {
-                    tracing::error!("closed-caption write failed for reel {}: {e}", i + 1);
-                    return -1;
-                }
-                let ccap_name = format!("ccap_{ccap_uuid}.mxf");
-                let ccap_path = config.output_dir.join(&ccap_name);
-                let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
-                    &dcst,
-                    &resources,
-                    &ccap_path,
-                    fps,
-                    Some(*ccap_uuid.as_bytes()),
-                    None,
-                );
-                temps.push(dcst);
-                let Some(track) = wrapped else {
-                    tracing::error!("Failed to wrap closed-caption MXF for reel {}", i + 1);
-                    return -1;
-                };
-                register_asset(
-                    &mut pkl_entries,
-                    &mut am_entries,
-                    &ccap_uuid.to_string(),
-                    &ccap_name,
-                    &ccap_path,
-                );
-                ccap = Some(crate::versions::WrappedTimedText {
-                    id: ccap_uuid.to_string(),
-                    duration: track.duration,
-                    hash: crate::hash::hash_file(&ccap_path).unwrap_or_default(),
-                });
+            // a reel no cue falls into carries a placeholder spanning it
+            if rebased.is_empty() {
+                rebased = crate::subtitle::placeholder_styled_cues(fps);
             }
+            let ccap_uuid = uuid::Uuid::new_v4();
+            let dcst = config.output_dir.join(format!("ccap_{ccap_uuid}.xml"));
+            let (xml, resources) = crate::subtitle::render_reel_dcst(
+                &rebased,
+                ccap_lang,
+                fps,
+                &crate::subtitle::SubtitleOptions::default(),
+                plan.font.as_ref(),
+            );
+            if let Err(e) = std::fs::write(&dcst, xml) {
+                tracing::error!("closed-caption write failed for reel {}: {e}", i + 1);
+                return -1;
+            }
+            let ccap_name = format!("ccap_{ccap_uuid}.mxf");
+            let ccap_path = config.output_dir.join(&ccap_name);
+            let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+                &dcst,
+                &resources,
+                &ccap_path,
+                fps,
+                Some(*ccap_uuid.as_bytes()),
+                Some(reel_frames as u32),
+            );
+            temps.push(dcst);
+            let Some(track) = wrapped else {
+                tracing::error!("Failed to wrap closed-caption MXF for reel {}", i + 1);
+                return -1;
+            };
+            register_asset(
+                &mut pkl_entries,
+                &mut am_entries,
+                &ccap_uuid.to_string(),
+                &ccap_name,
+                &ccap_path,
+            );
+            ccap = Some(crate::versions::WrappedTimedText {
+                id: ccap_uuid.to_string(),
+                duration: track.duration,
+                hash: crate::hash::hash_file(&ccap_path).unwrap_or_default(),
+            });
         }
 
         if let Some(k) = picture_key {
