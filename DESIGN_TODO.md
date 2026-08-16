@@ -17,13 +17,14 @@ user-facing surface is here.
   -> Result<EmbeddedPreview, String>`, `EmbeddedPreview::player()` and
   `EmbeddedPreview::set_surface(x, y, w, h, visible)`, identical on every
   platform.
-- Windows release builds: grok is wired into release.yml and gui-release.yml as
-  of 2026-08-14 (the msvc setup step ported verbatim from ci.yml, the cli zip
-  ships grokj2k.dll beside the exe, and tauri.windows.conf.json bundles it into
-  the installer next to the exes). Unproven until the next tag run. Watch on
-  that run: if grok's msvc install drops more dlls that grokj2k.dll depends on,
-  copy bin/*.dll in both places instead, and a local windows tauri build now
-  fails at bundle time unless the dll is staged at gui/src-tauri/grokj2k.dll.
+- Windows release builds: release.yml and gui-release.yml build grok through
+  the PostPerfection/setup-grok@v1 action (grok v20.3.10, the same step ci.yml
+  uses), the cli zip ships grokj2k.dll beside the exe, and
+  tauri.windows.conf.json bundles it into the installer next to the exes.
+  Unproven until the next tag run. Watch on that run: if grok's msvc install
+  drops more dlls that grokj2k.dll depends on, copy bin/*.dll in both places
+  instead, and a local windows tauri build now fails at bundle time unless the
+  dll is staged at gui/src-tauri/grokj2k.dll.
 - postkit compiled twice, fixed 2026-08-12. `postkit` was a path dep on
   `extern/postkit` while `dcpdoctor-core` came from git carrying its own path dep
   on the postkit inside that checkout, so cargo resolved two copies. dcpdoctor
