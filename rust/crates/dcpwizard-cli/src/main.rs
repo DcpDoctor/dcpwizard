@@ -28,6 +28,168 @@ struct CreateCompositionMetadata {
     luminance: Option<String>,
 }
 
+/// ISDCF naming plus the package metadata the name is built from, boxed into
+/// the Create variant. Every flag but `--isdcf-name` is metadata in its own
+/// right, so none of them needs the naming flag and it needs none of them.
+#[derive(Args)]
+struct CreateIsdcfNaming {
+    /// Name the DCP by the ISDCF convention: --title is the human title the
+    /// content title is built from, and the built name replaces it.
+    #[arg(long)]
+    isdcf_name: bool,
+    /// RFC 5646 language the main soundtrack is spoken in (e.g. en, fr-CA)
+    #[arg(long, value_name = "RFC5646")]
+    audio_lang: Option<String>,
+    /// Certification rating as AGENCY=LABEL (repeatable), e.g.
+    /// "http://www.mpaa.org/2003-ratings=PG-13". Written into the CPL's RatingList.
+    #[arg(long = "rating", value_name = "AGENCY=LABEL")]
+    ratings: Vec<String>,
+    /// Studio code for the name (first four letters are used)
+    #[arg(long)]
+    studio: Option<String>,
+    /// Content version text (repeatable). The first is the CPL's ContentVersion
+    /// LabelText, and an Interop name takes its version number from it.
+    #[arg(long = "content-version", value_name = "TEXT")]
+    content_versions: Vec<String>,
+    /// Mark the name a temporary version
+    #[arg(long)]
+    temp_version: bool,
+    /// Mark the name a pre-release
+    #[arg(long)]
+    pre_release: bool,
+    /// Mark the name a red band (restricted) version
+    #[arg(long)]
+    red_band: bool,
+    /// Mark the name the 2D version of a 3D release
+    #[arg(long)]
+    two_d_version_of_three_d: bool,
+    /// Release territory kind for the name
+    #[arg(
+        long,
+        default_value = "specific",
+        value_parser = ["specific", "international-texted", "international-textless"]
+    )]
+    territory_type: String,
+    /// Creation date in the name (default: today, UTC)
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    isdcf_date: Option<String>,
+    /// Name the package VF instead of OV
+    #[arg(long)]
+    version_file: bool,
+}
+
+/// The naming flags resolved: the name's own options, and the metadata that
+/// lands in the package whether or not a name is built from it.
+struct CreateNaming {
+    options: dcpwizard_core::isdcf_title::IsdcfNamingOptions,
+    ratings: Vec<dcpwizard_core::isdcf_name::Rating>,
+    content_versions: Vec<String>,
+    audio_language: Option<String>,
+    replaces_title: bool,
+}
+
+/// An agency is a URI, so it carries colons and only the first '=' separates it
+/// from the label.
+const RATING_SEPARATOR: char = '=';
+const ISDCF_DATE_PARTS: usize = 3;
+
+impl CreateIsdcfNaming {
+    fn resolve(&self) -> Result<CreateNaming, String> {
+        let territory_type = match self.territory_type.as_str() {
+            "international-texted" => {
+                dcpwizard_core::isdcf_name::TerritoryType::InternationalTexted
+            }
+            "international-textless" => {
+                dcpwizard_core::isdcf_name::TerritoryType::InternationalTextless
+            }
+            _ => dcpwizard_core::isdcf_name::TerritoryType::Specific,
+        };
+        let mut ratings = Vec::new();
+        for spec in &self.ratings {
+            let (agency, label) = spec.split_once(RATING_SEPARATOR).ok_or_else(|| {
+                format!(
+                    "rating '{spec}' must be AGENCY=LABEL, e.g. \
+                     http://www.mpaa.org/2003-ratings=PG-13"
+                )
+            })?;
+            ratings.push(dcpwizard_core::isdcf_name::Rating {
+                agency: agency.to_string(),
+                label: label.to_string(),
+            });
+        }
+        let date = match self.isdcf_date.as_deref() {
+            Some(spec) => Some(parse_isdcf_date(spec)?),
+            None => None,
+        };
+        Ok(CreateNaming {
+            options: dcpwizard_core::isdcf_title::IsdcfNamingOptions {
+                studio: self.studio.clone(),
+                temp_version: self.temp_version,
+                pre_release: self.pre_release,
+                red_band: self.red_band,
+                two_d_version_of_three_d: self.two_d_version_of_three_d,
+                territory_type,
+                date,
+                version_file: self.version_file,
+            },
+            ratings,
+            content_versions: self.content_versions.clone(),
+            audio_language: self.audio_lang.clone(),
+            replaces_title: self.isdcf_name,
+        })
+    }
+}
+
+fn parse_isdcf_date(spec: &str) -> Result<dcpwizard_core::isdcf_name::IsdcfDate, String> {
+    let parts: Vec<&str> = spec.split('-').collect();
+    let bad = || format!("date '{spec}' must be YYYY-MM-DD");
+    if parts.len() != ISDCF_DATE_PARTS {
+        return Err(bad());
+    }
+    let year: u32 = parts[0].parse().map_err(|_| bad())?;
+    let month: u32 = parts[1].parse().map_err(|_| bad())?;
+    let day: u32 = parts[2].parse().map_err(|_| bad())?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(bad());
+    }
+    Ok(dcpwizard_core::isdcf_name::IsdcfDate { year, month, day })
+}
+
+/// Replace the title with the ISDCF content title, when asked for. The channel
+/// count comes from the packaged WAV, so this runs after the audio is prepared.
+fn apply_isdcf_name(
+    config: &mut dcpwizard_core::dcp::DcpConfig,
+    naming: &CreateNaming,
+    burnt_in_subtitle: bool,
+) {
+    if !naming.replaces_title {
+        return;
+    }
+    let channel_count = match config.audio_path.as_deref() {
+        Some(path) => match dcpwizard_core::mxf_wrap::wav_channels(path) {
+            Ok(count) => count as usize,
+            Err(e) => {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+        },
+        None => 0,
+    };
+    let sound = dcpwizard_core::isdcf_title::soundtrack_summary(
+        channel_count,
+        config.hi_channel,
+        config.vi_channel,
+    );
+    let name = dcpwizard_core::isdcf_title::isdcf_title(
+        config,
+        &naming.options,
+        &sound,
+        burnt_in_subtitle,
+    );
+    tracing::info!("ISDCF name: {name}");
+    config.title = name;
+}
+
 /// W5 create-time audio + encode QoL options, boxed into the Create variant.
 #[derive(Args)]
 struct CreateAudioQol {
@@ -446,6 +608,8 @@ enum Commands {
         picture_opts: Box<CreatePictureOpts>,
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
+        #[command(flatten)]
+        isdcf_naming: Box<CreateIsdcfNaming>,
         #[command(flatten)]
         signer_opts: Box<SignerOpts>,
     },
@@ -2897,6 +3061,7 @@ fn run() {
             audio_qol,
             source_opts,
             picture_opts,
+            isdcf_naming,
             signer_opts,
         } => {
             let CreateAudioQol {
@@ -2922,6 +3087,13 @@ fn run() {
             } = *source_opts;
             let picture_options = match picture_opts.resolve() {
                 Ok(options) => options,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let naming = match isdcf_naming.resolve() {
+                Ok(naming) => naming,
                 Err(e) => {
                     tracing::error!("{e}");
                     std::process::exit(1);
@@ -3194,6 +3366,7 @@ fn run() {
                 std::process::exit(1);
             }
 
+            let burnt_in_subtitle = subtitle_qol.burn_subtitle.is_some();
             let CreateSubtitleOpts {
                 subtitle_halign,
                 subtitle_valign,
@@ -3720,7 +3893,7 @@ fn run() {
                     }
                 };
 
-                let config = dcpwizard_core::dcp::DcpConfig {
+                let mut config = dcpwizard_core::dcp::DcpConfig {
                     title,
                     standard: std_val,
                     encrypt,
@@ -3763,7 +3936,11 @@ fn run() {
                     hdr_dci,
                     signer: package_signer.clone(),
                     markers: markers.clone(),
+                    audio_language: naming.audio_language.clone(),
+                    ratings: naming.ratings.clone(),
+                    content_versions: naming.content_versions.clone(),
                 };
+                apply_isdcf_name(&mut config, &naming, burnt_in_subtitle);
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
                     None => dcpwizard_core::dcp::create_dcp(&config),
@@ -3935,7 +4112,7 @@ fn run() {
                     (prepared_audio, None)
                 };
 
-                let config = dcpwizard_core::dcp::DcpConfig {
+                let mut config = dcpwizard_core::dcp::DcpConfig {
                     title,
                     standard: std_val,
                     encrypt,
@@ -3978,7 +4155,11 @@ fn run() {
                     distributor,
                     facility,
                     luminance: parsed_luminance,
+                    audio_language: naming.audio_language.clone(),
+                    ratings: naming.ratings.clone(),
+                    content_versions: naming.content_versions.clone(),
                 };
+                apply_isdcf_name(&mut config, &naming, burnt_in_subtitle);
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
                     None => dcpwizard_core::dcp::create_dcp(&config),

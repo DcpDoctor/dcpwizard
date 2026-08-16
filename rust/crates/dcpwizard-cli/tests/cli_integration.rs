@@ -480,3 +480,39 @@ fn create_refuses_an_audio_map_that_names_an_unknown_lane() {
     .failure()
     .stdout(predicate::str::contains("Surround"));
 }
+
+#[test]
+fn create_refuses_a_rating_without_an_agency_separator() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--rating", "PG-13"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("AGENCY=LABEL"));
+}
+
+#[test]
+fn create_refuses_an_isdcf_date_that_is_not_a_date() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--isdcf-date", "16-08-2026"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("YYYY-MM-DD"));
+}
+
+#[test]
+fn create_refuses_an_unknown_territory_type() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--territory-type", "worldwide"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("territory-type"));
+}
