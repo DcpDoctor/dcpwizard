@@ -68,6 +68,16 @@ user-facing surface is here.
   based. The credential half already has a pattern to copy: `email.rs` reads an SMTP
   config TOML whose password field redacts itself in Debug and never reaches argv or
   logs.
+- `--source-colourspace` accepts postkit's full ColourSpace set but only rec709 and
+  xyz encode; p3, rec2020, aces, acescg and logc are refused at runtime, pointing at
+  `colour --target xyz` as the separate pass. The in-encode transform they need does
+  not exist in a reachable form: PK `colour::convert_colour` refuses any X'Y'Z'
+  target without a 3D LUT, and PK `dcdm` has the real P3/Rec.2020 matrices but only
+  behind `create_dcdm`, which writes a TIFF sequence. Closing this means a public
+  in-memory per-frame transform in postkit (its `dcdm` internals exposed, or a
+  generalised `rgb_to_xyz_inplace(buf, space)`), applied with grok's transform off.
+  The one ffmpeg route (P3 -> Rec.709 -> grok) silently clips out-of-gamut colour
+  and was rejected: a wrong picture is worse than a refusal.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
