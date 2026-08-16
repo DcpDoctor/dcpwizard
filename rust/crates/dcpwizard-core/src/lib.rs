@@ -33,6 +33,7 @@ pub mod grok;
 pub mod hash;
 pub mod hdr;
 pub mod hfr;
+pub mod hints;
 pub mod import;
 pub mod info;
 pub mod ingest;
