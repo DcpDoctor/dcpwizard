@@ -12,6 +12,7 @@ notice = "warn"
 unlicensed = "deny"
 allow = [
     "AGPL-3.0-or-later",
+    "AGPL-3.0-only",
     "MIT",
     "Apache-2.0",
     "BSD-2-Clause",
