@@ -26,6 +26,20 @@
 - **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
 
 ### Fixed
+- **Timed-text packaging was not conformant**: every package carrying a converted
+  subtitle or caption track failed six of dcpdoctor's ST 429-5 / ST 428-7 checks, and
+  libdcp's verifier reads the same rules. The MXF ResourceID was the track file's own
+  asset id, where ST 429-5 wants the document's `<Id>` and wants the file, the
+  document and the resource to be three different things. The document declared no
+  `StartTime`, so a player had nothing saying the reel starts at zero. A `Font` named
+  `font1` that no `LoadFont` introduced, because a track built without
+  `--subtitle-font` embedded no font at all. The `IssueDate` carried a `+00:00`
+  suffix Deluxe QC rejects, the root declared a second, unused namespace, and the
+  reel's MainSubtitle carried no `<Hash>`, which some servers check instead of the
+  PKL's. A text track now always embeds a font, the machine's sans-serif face when
+  the caller names none, and refuses the build when the machine has none rather than
+  packaging text nothing can draw. Rebuild any package with a subtitle or caption
+  track
 - **A failed `create` exited 0** — eighteen fatal errors logged and returned without a failing exit code, so a watch folder or script read the run as a success and shipped nothing. They now exit non-zero. `--container` is also resolved before the encode rather than after it, so a bad value fails in a second instead of after a full J2K pass
 - **`create-multi` carried its own copy of the container table** — it skipped the dimension validation `create` applies and could drift from it. Both now resolve the container through one function
 - **`decrypt` and `transcode-dcp` dropped a package's markers** — both re-author the CPL around the same composition, and the marker track was not carried over, so a marked package came out unmarked. Markers are now read back from the source CPL and rewritten, offsets unchanged

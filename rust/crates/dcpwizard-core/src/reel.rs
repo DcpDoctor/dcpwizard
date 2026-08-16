@@ -582,7 +582,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                     &sub_name,
                     &sub_path,
                 );
-                sub = Some((subtitle_uuid.to_string(), track.duration));
+                sub = Some(crate::versions::WrappedTimedText {
+                    id: subtitle_uuid.to_string(),
+                    duration: track.duration,
+                    hash: crate::hash::hash_file(&sub_path).unwrap_or_default(),
+                });
             }
         }
 
@@ -626,7 +630,11 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                     &ccap_name,
                     &ccap_path,
                 );
-                ccap = Some((ccap_uuid.to_string(), track.duration));
+                ccap = Some(crate::versions::WrappedTimedText {
+                    id: ccap_uuid.to_string(),
+                    duration: track.duration,
+                    hash: crate::hash::hash_file(&ccap_path).unwrap_or_default(),
+                });
             }
         }
 
@@ -655,18 +663,20 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             sound_duration: reel_frames,
             sound_entry_point: 0,
             sound_key_id,
-            subtitle_id: sub.as_ref().map(|(id, _)| id.clone()),
+            subtitle_id: sub.as_ref().map(|t| t.id.clone()),
             subtitle_edit_rate_num: fps,
             subtitle_edit_rate_den: 1,
-            subtitle_duration: sub.as_ref().map(|(_, d)| *d).unwrap_or(0),
+            subtitle_duration: sub.as_ref().map(|t| t.duration).unwrap_or(0),
             subtitle_entry_point: 0,
             subtitle_language: sub.as_ref().map(|_| subtitle_lang.to_string()),
-            ccap_id: ccap.as_ref().map(|(id, _)| id.clone()),
+            subtitle_hash: sub.as_ref().map(|t| t.hash.clone()),
+            ccap_id: ccap.as_ref().map(|t| t.id.clone()),
             ccap_edit_rate_num: fps,
             ccap_edit_rate_den: 1,
-            ccap_duration: ccap.as_ref().map(|(_, d)| *d).unwrap_or(0),
+            ccap_duration: ccap.as_ref().map(|t| t.duration).unwrap_or(0),
             ccap_entry_point: 0,
             ccap_language: ccap.as_ref().map(|_| ccap_lang.to_string()),
+            ccap_hash: ccap.as_ref().map(|t| t.hash.clone()),
             stereoscopic: false,
             aux_data: None,
             markers: Vec::new(),

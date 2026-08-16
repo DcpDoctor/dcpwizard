@@ -7,6 +7,26 @@ use postkit::subtitle_raster::{BurnEffect, BurnStyle, BurnStyleOverrides};
 /// SMPTE 640 KB embedded-font size limit (ST 428-7 / interop).
 const FONT_SIZE_LIMIT: usize = 640 * 1024;
 
+/// The `ID` the packaged track's `LoadFont` declares and its `Font` names. A
+/// `Font` carries it only when a `LoadFont` introduced it, because ST 428-7 has
+/// nothing else for it to refer to.
+const SUBTITLE_FONT_ID: &str = "font1";
+
+/// The one namespace a ST 428-7 document declares on its root.
+const DCST_NAMESPACE: &str = "http://www.smpte-ra.org/schemas/428-7/2010/DCST";
+
+/// Bv2.1 §7.2.2 wants a SMPTE timed-text document to start at zero, so every
+/// cue plays at the time it declares.
+const DCST_START_TIME: &str = "00:00:00:00";
+
+/// `IssueDate` shape: no timezone suffix and no fractional seconds, which is
+/// what Deluxe QC accepts and libdcp warns about.
+const DCST_ISSUE_DATE_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+
+/// What a text subtitle track says when this machine has no font to embed.
+const NO_FONT_TO_EMBED: &str =
+    "no font to embed for the subtitle track: install one or pass --subtitle-font";
+
 /// How to handle right-to-left (Hebrew/Arabic) subtitle text (dom#860).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RtlMode {
@@ -437,37 +457,64 @@ pub fn prepare_subtitle_track(
     }
     apply_rtl(&mut cues, opts.rtl);
 
-    // embed + subset the font, if any; the LoadFont urn must match the resource id
+    // head padding shifts the program: slide every cue later by the pad, applied
+    // in the frame domain so the timecodes stay frame-accurate
+    let resources = write_dcst_styled(&cues, lang, fps, opts, timing.pad_head_frames, out)?;
+    Ok(PreparedSubtitle {
+        dcst_path: out.to_path_buf(),
+        resources,
+    })
+}
+
+/// Whether any cue draws text, which is what makes ST 428-7 ask for a `LoadFont`
+/// and gives the subsetter glyphs to keep. A bitmap-only track has neither.
+fn cues_have_text(cues: &[StyledCue]) -> bool {
+    cues.iter()
+        .any(|c| c.image.is_none() && !c.plain_text().trim().is_empty())
+}
+
+/// The font file a track embeds: the caller's, or a system sans face found the
+/// way the burn rasteriser finds one. `None` only for a track with no text at
+/// all. A text track with no font anywhere is refused, because a `Font` naming a
+/// face the package does not carry is what players fall back from.
+fn font_to_embed(opts: &SubtitleOptions, cues: &[StyledCue]) -> Result<Option<PathBuf>, String> {
+    if let Some(path) = opts.font_path.as_ref() {
+        return Ok(Some(path.clone()));
+    }
+    if !cues_have_text(cues) {
+        return Ok(None);
+    }
+    postkit::subtitle_raster::find_system_sans_font()
+        .map(Some)
+        .ok_or_else(|| NO_FONT_TO_EMBED.to_string())
+}
+
+/// Write the DCST for `cues` to `out` and stage the ancillary resources the
+/// timed-text MXF wraps alongside it: the embedded font, then each distinct
+/// bitmap. The `LoadFont` urn is the font resource's own id, so a player can
+/// find the face inside the MXF.
+fn write_dcst_styled(
+    cues: &[StyledCue],
+    lang: &str,
+    fps: u32,
+    opts: &SubtitleOptions,
+    head_frames: u64,
+    out: &Path,
+) -> Result<Vec<(PathBuf, [u8; 16])>, String> {
     let mut resources: Vec<(PathBuf, [u8; 16])> = Vec::new();
-    let font_ref = match opts.font_path.as_ref() {
-        Some(fp) => {
-            let stage = out.with_extension(font_ext(fp));
-            let (font_file, id) = build_embedded_font(fp, &cues, opts.no_subset, &stage)?;
+    let font_ref = match font_to_embed(opts, cues)? {
+        Some(font_path) => {
+            let stage = out.with_extension(font_ext(&font_path));
+            let (font_file, id) = build_embedded_font(&font_path, cues, opts.no_subset, &stage)?;
             resources.push((font_file, id));
             Some(id)
         }
         None => None,
     };
-
-    // bitmap subs: each distinct PNG is embedded and referenced by its asset id
-    assign_image_ids(&cues, &mut resources);
-
-    // head padding shifts the program: slide every cue later by the pad, applied
-    // in the frame domain so the timecodes stay frame-accurate
-    let xml = render_dcst_styled(
-        &cues,
-        lang,
-        fps,
-        opts,
-        font_ref,
-        &resources,
-        timing.pad_head_frames,
-    );
+    assign_image_ids(cues, &mut resources);
+    let xml = render_dcst_styled(cues, lang, fps, opts, font_ref, &resources, head_frames);
     std::fs::write(out, xml).map_err(|e| format!("write {}: {e}", out.display()))?;
-    Ok(PreparedSubtitle {
-        dcst_path: out.to_path_buf(),
-        resources,
-    })
+    Ok(resources)
 }
 
 /// Reorder RTL cue text to visual order per [`RtlMode`]. Applied per run; a
@@ -586,14 +633,19 @@ pub fn plan_reel_subtitles(
             .collect();
     }
     apply_rtl(&mut cues, opts.rtl);
-    let font = match opts.font_path.as_ref() {
-        Some(fp) => {
+    let font = match font_to_embed(opts, &cues)? {
+        Some(font_path) => {
             let stage = stage_dir.join(format!(
                 "subtitle_font_{}.{}",
                 uuid::Uuid::new_v4(),
-                font_ext(fp)
+                font_ext(&font_path)
             ));
-            Some(build_embedded_font(fp, &cues, opts.no_subset, &stage)?)
+            Some(build_embedded_font(
+                &font_path,
+                &cues,
+                opts.no_subset,
+                &stage,
+            )?)
         }
         None => None,
     };
@@ -855,14 +907,15 @@ pub fn parse_srt_frames(path: &Path, fps: u32) -> Result<Vec<SubCue>, String> {
 /// Convert an SRT file to a DCST XML, shifting every cue later by `head_frames`.
 /// Head padding moves the program start, so supplied SRT cues must slide by the
 /// same offset to stay aligned with the picture. `head_frames == 0` is a plain
-/// conversion.
+/// conversion. Returns the ancillary resources the timed-text MXF wraps
+/// alongside the XML.
 pub fn srt_to_shifted_dcst(
     srt: &Path,
     head_frames: u64,
     lang: &str,
     fps: u32,
     out: &Path,
-) -> Result<(), String> {
+) -> Result<Vec<(PathBuf, [u8; 16])>, String> {
     let cues: Vec<SubCue> = parse_srt_frames(srt, fps)?
         .into_iter()
         .map(|c| SubCue {
@@ -874,10 +927,33 @@ pub fn srt_to_shifted_dcst(
     write_dcst_frames(&cues, lang, fps, out)
 }
 
-/// Write a reel's DCST from frame-based cues (already rebased to reel-local 0).
-pub fn write_dcst_frames(cues: &[SubCue], lang: &str, fps: u32, out: &Path) -> Result<(), String> {
-    let xml = render_dcst_frames(cues, lang, 42, "FFFFFFFF", fps, DEFAULT_VPOSITION);
-    std::fs::write(out, xml).map_err(|e| e.to_string())
+/// Write a reel's DCST from frame-based cues (already rebased to reel-local 0),
+/// returning the ancillary resources the timed-text MXF wraps alongside it.
+pub fn write_dcst_frames(
+    cues: &[SubCue],
+    lang: &str,
+    fps: u32,
+    out: &Path,
+) -> Result<Vec<(PathBuf, [u8; 16])>, String> {
+    let styled = styled_from_frames(cues, fps);
+    write_dcst_styled(&styled, lang, fps, &SubtitleOptions::default(), 0, out)
+}
+
+/// Frame-based cues as styled cues. The millisecond time rounds up, so the
+/// renderer's own truncating conversion back to frames at the same rate lands on
+/// the frame the cue came from.
+fn styled_from_frames(cues: &[SubCue], fps: u32) -> Vec<StyledCue> {
+    let fps64 = fps.max(1) as u64;
+    let to_ms = |frames: u64| (frames * 1000).div_ceil(fps64);
+    cues.iter()
+        .map(|c| {
+            StyledCue::text(
+                to_ms(c.start_frame),
+                to_ms(c.end_frame),
+                vec![StyledRun::plain(&c.text)],
+            )
+        })
+        .collect()
 }
 
 /// Milliseconds to Interop "HH:MM:SS.mmm".
@@ -889,6 +965,9 @@ fn ms_to_interop(ms: u64) -> String {
     format!("{h:02}:{m:02}:{s:02}.{millis:03}")
 }
 
+/// Render SRT entries to a loose ST 428-7 DCST XML. This is the conversion
+/// command's output, which is a document on its own: nothing wraps it, so it
+/// carries no embedded font and its `Font` names none.
 fn generate_smpte_ttml(
     entries: &[SrtEntry],
     lang: &str,
@@ -897,72 +976,20 @@ fn generate_smpte_ttml(
     fps: u32,
     vposition: f64,
 ) -> String {
-    let fps64 = fps.max(1) as u64;
-    let cues: Vec<SubCue> = entries
+    let cues: Vec<StyledCue> = entries
         .iter()
-        .map(|e| SubCue {
-            start_frame: e.start_ms * fps64 / 1000,
-            end_frame: e.end_ms * fps64 / 1000,
-            text: e.text.clone(),
-        })
+        .map(|e| StyledCue::text(e.start_ms, e.end_ms, vec![StyledRun::plain(&e.text)]))
         .collect();
-    render_dcst_frames(&cues, lang, font_size, font_color, fps, vposition)
-}
-
-/// Shared ST 428-7 DCST renderer working from frame-based cues. Both the
-/// single-reel path (via [`generate_smpte_ttml`]) and reel splitting use it.
-fn render_dcst_frames(
-    cues: &[SubCue],
-    lang: &str,
-    font_size: u32,
-    font_color: &str,
-    fps: u32,
-    vposition: f64,
-) -> String {
-    let sub_id = uuid::Uuid::new_v4();
-    // ~1/12 s fade, expressed in frames like the rest of the timecodes
-    let fade = format!("00:00:00:{:02}", (fps as f64 / 12.0).round() as u64);
-    let mut xml = String::new();
-    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    xml.push_str("<dcst:SubtitleReel xmlns:dcst=\"http://www.smpte-ra.org/schemas/428-7/2010/DCST\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\">\n");
-    xml.push_str(&format!("  <dcst:Id>urn:uuid:{sub_id}</dcst:Id>\n"));
-    xml.push_str("  <dcst:ContentTitleText>Subtitles</dcst:ContentTitleText>\n");
-    xml.push_str("  <dcst:AnnotationText>Subtitles</dcst:AnnotationText>\n");
-    xml.push_str(&format!(
-        "  <dcst:IssueDate>{}</dcst:IssueDate>\n",
-        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00")
-    ));
-    xml.push_str("  <dcst:ReelNumber>1</dcst:ReelNumber>\n");
-    xml.push_str(&format!("  <dcst:Language>{lang}</dcst:Language>\n"));
-    xml.push_str(&format!("  <dcst:EditRate>{fps} 1</dcst:EditRate>\n"));
-    xml.push_str(&format!("  <dcst:TimeCodeRate>{fps}</dcst:TimeCodeRate>\n"));
-    xml.push_str("  <dcst:SubtitleList>\n");
-    xml.push_str(&format!(
-        "    <dcst:Font ID=\"font1\" Color=\"{font_color}\" Size=\"{font_size}\" Effect=\"shadow\" EffectColor=\"FF000000\">\n"
-    ));
-
-    for (i, cue) in cues.iter().enumerate() {
-        xml.push_str(&format!(
-            "      <dcst:Subtitle SpotNumber=\"{}\" TimeIn=\"{}\" TimeOut=\"{}\" FadeUpTime=\"{fade}\" FadeDownTime=\"{fade}\">\n",
-            i + 1,
-            frames_to_dcst(cue.start_frame, fps),
-            frames_to_dcst(cue.end_frame, fps),
-        ));
-        let lines: Vec<&str> = cue.text.split('\n').collect();
-        for (j, line) in lines.iter().enumerate() {
-            let vpos = line_vposition(vposition, lines.len(), j);
-            xml.push_str(&format!(
-                "        <dcst:Text Vposition=\"{vpos:.1}\" Valign=\"bottom\" Halign=\"center\">{}</dcst:Text>\n",
-                postkit::packaging::escape_xml(line)
-            ));
-        }
-        xml.push_str("      </dcst:Subtitle>\n");
-    }
-
-    xml.push_str("    </dcst:Font>\n");
-    xml.push_str("  </dcst:SubtitleList>\n");
-    xml.push_str("</dcst:SubtitleReel>\n");
-    xml
+    let opts = SubtitleOptions {
+        vposition: Some(vposition),
+        appearance: TimedTextAppearance {
+            font_size: Some(font_size),
+            colour: Some(font_color.to_string()),
+            ..TimedTextAppearance::default()
+        },
+        ..SubtitleOptions::default()
+    };
+    render_dcst_styled(&cues, lang, fps, &opts, None, &[], 0)
 }
 
 fn generate_interop_xml(
@@ -1188,27 +1215,36 @@ fn render_dcst_styled(
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    xml.push_str("<dcst:SubtitleReel xmlns:dcst=\"http://www.smpte-ra.org/schemas/428-7/2010/DCST\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\">\n");
+    xml.push_str(&format!(
+        "<dcst:SubtitleReel xmlns:dcst=\"{DCST_NAMESPACE}\">\n"
+    ));
     xml.push_str(&format!("  <dcst:Id>urn:uuid:{sub_id}</dcst:Id>\n"));
     xml.push_str("  <dcst:ContentTitleText>Subtitles</dcst:ContentTitleText>\n");
     xml.push_str("  <dcst:AnnotationText>Subtitles</dcst:AnnotationText>\n");
     xml.push_str(&format!(
         "  <dcst:IssueDate>{}</dcst:IssueDate>\n",
-        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00")
+        chrono::Utc::now().format(DCST_ISSUE_DATE_FORMAT)
     ));
     xml.push_str("  <dcst:ReelNumber>1</dcst:ReelNumber>\n");
     xml.push_str(&format!("  <dcst:Language>{lang}</dcst:Language>\n"));
     xml.push_str(&format!("  <dcst:EditRate>{fps} 1</dcst:EditRate>\n"));
     xml.push_str(&format!("  <dcst:TimeCodeRate>{fps}</dcst:TimeCodeRate>\n"));
+    xml.push_str(&format!(
+        "  <dcst:StartTime>{DCST_START_TIME}</dcst:StartTime>\n"
+    ));
     if let Some(id) = font_ref {
         xml.push_str(&format!(
-            "  <dcst:LoadFont ID=\"font1\">urn:uuid:{}</dcst:LoadFont>\n",
+            "  <dcst:LoadFont ID=\"{SUBTITLE_FONT_ID}\">urn:uuid:{}</dcst:LoadFont>\n",
             uuid::Uuid::from_bytes(id).hyphenated()
         ));
     }
+    let font_id_attribute = match font_ref {
+        Some(_) => format!(" ID=\"{SUBTITLE_FONT_ID}\""),
+        None => String::new(),
+    };
     xml.push_str("  <dcst:SubtitleList>\n");
     xml.push_str(&format!(
-        "    <dcst:Font ID=\"font1\" {}>\n",
+        "    <dcst:Font{font_id_attribute} {}>\n",
         opts.appearance.font_attributes()
     ));
 
@@ -1582,6 +1618,118 @@ mod tests {
         );
         assert!(x2.contains(&format!("urn:uuid:{id}")), "{x2}");
         assert_eq!(r1[0].1, font.1, "resource keeps the shared id");
+    }
+
+    /// The four document-level rules dcpdoctor reads off a packaged DCST: one
+    /// namespace on the root, a zero StartTime, an IssueDate with no timezone
+    /// suffix, and a LoadFont introducing the id the Font names.
+    #[test]
+    fn the_packaged_document_carries_what_the_conformance_rules_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = write(dir.path(), "in.srt", SRT2);
+        let xml = render(&srt, &SubtitleOptions::default());
+
+        assert_eq!(
+            xml.matches("xmlns").count(),
+            1,
+            "the root declares one namespace: {xml}"
+        );
+        assert!(
+            xml.contains("<dcst:StartTime>00:00:00:00</dcst:StartTime>"),
+            "{xml}"
+        );
+        let issue_date = xml
+            .split("<dcst:IssueDate>")
+            .nth(1)
+            .and_then(|t| t.split("</dcst:IssueDate>").next())
+            .expect("an IssueDate");
+        assert_eq!(issue_date.len(), 19, "yyyy-mm-ddThh:mm:ss: {issue_date}");
+        assert!(
+            !issue_date.contains('+') && !issue_date.contains('.'),
+            "no timezone and no fraction: {issue_date}"
+        );
+        assert!(
+            xml.contains("<dcst:LoadFont ID=\"font1\">urn:uuid:"),
+            "a track with no --subtitle-font still loads one: {xml}"
+        );
+        assert!(
+            xml.find("<dcst:StartTime>").unwrap() < xml.find("<dcst:LoadFont").unwrap(),
+            "StartTime precedes LoadFont: {xml}"
+        );
+    }
+
+    /// The embedded font is the machine's, subset to the cues, and it is the
+    /// resource the LoadFont urn names.
+    #[test]
+    fn a_track_with_no_named_font_embeds_a_system_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = write(dir.path(), "in.srt", SRT2);
+        let out = dir.path().join("out.xml");
+        let prepared = prepare_subtitle_track(
+            &srt,
+            CueTiming::default(),
+            "en",
+            24,
+            &SubtitleOptions::default(),
+            &out,
+        )
+        .unwrap();
+        assert_eq!(prepared.resources.len(), 1, "the font is the one resource");
+        let (font_file, id) = &prepared.resources[0];
+        assert!(font_file.exists(), "the staged font is on disk");
+        let xml = std::fs::read_to_string(&prepared.dcst_path).unwrap();
+        assert!(
+            xml.contains(&format!(
+                "<dcst:LoadFont ID=\"font1\">urn:uuid:{}</dcst:LoadFont>",
+                uuid::Uuid::from_bytes(*id).hyphenated()
+            )),
+            "{xml}"
+        );
+    }
+
+    /// A `Font` may only name a face a `LoadFont` introduced, and the loose
+    /// conversion command embeds nothing, so its `Font` names nothing either.
+    #[test]
+    fn a_document_with_no_load_font_leaves_the_font_unnamed() {
+        let entries = [SrtEntry {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "solo".to_string(),
+        }];
+        let xml = generate_smpte_ttml(&entries, "en", 42, "FFFFFFFF", 24, DEFAULT_VPOSITION);
+        assert!(!xml.contains("LoadFont"), "{xml}");
+        assert!(
+            xml.contains("<dcst:Font Color=\"FFFFFFFF\""),
+            "the Font carries styling and no ID: {xml}"
+        );
+    }
+
+    /// The frame-based path shares the styled writer, which times cues in
+    /// milliseconds. The conversion has to land back on the frame it came from,
+    /// or every reel-split cue drifts a frame early.
+    #[test]
+    fn frame_cues_keep_their_frame_after_the_round_trip_through_milliseconds() {
+        const FPS: u32 = 24;
+        let cues: Vec<SubCue> = (0..FPS as u64 * 3)
+            .map(|f| SubCue {
+                start_frame: f,
+                end_frame: f + 1,
+                text: format!("cue {f}"),
+            })
+            .collect();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("frames.xml");
+        write_dcst_frames(&cues, "en", FPS, &out).unwrap();
+        let xml = std::fs::read_to_string(&out).unwrap();
+        for cue in &cues {
+            let time_in = frames_to_dcst(cue.start_frame, FPS);
+            let time_out = frames_to_dcst(cue.end_frame, FPS);
+            assert!(
+                xml.contains(&format!("TimeIn=\"{time_in}\" TimeOut=\"{time_out}\"")),
+                "frame {} kept its timecode: {xml}",
+                cue.start_frame
+            );
+        }
     }
 
     #[test]

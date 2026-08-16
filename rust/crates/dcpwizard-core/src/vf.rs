@@ -182,7 +182,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
                 ) else {
                     return -1;
                 };
-                let out = Some((a.id.clone(), a.duration));
+                let out = Some((a.id.clone(), a.duration, a.hash.clone()));
                 new_assets.push(a);
                 out
             }
@@ -202,7 +202,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
                 ) else {
                     return -1;
                 };
-                let out = Some((a.id.clone(), a.duration));
+                let out = Some((a.id.clone(), a.duration, a.hash.clone()));
                 new_assets.push(a);
                 out
             }
@@ -233,12 +233,14 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             subtitle_duration: subtitle.as_ref().map(|s| s.1).unwrap_or(0),
             subtitle_entry_point: 0,
             subtitle_language: subtitle.as_ref().map(|_| sub_lang.to_string()),
+            subtitle_hash: subtitle.as_ref().map(|s| s.2.clone()),
             ccap_id: ccap.as_ref().map(|c| c.0.clone()),
             ccap_edit_rate_num: if ccap.is_some() { edit_num } else { 0 },
             ccap_edit_rate_den: if ccap.is_some() { edit_den } else { 0 },
             ccap_duration: ccap.as_ref().map(|c| c.1).unwrap_or(0),
             ccap_entry_point: 0,
             ccap_language: ccap.as_ref().map(|_| sub_lang.to_string()),
+            ccap_hash: ccap.as_ref().map(|c| c.2.clone()),
             stereoscopic: false,
             aux_data: None,
             markers: Vec::new(),
@@ -494,13 +496,17 @@ fn prepare_timed_text(
 
     // SRT gets converted to a temp DCST; supplied XML is wrapped as-is.
     let mut temp_dcst: Option<PathBuf> = None;
+    let mut resources = Vec::new();
     let dcst_path = if is_xml {
         input.to_path_buf()
     } else {
         let tmp = vf_dir.join(format!("{prefix}_{}.xml", uuid::Uuid::new_v4()));
-        if let Err(e) = crate::subtitle::srt_to_shifted_dcst(input, 0, lang, fps, &tmp) {
-            tracing::error!("{prefix} conversion failed: {e}");
-            return None;
+        match crate::subtitle::srt_to_shifted_dcst(input, 0, lang, fps, &tmp) {
+            Ok(r) => resources = r,
+            Err(e) => {
+                tracing::error!("{prefix} conversion failed: {e}");
+                return None;
+            }
         }
         temp_dcst = Some(tmp.clone());
         tmp
@@ -508,18 +514,22 @@ fn prepare_timed_text(
 
     let id = uuid::Uuid::new_v4();
     let filename = format!("{prefix}_{id}.mxf");
-    let wrap_config = crate::mxf_wrap::MxfWrapConfig {
-        input_path: dcst_path,
-        output_mxf: vf_dir.join(&filename),
-        mxf_type: crate::mxf_wrap::MxfType::TimedText,
-        frame_rate: fps,
-        encryption: None,
-        mca_config: None,
-        asset_uuid: Some(*id.as_bytes()),
-    };
-    let track = crate::mxf_wrap::wrap_mxf_result(&wrap_config);
+    let track = crate::mxf_wrap::wrap_timed_text_resources(
+        &dcst_path,
+        &resources,
+        &vf_dir.join(&filename),
+        fps,
+        Some(*id.as_bytes()),
+    );
     if let Some(tmp) = temp_dcst {
         let _ = std::fs::remove_file(tmp);
+    }
+    // the staged font now lives inside the MXF; anything the caller supplied
+    // stays where it is
+    for (resource, _) in &resources {
+        if resource.starts_with(vf_dir) {
+            let _ = std::fs::remove_file(resource);
+        }
     }
     let track = track?;
     let path = vf_dir.join(&filename);

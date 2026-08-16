@@ -140,6 +140,8 @@ pub struct CplReel {
     pub subtitle_duration: u64,
     pub subtitle_entry_point: u64,
     pub subtitle_language: Option<String>,
+    #[serde(default)]
+    pub subtitle_hash: Option<String>,
     /// Bare UUID of the closed-caption (ST 429-12) timed-text track, when present.
     /// Distinct from the open subtitle: emitted as MainClosedCaption.
     #[serde(default)]
@@ -154,6 +156,8 @@ pub struct CplReel {
     pub ccap_entry_point: u64,
     #[serde(default)]
     pub ccap_language: Option<String>,
+    #[serde(default)]
+    pub ccap_hash: Option<String>,
     /// Picture is a stereoscopic (ST 429-10) essence: emit MainStereoscopicPicture
     /// with FrameRate doubled (two frames per edit unit) instead of MainPicture.
     pub stereoscopic: bool,
@@ -776,6 +780,9 @@ fn main_subtitle_block(reel: &CplReel, subtitle_id: &str) -> String {
         "          <Duration>{}</Duration>\n",
         reel.subtitle_duration
     ));
+    if let Some(ref hash) = reel.subtitle_hash {
+        b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
+    }
     if let Some(ref lang) = reel.subtitle_language {
         b.push_str(&format!("          <Language>{lang}</Language>\n"));
     }
@@ -805,6 +812,9 @@ fn main_closed_caption_block(reel: &CplReel, ccap_id: &str) -> String {
         "          <Duration>{}</Duration>\n",
         reel.ccap_duration
     ));
+    if let Some(ref hash) = reel.ccap_hash {
+        b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
+    }
     if let Some(ref lang) = reel.ccap_language {
         b.push_str(&format!("          <Language>{lang}</Language>\n"));
     }
@@ -924,6 +934,62 @@ mod tests {
         let cc_pos = xml.find("<MainClosedCaption>").unwrap();
         let close_pos = xml.find("</AssetList>").unwrap();
         assert!(cc_pos < close_pos);
+    }
+
+    /// Some servers hash-check the CPL rather than the PKL, so a timed-text
+    /// asset needs its `Hash` there like picture and sound, in 429-7 order:
+    /// after Duration and before Language.
+    #[test]
+    fn timed_text_assets_carry_their_hash_in_the_cpl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let mut reel = sound_reel();
+        reel.subtitle_id = Some("sub-uuid-1".into());
+        reel.subtitle_edit_rate_num = 24;
+        reel.subtitle_edit_rate_den = 1;
+        reel.subtitle_duration = 240;
+        reel.subtitle_language = Some("en".into());
+        reel.subtitle_hash = Some("c3VidGl0bGUtaGFzaA==".into());
+        reel.ccap_id = Some("ccap-uuid-1".into());
+        reel.ccap_edit_rate_num = 24;
+        reel.ccap_edit_rate_den = 1;
+        reel.ccap_duration = 240;
+        reel.ccap_language = Some("en".into());
+        reel.ccap_hash = Some("Y2NhcC1oYXNo".into());
+        let config = CplConfig {
+            title: "Hash Test".into(),
+            content_kind: "feature".into(),
+            reels: vec![reel],
+            standard: crate::Standard::Smpte,
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+
+        let subtitle = xml
+            .split("<MainSubtitle>")
+            .nth(1)
+            .and_then(|s| s.split("</MainSubtitle>").next())
+            .expect("a MainSubtitle");
+        assert!(
+            subtitle.contains("<Hash>c3VidGl0bGUtaGFzaA==</Hash>"),
+            "{subtitle}"
+        );
+        assert!(
+            subtitle.find("<Duration>").unwrap() < subtitle.find("<Hash>").unwrap(),
+            "Hash follows Duration: {subtitle}"
+        );
+        assert!(
+            subtitle.find("<Hash>").unwrap() < subtitle.find("<Language>").unwrap(),
+            "Hash precedes Language: {subtitle}"
+        );
+
+        let ccap = xml
+            .split("<MainClosedCaption>")
+            .nth(1)
+            .and_then(|s| s.split("</MainClosedCaption>").next())
+            .expect("a MainClosedCaption");
+        assert!(ccap.contains("<Hash>Y2NhcC1oYXNo</Hash>"), "{ccap}");
     }
 
     #[test]

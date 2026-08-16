@@ -570,6 +570,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             });
         let mut subtitle_id = None;
         let mut subtitle_duration = 0u64;
+        let mut subtitle_hash = None;
         if let Some(sub) = comp.subtitle.as_ref() {
             let is_xml = sub
                 .extension()
@@ -605,9 +606,10 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
                 )
             };
             match wrapped {
-                Ok((id, dur)) => {
-                    subtitle_id = Some(id);
-                    subtitle_duration = dur;
+                Ok(track) => {
+                    subtitle_id = Some(track.id);
+                    subtitle_duration = track.duration;
+                    subtitle_hash = Some(track.hash);
                 }
                 Err(()) => {
                     cleanup(&temps);
@@ -648,6 +650,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             subtitle_duration,
             subtitle_entry_point: 0,
             subtitle_language: (subtitle_duration > 0).then(|| sub_lang.clone()),
+            subtitle_hash,
             stereoscopic: false,
             aux_data: None,
             markers: crate::markers::default_markers(total),

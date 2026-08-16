@@ -159,11 +159,17 @@ user-facing surface is here.
 
 - cosmic-text's bidi handling could replace the hand-rolled `--subtitle-rtl`
   reshaping.
-- Timed-text appearance covers the open `--subtitle` track only. `--ccap` keeps the
-  default `Font` line and fades, and `create --versions` renders through the older
-  frame-based writer, which reads no `SubtitleOptions` field at all (placement, RTL,
-  wrap and font embedding are ignored there too). Styling a caption track, or making
-  the versions path honour `SubtitleOptions`, is the same piece of work.
+- Timed-text appearance covers the open `--subtitle` track only. `--ccap` and
+  `create --versions` render through the same writer under `SubtitleOptions::default()`,
+  so placement, RTL and wrap are ignored on both (the font is embedded either way).
+  Styling a caption track, or carrying the caller's `SubtitleOptions` into the
+  versions path, is the same piece of work.
+- `create --versions` with reel splitting leaves a reel with no cues carrying no
+  MainSubtitle, which dcpdoctor reports as `subtitle_missing_from_reel`: a
+  composition with subtitles needs one on every reel. Covering it means wrapping a
+  cue-less timed-text track, which postkit's wrap refuses today because it reads the
+  essence duration off the cue timing. `multi_reel_versions_share_picture_per_reel`
+  fails on it.
 - The standalone `burnin` command is now redundant for DCP work. `create
   --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
   an extra lossy transcode and its `--font-size` is inert for subtitles (read only in

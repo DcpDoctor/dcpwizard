@@ -70,7 +70,8 @@ fn extract_from_dcp(dcp_dir: &Path) -> Result<Vec<Cue>, String> {
                 && let Some(rel) = dcp.assetmap.assets.iter().find(|a| a.id == sub.id)
             {
                 let asset_path = dcp_dir.join(&rel.path);
-                let entry_ms = frames_to_ms(sub.entry_point.unwrap_or(0).max(0) as u64, &sub.edit_rate);
+                let entry_ms =
+                    frames_to_ms(sub.entry_point.unwrap_or(0).max(0) as u64, &sub.edit_rate);
                 for mut cue in read_subtitle_asset(&asset_path)? {
                     // rebase asset-absolute cue onto reel-local playback, then the
                     // reel's place on the composition timeline

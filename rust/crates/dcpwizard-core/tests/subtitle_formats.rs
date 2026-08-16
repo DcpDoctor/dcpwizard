@@ -277,3 +277,60 @@ fn a_named_appearance_reaches_the_packaged_timed_text_mxf() {
         );
     }
 }
+
+/// The conformance findings a package built with no `--subtitle-font` used to
+/// carry: the timed-text ids, the missing LoadFont and StartTime, the IssueDate
+/// form, the second namespace, and the CPL Hash on the subtitle asset.
+#[test]
+fn create_dcp_with_no_named_font_clears_the_timed_text_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = dir.path().join("j2k");
+    std::fs::create_dir_all(&j2k).unwrap();
+    if dcpwizard_core::pad::generate_black_frame(W, H, FPS, &j2k.join("probe.j2c")).is_err() {
+        eprintln!("skipping: no J2K encoder on this machine");
+        return;
+    }
+    std::fs::remove_file(j2k.join("probe.j2c")).unwrap();
+    make_frames(&j2k, 48);
+    let srt = dir.path().join("in.srt");
+    std::fs::write(
+        &srt,
+        "1\n00:00:00,500 --> 00:00:01,000\nHello there\n\n2\n00:00:01,200 --> 00:00:01,900\nSecond cue\n",
+    )
+    .unwrap();
+    let out = dir.path().join("dcp");
+    assert_eq!(
+        create_dcp(&base(&out, j2k, srt, SubtitleOptions::default())),
+        0
+    );
+
+    let result = dcpwizard_core::verify::verify_dcp(&out);
+    assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
+    for code in [
+        "subtitle_invalid_issue_date",
+        "subtitle_namespace_count",
+        "cpl_missing_hash",
+    ] {
+        assert!(
+            !result.warnings.iter().any(|w| w.contains(code)),
+            "{code} still reported: {:?}",
+            result.warnings
+        );
+    }
+
+    // the font came off the machine, so the track carries one either way
+    let subtitle_mxf = std::fs::read_dir(&out)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("subtitle_"))
+        })
+        .expect("a subtitle MXF");
+    assert!(
+        std::fs::metadata(&subtitle_mxf).unwrap().len() > 4096,
+        "the MXF carries an embedded font, not just the XML"
+    );
+}

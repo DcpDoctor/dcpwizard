@@ -963,6 +963,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let snd_hash = has_sound
         .then(|| crate::hash::hash_file(&sound_mxf_path).unwrap_or_default())
         .filter(|h| !h.is_empty());
+    let subtitle_hash = has_subtitle
+        .then(|| crate::hash::hash_file(&subtitle_mxf_path).unwrap_or_default())
+        .filter(|h| !h.is_empty());
+    let ccap_hash = has_ccap
+        .then(|| crate::hash::hash_file(&ccap_mxf_path).unwrap_or_default())
+        .filter(|h| !h.is_empty());
 
     let reel = crate::cpl::CplReel {
         reel_id: uuid::Uuid::new_v4().to_string(),
@@ -1002,6 +1008,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else {
             None
         },
+        subtitle_hash,
         ccap_id: if has_ccap {
             Some(ccap_uuid.to_string())
         } else {
@@ -1016,6 +1023,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else {
             None
         },
+        ccap_hash,
         stereoscopic,
         aux_data: aux_data.clone(),
         markers,

@@ -507,6 +507,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             // subtitle for this reel
             let mut subtitle_id = None;
             let mut subtitle_duration = 0u64;
+            let mut subtitle_hash = None;
             if sub_is_xml && i == 0 {
                 match wrap_subtitle_xml(
                     "subtitle",
@@ -516,9 +517,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut pkl_entries,
                     &mut am_entries,
                 ) {
-                    Ok((id, dur)) => {
-                        subtitle_id = Some(id);
-                        subtitle_duration = dur;
+                    Ok(track) => {
+                        subtitle_id = Some(track.id);
+                        subtitle_duration = track.duration;
+                        subtitle_hash = Some(track.hash);
                     }
                     Err(()) => {
                         cleanup(&temps);
@@ -538,9 +540,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                         &mut am_entries,
                         &mut temps,
                     ) {
-                        Ok((id, dur)) => {
-                            subtitle_id = Some(id);
-                            subtitle_duration = dur;
+                        Ok(track) => {
+                            subtitle_id = Some(track.id);
+                            subtitle_duration = track.duration;
+                            subtitle_hash = Some(track.hash);
                         }
                         Err(()) => {
                             cleanup(&temps);
@@ -553,6 +556,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             // closed caption for this reel (MainClosedCaption role)
             let mut ccap_id = None;
             let mut ccap_duration = 0u64;
+            let mut ccap_hash = None;
             if ccap_is_xml && i == 0 {
                 match wrap_subtitle_xml(
                     "ccap",
@@ -562,9 +566,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut pkl_entries,
                     &mut am_entries,
                 ) {
-                    Ok((id, dur)) => {
-                        ccap_id = Some(id);
-                        ccap_duration = dur;
+                    Ok(track) => {
+                        ccap_id = Some(track.id);
+                        ccap_duration = track.duration;
+                        ccap_hash = Some(track.hash);
                     }
                     Err(()) => {
                         cleanup(&temps);
@@ -584,9 +589,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                         &mut am_entries,
                         &mut temps,
                     ) {
-                        Ok((id, dur)) => {
-                            ccap_id = Some(id);
-                            ccap_duration = dur;
+                        Ok(track) => {
+                            ccap_id = Some(track.id);
+                            ccap_duration = track.duration;
+                            ccap_hash = Some(track.hash);
                         }
                         Err(()) => {
                             cleanup(&temps);
@@ -627,12 +633,14 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 subtitle_duration,
                 subtitle_entry_point: 0,
                 subtitle_language: subtitle_duration.gt(&0).then(|| sub_lang.clone()),
+                subtitle_hash,
                 ccap_id,
                 ccap_edit_rate_num: fps,
                 ccap_edit_rate_den: 1,
                 ccap_duration,
                 ccap_entry_point: 0,
                 ccap_language: ccap_duration.gt(&0).then(|| sub_lang.clone()),
+                ccap_hash,
                 stereoscopic: false,
                 aux_data: aux_data.clone(),
                 markers: Vec::new(),
@@ -830,6 +838,14 @@ pub(crate) fn wrap_sound_reel(
     })
 }
 
+/// A wrapped timed-text track as a CPL reel needs it: the track file's asset id,
+/// the frames its essence carries, and the hash the CPL repeats from the PKL.
+pub(crate) struct WrappedTimedText {
+    pub id: String,
+    pub duration: u64,
+    pub hash: String,
+}
+
 /// Wrap already-rebased SRT cues into a per-reel timed-text MXF. `prefix` names
 /// the files ("subtitle" or "ccap"); the essence is identical either way.
 #[allow(clippy::too_many_arguments)]
@@ -842,31 +858,43 @@ pub(crate) fn wrap_subtitle_cues(
     pkl: &mut Vec<crate::pkl::PklEntry>,
     am: &mut Vec<crate::assetmap::AssetMapEntry>,
     temps: &mut Vec<PathBuf>,
-) -> Result<(String, u64), ()> {
+) -> Result<WrappedTimedText, ()> {
     let uuid = uuid::Uuid::new_v4();
     let dcst = config.output_dir.join(format!("{prefix}_{uuid}.xml"));
-    if let Err(e) = crate::subtitle::write_dcst_frames(cues, lang, fps, &dcst) {
-        tracing::error!("{prefix} write failed: {e}");
-        return Err(());
-    }
+    let resources = match crate::subtitle::write_dcst_frames(cues, lang, fps, &dcst) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("{prefix} write failed: {e}");
+            return Err(());
+        }
+    };
     let name = format!("{prefix}_{uuid}.mxf");
     let path = config.output_dir.join(&name);
-    let wrapped = crate::mxf_wrap::wrap_mxf_result(&crate::mxf_wrap::MxfWrapConfig {
-        input_path: dcst.clone(),
-        output_mxf: path.clone(),
-        mxf_type: crate::mxf_wrap::MxfType::TimedText,
-        frame_rate: fps,
-        encryption: None,
-        mca_config: None,
-        asset_uuid: Some(*uuid.as_bytes()),
-    });
+    let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+        &dcst,
+        &resources,
+        &path,
+        fps,
+        Some(*uuid.as_bytes()),
+    );
     temps.push(dcst);
+    // the staged font now lives inside the MXF; a bitmap resource is the
+    // caller's own file and stays where it is
+    for (resource, _) in &resources {
+        if resource.starts_with(&config.output_dir) {
+            temps.push(resource.clone());
+        }
+    }
     let Some(track) = wrapped else {
         tracing::error!("Failed to wrap {prefix} MXF");
         return Err(());
     };
     register_asset(pkl, am, &uuid.to_string(), &name, &path);
-    Ok((uuid.to_string(), track.duration))
+    Ok(WrappedTimedText {
+        id: uuid.to_string(),
+        duration: track.duration,
+        hash: crate::hash::hash_file(&path).unwrap_or_default(),
+    })
 }
 
 /// Wrap a supplied SMPTE timed-text XML into an MXF unchanged (single reel).
@@ -878,7 +906,7 @@ pub(crate) fn wrap_subtitle_xml(
     fps: u32,
     pkl: &mut Vec<crate::pkl::PklEntry>,
     am: &mut Vec<crate::assetmap::AssetMapEntry>,
-) -> Result<(String, u64), ()> {
+) -> Result<WrappedTimedText, ()> {
     let uuid = uuid::Uuid::new_v4();
     let name = format!("{prefix}_{uuid}.mxf");
     let path = config.output_dir.join(&name);
@@ -896,7 +924,11 @@ pub(crate) fn wrap_subtitle_xml(
         return Err(());
     };
     register_asset(pkl, am, &uuid.to_string(), &name, &path);
-    Ok((uuid.to_string(), track.duration))
+    Ok(WrappedTimedText {
+        id: uuid.to_string(),
+        duration: track.duration,
+        hash: crate::hash::hash_file(&path).unwrap_or_default(),
+    })
 }
 
 /// Prepare an audio source to canonical DCP 5.1 layout when it is 5.1, else use
