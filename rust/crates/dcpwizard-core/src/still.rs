@@ -70,6 +70,7 @@ pub fn build_still_frames(
     let mut data = decode_rgb48(image, width, height)?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    crate::reel::clear_stale_frames(out_dir)?;
 
     let params = CompressParams {
         frame_rate: fps.max(1) as u16,

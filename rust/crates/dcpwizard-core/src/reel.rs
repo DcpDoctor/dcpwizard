@@ -311,6 +311,17 @@ pub(crate) fn collect_frames(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Remove every codestream already in `dir`. The MXF wrapper takes the whole
+/// directory listing, so frames from an earlier longer run would ship as extra
+/// frames if a staging directory were reused without this.
+pub(crate) fn clear_stale_frames(dir: &Path) -> Result<(), String> {
+    for stale in collect_frames(dir) {
+        std::fs::remove_file(&stale)
+            .map_err(|e| format!("cannot clear stale {}: {e}", stale.display()))?;
+    }
+    Ok(())
+}
+
 /// Build a multi-reel DCP. Called by [`crate::dcp::create_dcp`] only when
 /// `reel_length_minutes > 0`; the single-reel path is left untouched.
 pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {

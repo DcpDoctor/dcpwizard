@@ -39,6 +39,7 @@ pub fn link_trimmed_frames(
     let kept = kept_frames(frames.len() as u64, start_frames, end_frames)?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    crate::reel::clear_stale_frames(out_dir)?;
     for (index, frame) in frames
         .iter()
         .skip(start_frames as usize)
@@ -108,6 +109,24 @@ mod tests {
         assert!(
             out.join("frame_00000000.j2c").is_file(),
             "renumbered from 0"
+        );
+    }
+
+    #[test]
+    fn a_shorter_rerun_clears_the_longer_runs_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("j2k");
+        std::fs::create_dir_all(&src).unwrap();
+        for i in 0..10u64 {
+            std::fs::write(src.join(format!("frame_{i:08}.j2c")), [i as u8]).unwrap();
+        }
+        let out = dir.path().join("trimmed");
+        assert_eq!(link_trimmed_frames(&src, 1, 1, &out).unwrap(), 8);
+        assert_eq!(link_trimmed_frames(&src, 3, 3, &out).unwrap(), 4);
+        assert_eq!(
+            crate::reel::collect_frames(&out).len(),
+            4,
+            "frames from the longer run must not survive the rerun"
         );
     }
 
