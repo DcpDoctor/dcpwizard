@@ -75,10 +75,12 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **RTL subtitles** (`create --subtitle-rtl auto|on|off`, default auto): Hebrew/Arabic is reshaped and reordered to visual order so servers that skip the bidi algorithm render it correctly
 - **Auto line-wrap** via `create --subtitle-wrap <chars>`: long lines wrap on whitespace (never mid-word), preserving styling
 - **Font embedding + subsetting** via `create --subtitle-font <ttf/otf>`: the font is subset to the used glyphs (SMPTE 640 KB limit, fails loud if exceeded) and embedded in the timed-text MXF, referenced by a `LoadFont`; `--subtitle-no-subset` embeds the whole font. Under reel splitting the font is referenced by one shared asset id in every reel.
+- **Timed-text appearance** on `create`: `--subtitle-font-size <points>`, `--subtitle-colour <RRGGBB[AA]>`, `--subtitle-effect none|outline|shadow`, `--subtitle-effect-colour <RRGGBB[AA]>`, `--subtitle-fade-up <ms>` and `--subtitle-fade-down <ms>` write the ST 428-7 `Font` attributes and the per-cue fades. Defaults are the ones the track has always carried: 42 points, white on a black shadow, a twelfth of a second each way. An outline is written as the standard's `border`. They style the `--subtitle` track only, so `--ccap` keeps the default appearance
 - **Subtitle editing** on standalone files via `subtitle-edit`: `--list` cues, `--shift-ms` all cues, or `--index N` with `--text` / `--set-start-ms`+`--set-end-ms`, written back as SRT (it edits source files, never subtitles inside a finished DCP)
 - **Subtitle extraction** from a DCP or subtitle asset back to `.srt` (timed) or `.txt` (text only) via `subtitle-extract`; reads MXF-wrapped ST 428-7 and loose SMPTE/Interop XML, concatenating reels with their timeline offsets
 - **Multilingual subtitles** with RFC 5646 language tags
 - **Burn-in during the encode** via `create --burn-subtitle <file>` (+ `--burn-subtitle-font <ttf/otf>`): the cues are drawn into the picture as it encodes, so a burnt festival print costs one generation rather than two. Takes the same formats `--subtitle` does, and covers video, image sequences and held stills. Burnt text is part of the image and registers no timed-text track; the same file cannot be both, and burning onto an already-X'Y'Z' source or a J2K directory is refused
+- **Burn-in appearance** on `create`: `--burn-font-size <pct of frame height>`, `--burn-colour <RRGGBB[AA]>`, `--burn-effect none|outline|shadow`, `--burn-effect-colour <RRGGBB[AA]>`, `--burn-outline-width <pct of text height>`, `--burn-x-scale`, `--burn-y-scale`, `--burn-fade-up <ms>` and `--burn-fade-down <ms>`. Each is laid over postkit's burn defaults, so an unnamed one keeps the value it always had. Any of them without `--burn-subtitle` is refused by name
 - **Subtitle burn-in as a standalone pass** via `burnin`, for rendering into a video file outside a package
 
 ### Audio
@@ -504,6 +506,17 @@ dcpwizard create --title "My Film" --video ./j2k --output ./dcp \
     --subtitle subs.ass --subtitle-language ar \
     --subtitle-halign center --subtitle-valign bottom --subtitle-vposition 8 \
     --subtitle-rtl auto --subtitle-wrap 42 --subtitle-font NotoSansArabic.ttf
+
+# How the packaged track looks: 50-point yellow text with no effect and a
+# 200 ms fade each way. --ccap keeps the default appearance.
+dcpwizard create --title "My Film" --video ./j2k --output ./dcp \
+    --subtitle subs.srt --subtitle-font-size 50 --subtitle-colour FFFF00 \
+    --subtitle-effect none --subtitle-fade-up 200 --subtitle-fade-down 200
+
+# How burnt-in text looks: yellow, outlined, 8% of the frame height tall
+dcpwizard create --title "My Film" --video master.mov --output ./dcp \
+    --burn-subtitle subs.srt --burn-colour FFFF00 --burn-effect outline \
+    --burn-font-size 8 --burn-outline-width 6
 
 # Edit a standalone subtitle file (any parsable format), written back as SRT
 dcpwizard subtitle-edit --input subs.srt --list

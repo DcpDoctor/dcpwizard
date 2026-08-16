@@ -141,15 +141,17 @@ user-facing surface is here.
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
 
-- Burn-in styling flags. `create --burn-subtitle` composites with
-  `BurnStyle::default()` only: size, line height, margin and default colour exist in
-  the struct but no flag reaches them, and outline, shadow, effect colour and outline
-  width are not in the rasteriser at all. Those four are the appearance controls the
-  rasteriser was built to enable (they cannot work through ffmpeg's `subtitles`
-  filter, which styles from the subtitle file rather than from flags), so this is the
-  remaining half of the burn-in bullet. PK subtitle_raster.rs is where they land.
+- Burn-in styling flags: what is left. Size, colour, effect, effect colour, outline
+  width, x/y scale and the fades all reach the rasteriser now. Line height and margin
+  are still `BurnStyle` fields no flag can name, and postkit has no override for
+  either, so they need a `BurnStyleOverrides` field before a flag is worth adding.
   Separately, cosmic-text's bidi handling could replace the hand-rolled
   `--subtitle-rtl` reshaping.
+- Timed-text appearance covers the open `--subtitle` track only. `--ccap` keeps the
+  default `Font` line and fades, and `create --versions` renders through the older
+  frame-based writer, which reads no `SubtitleOptions` field at all (placement, RTL,
+  wrap and font embedding are ignored there too). Styling a caption track, or making
+  the versions path honour `SubtitleOptions`, is the same piece of work.
 - The standalone `burnin` command is now redundant for DCP work. `create
   --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
   an extra lossy transcode and its `--font-size` is inert for subtitles (read only in
