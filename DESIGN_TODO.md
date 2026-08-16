@@ -48,6 +48,26 @@ user-facing surface is here.
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is
   stage-based, not per-frame.
+- Playlist / SPL playback (DCP-o-matic ships this as a separate dcpomatic2_playlist
+  tool feeding dcpomatic2_player). Sequence several packages into one list the
+  player walks in order. The embedded preview is otherwise at parity with that
+  player: postkit `preview` resolves a CPL by uuid, decrypts encrypted picture
+  essence with the content key, colour-manages and can drive a GPU decoder. What it
+  lacks is the list, since `PlaybackOptions` names one `input` and one `cpl_uuid`,
+  so this needs a queue above it plus GUI ordering. Nothing about package
+  correctness depends on it.
+- MPEG2 picture essence (DCP-o-matic 2.18 `VideoEncoding`, an alternative to J2K for
+  legacy Interop gear). Every encode path here is grok J2K (postkit `pipeline` and
+  `grok_encoder`) and the CPL and MXF writers assume a J2K picture descriptor, so
+  this is a second essence type end to end rather than a flag. Only worth it if a
+  customer actually has gear that needs it.
+- TMS upload after build (DCP-o-matic config `tms_protocol` ftp or sftp, plus
+  `tms_ip`, `tms_path`, `tms_user`, `tms_password` and `upload_after_make_dcp`):
+  push the finished package to a theatre management system. Delivery here is drive
+  copy (`copy`, `format-drive`), webhook and the REST API, all local or callback
+  based. The credential half already has a pattern to copy: `email.rs` reads an SMTP
+  config TOML whose password field redacts itself in Debug and never reaches argv or
+  logs.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
