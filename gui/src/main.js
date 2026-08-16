@@ -435,10 +435,12 @@ document.getElementById("prop-auto-crop")?.addEventListener("click", async () =>
   const video = project.reels[0]?.picture?.path;
   const plan = document.getElementById("prop-crop-plan");
   if (!video) { tauriMessage("Import a video asset first"); return; }
+  // a threshold of 0 means pure black only, so it must not fall back to the default
+  const threshold = parseFloat(document.getElementById("prop-auto-crop-threshold")?.value);
   try {
     const crop = await invoke("detect_source_crop", {
       videoPath: video,
-      threshold: parseFloat(document.getElementById("prop-auto-crop-threshold")?.value) || null,
+      threshold: Number.isNaN(threshold) ? null : threshold,
       resolution: document.getElementById("prop-resolution")?.value || null,
     });
     for (const edge of ["left", "right", "top", "bottom"]) {

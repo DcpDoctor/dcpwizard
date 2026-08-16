@@ -1832,9 +1832,12 @@ fn build_sign_language_audio(
     Ok((combined, main_channels))
 }
 
+/// What `resolve_container` answers when neither `--container` nor
+/// `--container-dims` was given.
+const NO_CONTAINER: (u32, u32) = (0, 0);
+
 /// The rasters `create` has to land the picture on: the one `--twok`/`--fourk`
-/// forces, and the container's active area inside it. A (0,0) container is the
-/// "no container given" the resolver returns.
+/// forces, and the container's active area inside it.
 fn encode_geometry(
     twok: bool,
     fourk: bool,
@@ -1845,7 +1848,7 @@ fn encode_geometry(
         .or(twok.then_some(dcpwizard_core::Resolution::TwoK));
     dcpwizard_core::source_picture::EncodeGeometry {
         forced_raster: forced.map(|resolution| (resolution.width(), resolution.height())),
-        container: (container != (0, 0)).then_some(container),
+        container: (container != NO_CONTAINER).then_some(container),
     }
 }
 
