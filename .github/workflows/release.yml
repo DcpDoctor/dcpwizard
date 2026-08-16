@@ -77,76 +77,10 @@ jobs:
           }
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
-      # build grok (jpeg 2000 codec) from source once per tag, cached.
-      # provides libgrokj2k on the pkg-config + loader paths and grk_compress on PATH.
-      - name: Cache grok
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.10
-
       - name: Setup grok
-        if: runner.os != 'Windows'
-        env:
-          GROK_TAG: v20.3.10
-        run: |
-          prefix="$GITHUB_WORKSPACE/grok-install"
-          if [ ! -x "$prefix/bin/grk_compress" ]; then
-            git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
-              https://github.com/GrokImageCompression/grok.git "$RUNNER_TEMP/grok-src"
-            cmake -S "$RUNNER_TEMP/grok-src" -B "$RUNNER_TEMP/grok-build" \
-              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"
-            cmake --build "$RUNNER_TEMP/grok-build" --parallel "$(getconf _NPROCESSORS_ONLN)"
-            cmake --install "$RUNNER_TEMP/grok-build"
-          fi
-          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/lib64/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$prefix/lib:$prefix/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$prefix/lib:$prefix/lib64:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "$prefix/bin" >> "$GITHUB_PATH"
-
-      # windows: msvc build mirroring grok's own ci (x64 generator, no libcurl);
-      # pkgconfiglite provides pkg-config for grokj2k-sys and the runner's LLVM
-      # provides libclang for bindgen.
-      - name: Setup grok (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          GROK_TAG: v20.3.10
-        run: |
-          # choco puts its shim directory on the machine PATH, which this
-          # already-running bash cannot see, so add it by hand
-          choco_bin="$(cygpath -u "${ChocolateyInstall:-C:/ProgramData/chocolatey}")/bin"
-          export PATH="$choco_bin:$PATH"
-          echo "$(cygpath -w "$choco_bin")" >> "$GITHUB_PATH"
-          # choco sometimes reports success while installing nothing, so gate
-          # the retries on pkg-config actually answering, not choco's exit code
-          for attempt in 1 2 3 4 5; do
-            pkg-config --version >/dev/null 2>&1 && break
-            choco install -y --no-progress --force pkgconfiglite || true
-            hash -r
-            pkg-config --version >/dev/null 2>&1 && break
-            if [ "$attempt" = 5 ]; then
-              echo "pkg-config still missing after $attempt pkgconfiglite installs." >&2
-              echo "$choco_bin holds:" >&2
-              ls -1 "$choco_bin" >&2 || echo "  (no such directory)" >&2
-              exit 1
-            fi
-            sleep $((30 * attempt))
-          done
-          prefix="$(cygpath -m "$GITHUB_WORKSPACE")/grok-install"
-          if [ ! -f "$prefix/bin/grokj2k.dll" ]; then
-            git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
-              https://github.com/GrokImageCompression/grok.git "$RUNNER_TEMP/grok-src"
-            cmake -S "$RUNNER_TEMP/grok-src" -B "$RUNNER_TEMP/grok-build" \
-              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-              -DCMAKE_GENERATOR_PLATFORM=x64 -DGRK_ENABLE_LIBCURL=OFF \
-              -DGRK_BUILD_PKGCONFIG_FILES=ON -DGRK_BUILD_CORE_SWIG_BINDINGS=OFF
-            cmake --build "$RUNNER_TEMP/grok-build" --config Release --parallel 4
-            cmake --install "$RUNNER_TEMP/grok-build" --config Release
-          fi
-          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
-          echo "$(cygpath -w "$prefix")\\bin" >> "$GITHUB_PATH"
+        uses: PostPerfection/setup-grok@v1
+        with:
+          grok-ref: v20.3.10
 
       - name: Build release
         working-directory: rust
@@ -204,33 +138,10 @@ jobs:
           sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev
           cargo install cargo-deb
 
-      # build grok (jpeg 2000 codec) from source once per tag, cached.
-      # provides libgrokj2k on the pkg-config + loader paths and grk_compress on PATH.
-      - name: Cache grok
-        if: runner.os != 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/grok-install
-          key: grok-${{ runner.os }}-v20.3.10
-
       - name: Setup grok
-        if: runner.os != 'Windows'
-        env:
-          GROK_TAG: v20.3.10
-        run: |
-          prefix="$GITHUB_WORKSPACE/grok-install"
-          if [ ! -x "$prefix/bin/grk_compress" ]; then
-            git clone --depth 1 --recurse-submodules --shallow-submodules --branch "$GROK_TAG" \
-              https://github.com/GrokImageCompression/grok.git "$RUNNER_TEMP/grok-src"
-            cmake -S "$RUNNER_TEMP/grok-src" -B "$RUNNER_TEMP/grok-build" \
-              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"
-            cmake --build "$RUNNER_TEMP/grok-build" --parallel "$(getconf _NPROCESSORS_ONLN)"
-            cmake --install "$RUNNER_TEMP/grok-build"
-          fi
-          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/lib64/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$prefix/lib:$prefix/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$prefix/lib:$prefix/lib64:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "$prefix/bin" >> "$GITHUB_PATH"
+        uses: PostPerfection/setup-grok@v1
+        with:
+          grok-ref: v20.3.10
 
       - name: Build .deb package
         working-directory: rust
