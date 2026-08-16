@@ -230,6 +230,55 @@
                 </fieldset>
 
                 <fieldset>
+                  <legend>Source Picture</legend>
+                  <div class="prop-field">
+                    <label>Crop (source pixels, before any rotation)</label>
+                    <div class="crop-grid">
+                      <label for="prop-crop-left">Left<input id="prop-crop-left" type="number" min="0" value="0"></label>
+                      <label for="prop-crop-right">Right<input id="prop-crop-right" type="number" min="0" value="0"></label>
+                      <label for="prop-crop-top">Top<input id="prop-crop-top" type="number" min="0" value="0"></label>
+                      <label for="prop-crop-bottom">Bottom<input id="prop-crop-bottom" type="number" min="0" value="0"></label>
+                    </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-auto-crop-threshold">Auto-crop black level (0 to 1)</label>
+                    <div class="input-with-btn">
+                      <input id="prop-auto-crop-threshold" type="number" step="0.01" min="0" max="1" value="0.1">
+                      <button id="prop-auto-crop" class="btn-sm">Auto-crop</button>
+                    </div>
+                    <p class="field-hint" id="prop-crop-plan"></p>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-fill-crop"> Fill container (crop to its aspect, no letterbox)</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-deinterlace"> Deinterlace</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-denoise"> Denoise</label>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-rotate">Rotate (clockwise)</label>
+                    <select id="prop-rotate">
+                      <option value="none">None</option>
+                      <option value="90">90°</option>
+                      <option value="180">180°</option>
+                      <option value="270">270°</option>
+                    </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-flip">Flip</label>
+                    <select id="prop-flip">
+                      <option value="none">None</option>
+                      <option value="horizontal">Horizontal</option>
+                      <option value="vertical">Vertical</option>
+                      <option value="both">Both</option>
+                    </select>
+                  </div>
+                  <p class="field-hint">Fill container scales the cropped picture onto the DCI raster and masks it to the chosen resolution, so it needs a resolution other than Auto.</p>
+                </fieldset>
+
+                <fieldset>
                   <legend>Trim &amp; Stills</legend>
                   <div class="prop-field">
                     <label for="prop-trim-start">Trim off the head</label>
@@ -369,6 +418,11 @@
                       <option value="dcp">DCP (L, R, C, LFE, Ls, Rs)</option>
                       <option value="lrc-ls-rs-lfe">L, R, C, Ls, Rs, LFE</option>
                     </select>
+                  </div>
+                  <div class="prop-field">
+                    <label>Channel mapping (gain in dB, empty is unrouted)</label>
+                    <div id="prop-audio-map" class="audio-map"></div>
+                    <p class="field-hint" id="prop-audio-map-hint">Import a sound asset to map its channels.</p>
                   </div>
                   <div class="prop-field">
                     <label for="prop-audio-delay">Audio delay (ms, negative is earlier)</label>

@@ -425,6 +425,85 @@ function renderReels() {
       renderReels();
     });
   });
+
+  refreshAudioMapMatrix();
+}
+
+// === Source picture ===
+
+document.getElementById("prop-auto-crop")?.addEventListener("click", async () => {
+  const video = project.reels[0]?.picture?.path;
+  const plan = document.getElementById("prop-crop-plan");
+  if (!video) { tauriMessage("Import a video asset first"); return; }
+  try {
+    const crop = await invoke("detect_source_crop", {
+      videoPath: video,
+      threshold: parseFloat(document.getElementById("prop-auto-crop-threshold")?.value) || null,
+      resolution: document.getElementById("prop-resolution")?.value || null,
+    });
+    for (const edge of ["left", "right", "top", "bottom"]) {
+      const field = document.getElementById(`prop-crop-${edge}`);
+      if (field) field.value = crop[edge];
+    }
+    if (plan) plan.textContent = crop.description;
+  } catch (e) {
+    if (plan) plan.textContent = "";
+    tauriMessage(String(e), { title: "Auto-crop failed", kind: "error" });
+  }
+});
+
+// === Audio channel mapping matrix ===
+
+// the path the drawn matrix belongs to, so re-rendering the reels does not throw
+// away gains the user has typed
+let audioMapPath = null;
+
+async function refreshAudioMapMatrix() {
+  const grid = document.getElementById("prop-audio-map");
+  const hint = document.getElementById("prop-audio-map-hint");
+  if (!grid) return;
+  const audio = project.reels[0]?.sound?.path || null;
+  if (audio === audioMapPath) return;
+  audioMapPath = audio;
+  grid.innerHTML = "";
+  if (!audio) {
+    if (hint) hint.textContent = "Import a sound asset to map its channels.";
+    return;
+  }
+  let panel;
+  try {
+    panel = await invoke("probe_audio_map", { audioPath: audio });
+  } catch (e) {
+    if (hint) hint.textContent = String(e);
+    return;
+  }
+  if (hint) hint.textContent = "Empty leaves a channel unrouted. Click a cell to route it at 0 dB.";
+  const header = panel.lanes.map(lane => `<th>${lane}</th>`).join("");
+  const rows = Array.from({ length: panel.channels }, (_, channel) => {
+    const cells = panel.lanes.map(lane =>
+      `<td><input type="text" inputmode="decimal" data-input="${channel + 1}" data-lane="${lane}" title="Channel ${channel + 1} to ${lane}, gain in dB"></td>`
+    ).join("");
+    return `<tr><th>${channel + 1}</th>${cells}</tr>`;
+  }).join("");
+  grid.innerHTML = `<table><thead><tr><th></th>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+  grid.querySelectorAll("input").forEach(cell => {
+    cell.addEventListener("focus", () => {
+      if (!cell.value.trim()) cell.value = "0";
+    });
+  });
+}
+
+// The grid as an IN:LANE@GAIN spec, or null when nothing is routed.
+function audioMapSpec() {
+  const cells = document.querySelectorAll("#prop-audio-map input");
+  const entries = [];
+  for (const cell of cells) {
+    const gain = cell.value.trim();
+    if (!gain) continue;
+    const pair = `${cell.dataset.input}:${cell.dataset.lane}`;
+    entries.push(parseFloat(gain) === 0 ? pair : `${pair}@${gain}`);
+  }
+  return entries.length ? entries.join(",") : null;
 }
 
 // Add reel button
@@ -837,6 +916,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       loudnessTarget: document.getElementById("prop-loudness")?.value || null,
       truePeakCeiling: parseFloat(document.getElementById("prop-true-peak")?.value) || null,
       audioChannelDir: document.getElementById("prop-audio-channel-dir")?.value || null,
+      audioMap: audioMapSpec(),
       audioInputOrder: document.getElementById("prop-audio-input-order")?.value || "dcp",
       signLanguageVideo: document.getElementById("prop-sign-language-video")?.value || null,
       signLanguageTag: document.getElementById("prop-sign-language-tag")?.value || null,
@@ -848,6 +928,15 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       trimEnd: document.getElementById("prop-trim-end")?.value || null,
       stillLength: document.getElementById("prop-still-length")?.value || null,
       sourceColourspace: document.getElementById("prop-source-colourspace")?.value || "rec709",
+      cropLeft: parseInt(document.getElementById("prop-crop-left")?.value) || 0,
+      cropRight: parseInt(document.getElementById("prop-crop-right")?.value) || 0,
+      cropTop: parseInt(document.getElementById("prop-crop-top")?.value) || 0,
+      cropBottom: parseInt(document.getElementById("prop-crop-bottom")?.value) || 0,
+      fillCrop: document.getElementById("prop-fill-crop")?.checked || false,
+      deinterlace: document.getElementById("prop-deinterlace")?.checked || false,
+      denoise: document.getElementById("prop-denoise")?.checked || false,
+      rotate: document.getElementById("prop-rotate")?.value || "none",
+      flip: document.getElementById("prop-flip")?.value || "none",
       upmix: document.getElementById("prop-upmix")?.value || "none",
       reelLengthMinutes: parseInt(document.getElementById("prop-reel-length")?.value) || 0,
       splitAt: document.getElementById("prop-split-at")?.value || null,

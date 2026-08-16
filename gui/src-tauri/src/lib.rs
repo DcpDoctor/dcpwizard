@@ -110,6 +110,8 @@ pub fn run() {
             pipeline::retitle_dcp,
             pipeline::disk_space,
             pipeline::list_profiles,
+            pipeline::detect_source_crop,
+            pipeline::probe_audio_map,
             pipeline::create_vf,
             timeline::list_cpls,
             timeline::get_timeline,

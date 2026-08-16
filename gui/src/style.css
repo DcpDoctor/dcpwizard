@@ -24,6 +24,46 @@
   margin-bottom: 8px;
 }
 
+/* Per-side source crop, two edges per row */
+.crop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+}
+.crop-grid label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+.crop-grid input {
+  width: 70px;
+}
+
+/* Audio channel mapping matrix: one row per source channel, one column per lane */
+.audio-map {
+  overflow-x: auto;
+}
+.audio-map table {
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.audio-map th,
+.audio-map td {
+  padding: 2px 3px;
+  text-align: center;
+}
+.audio-map th {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+.audio-map input {
+  width: 34px;
+  padding: 2px;
+  text-align: center;
+}
+
 /* Version File replacement rows */
 .vf-repl-row {
   align-items: flex-end;

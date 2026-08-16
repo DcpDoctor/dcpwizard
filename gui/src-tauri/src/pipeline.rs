@@ -107,6 +107,11 @@ struct JobConfig {
     trim_end_frames: u64,
     // how long a single-image input is held, in frames. Zero = not a still
     still_length_frames: u64,
+    // crop, deinterlace, denoise, rotate, flip and container fill, applied to
+    // the source while it decodes
+    picture: dcpwizard_core::source_picture::SourcePictureOptions,
+    // IN:LANE@GAIN mix matrix applied to the sound before anything else
+    audio_map: Option<String>,
     // colour space the source carries, which decides the encoder transform
     source_colourspace: postkit::colour::ColourSpace,
     // stereo -> 5.1 upmix applied before loudness normalization
@@ -206,6 +211,16 @@ pub async fn submit_job(
     true_peak_ceiling: Option<f64>,
     audio_channel_dir: Option<String>,
     audio_input_order: Option<String>,
+    audio_map: Option<String>,
+    crop_left: Option<u32>,
+    crop_right: Option<u32>,
+    crop_top: Option<u32>,
+    crop_bottom: Option<u32>,
+    fill_crop: Option<bool>,
+    deinterlace: Option<bool>,
+    denoise: Option<bool>,
+    rotate: Option<String>,
+    flip: Option<String>,
     sign_language_video: Option<String>,
     sign_language_tag: Option<String>,
     pad_head: Option<String>,
@@ -312,6 +327,60 @@ pub async fn submit_job(
     }
 
     let upmix = parse_upmixer(upmix.as_deref())?;
+
+    let (flip_horizontal, flip_vertical) =
+        dcpwizard_core::source_picture::parse_flip(flip.as_deref().unwrap_or_default())?;
+    let picture = dcpwizard_core::source_picture::SourcePictureOptions {
+        crop: postkit::picture_processing::Crop {
+            left: crop_left.unwrap_or(0),
+            right: crop_right.unwrap_or(0),
+            top: crop_top.unwrap_or(0),
+            bottom: crop_bottom.unwrap_or(0),
+        },
+        fill_crop: fill_crop.unwrap_or(false),
+        deinterlace: deinterlace.unwrap_or(false),
+        denoise: denoise.unwrap_or(false),
+        rotation: dcpwizard_core::source_picture::parse_rotation(
+            rotate.as_deref().unwrap_or_default(),
+        )?,
+        flip_horizontal,
+        flip_vertical,
+        ..dcpwizard_core::source_picture::SourcePictureOptions::default()
+    };
+    if postkit::encode::detect_input_type(&video) == postkit::encode::InputType::J2kSequence {
+        dcpwizard_core::source_picture::check_precompressed_picture(&picture)?;
+    }
+    let panel_resolution = resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION);
+    if picture.fill_crop && container_of(panel_resolution) == NO_CONTAINER {
+        return Err(
+            "Fill container needs a picture resolution to fill: choose one instead of Auto".into(),
+        );
+    }
+
+    // the map places every channel by hand, and each of these places channels
+    // its own way, so two of them would fight over the same lanes
+    let audio_map = audio_map.filter(|spec| !spec.trim().is_empty());
+    if audio_map.is_some() {
+        let competing = [
+            (
+                audio_input_order == dcpwizard_core::mxf_wrap::AudioInputOrder::LrcLsRsLfe,
+                "the six-channel input order",
+            ),
+            (upmix.is_some(), "the stereo upmix"),
+            (
+                audio_channel_dir
+                    .as_deref()
+                    .is_some_and(|dir| !dir.is_empty()),
+                "a channel WAV directory",
+            ),
+        ];
+        if let Some((_, name)) = competing.into_iter().find(|(set, _)| *set) {
+            return Err(format!(
+                "The audio mapping and {name} both decide which DCP lane each channel lands on: \
+                 use one or the other"
+            ));
+        }
+    }
 
     // reel splitting: length, timecodes and chapters are three ways to say the
     // same thing, so only one may be set (the CLI rejects the combos too).
@@ -439,6 +508,8 @@ pub async fn submit_job(
         true_peak_ceiling,
         audio_channel_dir: audio_channel_dir.filter(|s| !s.is_empty()),
         audio_input_order,
+        audio_map,
+        picture,
         sign_language_video,
         sign_language_tag,
         pad_head,
@@ -514,6 +585,75 @@ fn profile_panel_list() -> Vec<ProfilePanelSettings> {
 #[tauri::command]
 pub async fn list_profiles() -> Vec<ProfilePanelSettings> {
     profile_panel_list()
+}
+
+/// The black borders a source carries, and what the picture plan around them
+/// does, for the panel's auto-crop button.
+#[derive(Serialize)]
+pub struct DetectedCrop {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+    pub description: String,
+}
+
+/// Measure the black borders around `video_path`'s content.
+#[tauri::command]
+pub async fn detect_source_crop(
+    video_path: String,
+    threshold: Option<f32>,
+    resolution: Option<String>,
+) -> Result<DetectedCrop, String> {
+    let source = PathBuf::from(&video_path);
+    let info = dcpwizard_core::probe::probe_video(&source)
+        .ok_or_else(|| format!("cannot read the size of {video_path}"))?;
+    let container = container_of(resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION));
+    let resolved = dcpwizard_core::source_picture::resolve_picture(
+        &dcpwizard_core::source_picture::SourcePictureOptions {
+            auto_crop: true,
+            auto_crop_threshold: threshold
+                .unwrap_or(dcpwizard_core::source_picture::DEFAULT_AUTO_CROP_THRESHOLD),
+            ..dcpwizard_core::source_picture::SourcePictureOptions::default()
+        },
+        &source,
+        info.width,
+        info.height,
+        &dcpwizard_core::source_picture::EncodeGeometry {
+            forced_raster: None,
+            container: (container != NO_CONTAINER).then_some(container),
+        },
+        postkit::encode::detect_input_type(&source) == postkit::encode::InputType::ImageSequence,
+    )?;
+    Ok(DetectedCrop {
+        left: resolved.processing.crop.left,
+        right: resolved.processing.crop.right,
+        top: resolved.processing.crop.top,
+        bottom: resolved.processing.crop.bottom,
+        description: resolved.plan.describe(),
+    })
+}
+
+/// The audio mapping grid the panel draws: one row per source channel, one
+/// column per DCP lane.
+#[derive(Serialize)]
+pub struct AudioMapPanel {
+    pub channels: usize,
+    pub lanes: Vec<String>,
+}
+
+/// How many channels the chosen WAV carries, and the lanes a map may name.
+#[tauri::command]
+pub async fn probe_audio_map(audio_path: String) -> Result<AudioMapPanel, String> {
+    Ok(AudioMapPanel {
+        channels: dcpwizard_core::audio_map::probe_channel_count(std::path::Path::new(
+            &audio_path,
+        ))?,
+        lanes: dcpwizard_core::audio_map::DCP_LANE_NAMES
+            .iter()
+            .map(|lane| lane.to_string())
+            .collect(),
+    })
 }
 
 #[derive(Serialize)]
@@ -829,12 +969,54 @@ const RESOLUTION_CONTAINERS: [(&str, u32, u32); 6] = [
     ("4k-full", 4096, 2160),
 ];
 
+/// What `container_of` answers for a resolution key that names no container,
+/// which is the panel's "Auto (from source)".
+const NO_CONTAINER: (u32, u32) = (0, 0);
+
+/// The DCI rasters a fitted picture is centred on. The container is masked out
+/// of one of these, so a scope package is 2048x858 inside a 2048x1080 frame.
+const TWO_K_RASTER: (u32, u32) = (2048, 1080);
+const FOUR_K_RASTER: (u32, u32) = (4096, 2160);
+
 fn container_of(resolution: &str) -> (u32, u32) {
     RESOLUTION_CONTAINERS
         .iter()
         .find(|(key, _, _)| *key == resolution)
         .map(|(_, width, height)| (*width, *height))
-        .unwrap_or((0, 0))
+        .unwrap_or(NO_CONTAINER)
+}
+
+/// The rasters a job's picture has to land on. The panel names a container, not
+/// a raster, so only a container fill asks for the picture to be scaled onto the
+/// DCI raster around that container.
+fn job_geometry(job: &JobConfig) -> dcpwizard_core::source_picture::EncodeGeometry {
+    let container = container_of(&job.resolution);
+    let raster = if job.resolution.contains("4k") {
+        FOUR_K_RASTER
+    } else {
+        TWO_K_RASTER
+    };
+    dcpwizard_core::source_picture::EncodeGeometry {
+        forced_raster: (job.picture.fill_crop && container != NO_CONTAINER).then_some(raster),
+        container: (container != NO_CONTAINER).then_some(container),
+    }
+}
+
+/// The picture processing a job asks for, planned against the source it decodes.
+fn resolve_job_picture(
+    job: &JobConfig,
+    source: &std::path::Path,
+) -> Result<dcpwizard_core::source_picture::ResolvedPicture, String> {
+    let info = dcpwizard_core::probe::probe_video(source)
+        .ok_or_else(|| format!("cannot read the size of {}", source.display()))?;
+    dcpwizard_core::source_picture::resolve_picture(
+        &job.picture,
+        source,
+        info.width,
+        info.height,
+        &job_geometry(job),
+        postkit::encode::detect_input_type(source) == postkit::encode::InputType::ImageSequence,
+    )
 }
 
 fn resolution_key_of(width: u32, height: u32) -> Option<&'static str> {
@@ -1070,6 +1252,32 @@ fn prepare_audio(
         .filter(|a| !a.is_empty())
         .map(PathBuf::from);
 
+    // the map places every channel by hand, so it runs before anything that
+    // moves channels for it
+    if let (Some(spec), Some(input)) = (job.audio_map.as_deref(), &audio_path) {
+        std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
+        let mapped = work_dir.join("mapped.wav");
+        let applied = dcpwizard_core::audio_map::apply_audio_map(spec, input, &mapped)?;
+        log(&format!(
+            "[AUDIO] Map: {} channels to {} over {} frames{}",
+            applied.report.input_channels,
+            applied.report.output_channels,
+            applied.report.frames,
+            if applied.pure_routing {
+                ", bit-exact routing"
+            } else {
+                ""
+            }
+        ));
+        if applied.report.clipped_samples > 0 {
+            log(&format!(
+                "[AUDIO] Map clipped {} sample(s): lower the cell gains",
+                applied.report.clipped_samples
+            ));
+        }
+        audio_path = Some(mapped);
+    }
+
     if let Some(dir) = job.audio_channel_dir.as_deref() {
         std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
         let routed = work_dir.join("routed.wav");
@@ -1145,25 +1353,26 @@ fn encode_still(
     job: &JobConfig,
     output: &std::path::Path,
     fps: u32,
+    picture: &dcpwizard_core::source_picture::ResolvedPicture,
     log: impl Fn(&str),
 ) -> Result<postkit::pipeline::EncodeResult, String> {
     let started = std::time::Instant::now();
-    let info = dcpwizard_core::probe::probe_video(&job.video_path)
-        .ok_or_else(|| format!("cannot read the size of {}", job.video_path.display()))?;
     let j2k_dir = output.join("j2k");
+    let filter = (!picture.plan.filters.is_empty()).then(|| picture.plan.filters.join(","));
     dcpwizard_core::still::build_still_frames(&dcpwizard_core::still::StillHold {
         image: &job.video_path,
         frames: job.still_length_frames,
         fps,
-        width: info.width,
-        height: info.height,
+        width: picture.encode_width,
+        height: picture.encode_height,
+        picture_filter: filter.as_deref(),
         route: dcpwizard_core::encode::xyz_route(job.source_colourspace)?,
         burn: job_subtitle_burn(job, fps)?,
         out_dir: &j2k_dir,
     })?;
     log(&format!(
         "[ENCODE] Still held for {} frame(s) at {}x{}",
-        job.still_length_frames, info.width, info.height
+        job.still_length_frames, picture.encode_width, picture.encode_height
     ));
     Ok(postkit::pipeline::EncodeResult {
         j2k_dir,
@@ -1340,6 +1549,14 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         |msg| log_to(&log_file, msg),
     )?;
 
+    // the crop and the fit are planned before the encode, so a source they
+    // cannot land on the raster fails now rather than after an hour of J2K
+    let resolved_picture = resolve_job_picture(job, &encode_input)?;
+    log_to(
+        &log_file,
+        &format!("[ENCODE] Picture: {}", resolved_picture.plan.describe()),
+    );
+
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
         fps: fps_num,
@@ -1348,6 +1565,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             .hdr_dci
             .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
         subtitle_burn: job_subtitle_burn(job, fps_num)?,
+        picture: resolved_picture.processing.clone(),
     };
 
     // Encode using shared pipeline. A still never reaches it: it is one encode
@@ -1356,7 +1574,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let app_ref = app.clone();
     let log_ref = log_file.clone();
     let encode_result = if job.still_length_frames > 0 {
-        encode_still(job, output, fps_num, |msg| log_to(&log_ref, msg))?
+        encode_still(job, output, fps_num, &resolved_picture, |msg| {
+            log_to(&log_ref, msg)
+        })?
     } else {
         postkit::pipeline::run_encode_with_options(
             &encode_input,
@@ -1580,6 +1800,8 @@ mod tests {
             title: "Test".into(),
             output_dir: PathBuf::from("/out"),
             audio_path: None,
+            audio_map: None,
+            picture: dcpwizard_core::source_picture::SourcePictureOptions::default(),
             validate: false,
             standard: "smpte".into(),
             resolution: "2k-flat".into(),
