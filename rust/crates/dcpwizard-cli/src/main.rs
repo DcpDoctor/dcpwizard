@@ -281,6 +281,30 @@ struct CreateSubtitleOpts {
     /// Embed the whole font instead of subsetting it to the used glyphs
     #[arg(long)]
     subtitle_no_subset: bool,
+    /// Timed-text point size for the --subtitle track (default 42). Not --ccap,
+    /// which keeps the default appearance
+    #[arg(long)]
+    subtitle_font_size: Option<u32>,
+    /// Timed-text colour for the --subtitle track as RRGGBB or RRGGBBAA
+    /// (default FFFFFF)
+    #[arg(long)]
+    subtitle_colour: Option<String>,
+    /// Timed-text effect for the --subtitle track: none, outline or shadow
+    /// (default shadow). An outline is written as the ST 428-7 "border"
+    #[arg(long, value_parser = ["none", "outline", "shadow"])]
+    subtitle_effect: Option<String>,
+    /// Timed-text effect colour for the --subtitle track as RRGGBB or RRGGBBAA
+    /// (default 000000)
+    #[arg(long)]
+    subtitle_effect_colour: Option<String>,
+    /// Timed-text fade up for the --subtitle track in milliseconds, rounded to
+    /// whole frames (default a twelfth of a second)
+    #[arg(long)]
+    subtitle_fade_up: Option<u64>,
+    /// Timed-text fade down for the --subtitle track in milliseconds, rounded to
+    /// whole frames (default a twelfth of a second)
+    #[arg(long)]
+    subtitle_fade_down: Option<u64>,
     /// Closed-caption (ST 429-12) input, wrapped with a MainClosedCaption role
     /// (accessibility track, distinct from --subtitle). SRT/styled or SMPTE DCST.
     #[arg(long, conflicts_with = "versions")]
@@ -288,6 +312,143 @@ struct CreateSubtitleOpts {
     /// Closed-caption language code (e.g. "en", "fr")
     #[arg(long, default_value = "en")]
     ccap_language: String,
+    #[command(flatten)]
+    burn_appearance: CreateBurnAppearance,
+}
+
+impl CreateSubtitleOpts {
+    /// The appearance flags the caller actually gave, so a refusal can name
+    /// them.
+    fn named_appearance(&self) -> Vec<&'static str> {
+        [
+            ("--subtitle-font-size", self.subtitle_font_size.is_some()),
+            ("--subtitle-colour", self.subtitle_colour.is_some()),
+            ("--subtitle-effect", self.subtitle_effect.is_some()),
+            (
+                "--subtitle-effect-colour",
+                self.subtitle_effect_colour.is_some(),
+            ),
+            ("--subtitle-fade-up", self.subtitle_fade_up.is_some()),
+            ("--subtitle-fade-down", self.subtitle_fade_down.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| name)
+        .collect()
+    }
+
+    /// How the packaged track looks, refusing a bad value under the flag's own
+    /// name.
+    fn appearance(&self) -> Result<dcpwizard_core::subtitle::TimedTextAppearance, String> {
+        dcpwizard_core::subtitle::TimedTextAppearance::from_flags(
+            self.subtitle_font_size,
+            self.subtitle_colour.as_deref(),
+            self.subtitle_effect.as_deref(),
+            self.subtitle_effect_colour.as_deref(),
+            self.subtitle_fade_up,
+            self.subtitle_fade_down,
+        )
+    }
+}
+
+/// How `--burn-subtitle` draws, flattened into the subtitle group so the Create
+/// variant stays under the clippy large-variant threshold. Every flag is laid
+/// over postkit's burn defaults, so an unnamed one keeps the value it has always
+/// had.
+#[derive(Args)]
+struct CreateBurnAppearance {
+    #[arg(long, help = burn_font_size_help())]
+    burn_font_size: Option<f32>,
+    /// Burn-in text colour as RRGGBB or RRGGBBAA (default FFFFFF)
+    #[arg(long)]
+    burn_colour: Option<String>,
+    /// What is drawn under burnt-in text: none, outline or shadow (default
+    /// shadow)
+    #[arg(long, value_parser = ["none", "outline", "shadow"])]
+    burn_effect: Option<String>,
+    /// Colour of that outline or shadow as RRGGBB or RRGGBBAA (default 000000)
+    #[arg(long)]
+    burn_effect_colour: Option<String>,
+    #[arg(long, help = burn_outline_width_help())]
+    burn_outline_width: Option<f32>,
+    /// Horizontal stretch of the burnt-in text (default 1.0)
+    #[arg(long)]
+    burn_x_scale: Option<f32>,
+    /// Vertical stretch of the burnt-in text (default 1.0)
+    #[arg(long)]
+    burn_y_scale: Option<f32>,
+    /// How long a burnt-in cue takes to ramp up from transparent, in
+    /// milliseconds (default 0)
+    #[arg(long)]
+    burn_fade_up: Option<u64>,
+    /// How long a burnt-in cue takes to ramp down to transparent, in
+    /// milliseconds (default 0)
+    #[arg(long)]
+    burn_fade_down: Option<u64>,
+}
+
+/// Turns postkit's ratios into the percentages the burn appearance flags take.
+const RATIO_TO_PERCENT: f32 = 100.0;
+
+fn burn_font_size_help() -> String {
+    format!(
+        "Burn-in text height as a percent of the frame height (default {:.1})",
+        postkit::subtitle_raster::DEFAULT_FONT_SIZE_RATIO * RATIO_TO_PERCENT
+    )
+}
+
+fn burn_outline_width_help() -> String {
+    format!(
+        "Burn-in outline thickness as a percent of the text height (default {:.1})",
+        postkit::subtitle_raster::DEFAULT_OUTLINE_WIDTH_RATIO * RATIO_TO_PERCENT
+    )
+}
+
+impl CreateBurnAppearance {
+    /// The flags the caller actually gave, so a refusal can name them.
+    fn named(&self) -> Vec<&'static str> {
+        [
+            ("--burn-font-size", self.burn_font_size.is_some()),
+            ("--burn-colour", self.burn_colour.is_some()),
+            ("--burn-effect", self.burn_effect.is_some()),
+            ("--burn-effect-colour", self.burn_effect_colour.is_some()),
+            ("--burn-outline-width", self.burn_outline_width.is_some()),
+            ("--burn-x-scale", self.burn_x_scale.is_some()),
+            ("--burn-y-scale", self.burn_y_scale.is_some()),
+            ("--burn-fade-up", self.burn_fade_up.is_some()),
+            ("--burn-fade-down", self.burn_fade_down.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| name)
+        .collect()
+    }
+
+    /// The appearance to lay over postkit's burn defaults, refusing a bad value
+    /// under the flag's own name.
+    fn overrides(&self) -> Result<postkit::subtitle_raster::BurnStyleOverrides, String> {
+        use dcpwizard_core::subtitle::{parse_colour_flag, parse_effect_flag};
+        Ok(postkit::subtitle_raster::BurnStyleOverrides {
+            font_size_percent: self.burn_font_size,
+            colour: match self.burn_colour.as_deref() {
+                Some(text) => Some(parse_colour_flag("--burn-colour", text)?),
+                None => None,
+            },
+            effect: match self.burn_effect.as_deref() {
+                Some(text) => Some(parse_effect_flag("--burn-effect", text)?),
+                None => None,
+            },
+            effect_colour: match self.burn_effect_colour.as_deref() {
+                Some(text) => Some(parse_colour_flag("--burn-effect-colour", text)?),
+                None => None,
+            },
+            outline_width_percent: self.burn_outline_width,
+            x_scale: self.burn_x_scale,
+            y_scale: self.burn_y_scale,
+            fade_up_ms: self.burn_fade_up,
+            fade_down_ms: self.burn_fade_down,
+        })
+    }
 }
 
 /// Source-shaping options: what colour the source carries, how much of it to
@@ -3366,6 +3527,41 @@ fn run() {
                 std::process::exit(1);
             }
 
+            // an appearance flag styles one track, so refuse the ones whose
+            // track was never asked for instead of packaging without them
+            let unstyled_subtitle = subtitle_qol.named_appearance();
+            if subtitle.is_none() && !unstyled_subtitle.is_empty() {
+                tracing::error!(
+                    "{} styles the timed-text track --subtitle packages, and --ccap keeps the \
+                     default appearance: pass --subtitle",
+                    unstyled_subtitle.join(", ")
+                );
+                std::process::exit(1);
+            }
+            let unstyled_burn = subtitle_qol.burn_appearance.named();
+            if subtitle_qol.burn_subtitle.is_none() && !unstyled_burn.is_empty() {
+                tracing::error!(
+                    "{} styles the text --burn-subtitle draws into the picture: pass \
+                     --burn-subtitle",
+                    unstyled_burn.join(", ")
+                );
+                std::process::exit(1);
+            }
+            let burn_style = match subtitle_qol.burn_appearance.overrides() {
+                Ok(style) => style,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let subtitle_appearance = match subtitle_qol.appearance() {
+                Ok(appearance) => appearance,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+
             let burnt_in_subtitle = subtitle_qol.burn_subtitle.is_some();
             let CreateSubtitleOpts {
                 subtitle_halign,
@@ -3380,6 +3576,7 @@ fn run() {
                 burn_subtitle_font,
                 ccap,
                 ccap_language,
+                ..
             } = *subtitle_qol;
             let subtitle_rtl_mode = match subtitle_rtl.as_str() {
                 "on" => dcpwizard_core::subtitle::RtlMode::On,
@@ -3395,6 +3592,7 @@ fn run() {
                 wrap_cols: subtitle_wrap,
                 font_path: subtitle_font.map(PathBuf::from),
                 no_subset: subtitle_no_subset,
+                appearance: subtitle_appearance,
             };
 
             // the edit rate is settled inside each branch, and the cue timings
@@ -3406,6 +3604,7 @@ fn run() {
                         Path::new(path),
                         burn_subtitle_font.as_deref().map(Path::new),
                         fps,
+                        &burn_style,
                     ) {
                         Ok(burn) => Some(burn),
                         Err(e) => {

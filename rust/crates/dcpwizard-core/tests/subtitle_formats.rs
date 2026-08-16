@@ -226,3 +226,54 @@ fn build_png() -> Vec<u8> {
     const B64: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc``\x00\x00\x00\x04\x00\x01\xf6\x178U\x00\x00\x00\x00IEND\xaeB`\x82";
     B64.to_vec()
 }
+
+#[test]
+fn a_named_appearance_reaches_the_packaged_timed_text_mxf() {
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = dir.path().join("j2k");
+    make_frames(&j2k, 48);
+    let srt = dir.path().join("in.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:01,500\nHello world\n").unwrap();
+    let out = dir.path().join("dcp");
+    let opts = SubtitleOptions {
+        appearance: dcpwizard_core::subtitle::TimedTextAppearance::from_flags(
+            Some(50),
+            None,
+            Some("none"),
+            None,
+            Some(200),
+            Some(200),
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    assert_eq!(create_dcp(&base(&out, j2k, srt, opts)), 0);
+    verify_clean(&out);
+
+    // the DCST is wrapped into the timed-text MXF and the staged XML removed,
+    // so the packaged track is the only place left to read it back from
+    let mxf = std::fs::read_dir(&out)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("subtitle_"))
+        })
+        .expect("a timed-text MXF");
+    let bytes = std::fs::read(&mxf).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    for needle in [
+        "Size=\"50\"",
+        "Effect=\"none\"",
+        // 200 ms at 24 fps is 4.8 frames, so 5
+        "FadeUpTime=\"00:00:00:05\"",
+        "FadeDownTime=\"00:00:00:05\"",
+    ] {
+        assert!(
+            text.contains(needle),
+            "{needle} is not in {}",
+            mxf.display()
+        );
+    }
+}

@@ -516,3 +516,61 @@ fn create_refuses_an_unknown_territory_type() {
         .failure()
         .stderr(predicate::str::contains("territory-type"));
 }
+
+/// A two-cue SRT, the shape both `--subtitle` and `--burn-subtitle` take.
+fn write_test_srt(path: &std::path::Path) {
+    std::fs::write(
+        path,
+        "1\n00:00:00,000 --> 00:00:01,000\nfirst\n\n2\n00:00:02,000 --> 00:00:03,000\nsecond\n\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn create_refuses_a_burn_colour_that_is_not_a_colour() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+    let srt = dir.path().join("cues.srt");
+    write_test_srt(&srt);
+
+    create_with(
+        &dir,
+        &video,
+        &[
+            "--burn-subtitle",
+            srt.to_str().unwrap(),
+            "--burn-colour",
+            "banana",
+        ],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("--burn-colour"));
+}
+
+#[test]
+fn create_refuses_a_burn_appearance_with_nothing_to_burn() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--burn-effect", "outline"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--burn-effect"))
+        .stdout(predicate::str::contains("--burn-subtitle"));
+}
+
+#[test]
+fn create_refuses_a_subtitle_appearance_with_no_subtitle_track() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--subtitle-effect", "none"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--subtitle-effect"))
+        .stdout(predicate::str::contains("--subtitle"));
+}

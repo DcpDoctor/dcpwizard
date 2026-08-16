@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use postkit::subtitle_formats::{self, HAlign, Rgba, StyledCue, StyledRun, VAlign};
+use postkit::subtitle_raster::{BurnEffect, BurnStyle, BurnStyleOverrides};
 
 /// SMPTE 640 KB embedded-font size limit (ST 428-7 / interop).
 const FONT_SIZE_LIMIT: usize = 640 * 1024;
@@ -39,6 +40,126 @@ pub struct SubtitleOptions {
     pub font_path: Option<PathBuf>,
     /// Skip glyph subsetting and embed the whole font.
     pub no_subset: bool,
+    /// How the packaged track looks: the `Font` attributes and the fades.
+    pub appearance: TimedTextAppearance,
+}
+
+/// Point size the packaged `Font` line carries when nothing names one.
+const DEFAULT_TIMED_TEXT_SIZE: u32 = 42;
+
+/// Opaque white, the `Font` line's text colour when nothing names one.
+const DEFAULT_TIMED_TEXT_COLOUR: &str = "FFFFFFFF";
+
+/// The ST 428-7 `Effect` the `Font` line carries when nothing names one.
+const DEFAULT_TIMED_TEXT_EFFECT: &str = "shadow";
+
+/// Opaque black, the `Font` line's effect colour when nothing names one.
+const DEFAULT_TIMED_TEXT_EFFECT_COLOUR: &str = "FF000000";
+
+/// A fade of a twelfth of a second, in frames at the edit rate, when nothing
+/// names a length.
+const DEFAULT_FADE_DIVISOR: f64 = 12.0;
+
+/// How the packaged timed-text track looks: the ST 428-7 `Font` attributes and
+/// the per-cue fade lengths. Colours are held as ARGB hex and the effect as the
+/// `Effect` attribute spells it, because postkit's `Rgba` and `BurnEffect` carry
+/// no serde derives and this rides along with [`SubtitleOptions`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedTextAppearance {
+    pub font_size: Option<u32>,
+    pub colour: Option<String>,
+    pub effect: Option<String>,
+    pub effect_colour: Option<String>,
+    pub fade_up_ms: Option<u64>,
+    pub fade_down_ms: Option<u64>,
+}
+
+impl TimedTextAppearance {
+    /// Read the `--subtitle-*` appearance flags into the spellings the DCST
+    /// carries, refusing a bad value under the flag's own name.
+    pub fn from_flags(
+        font_size: Option<u32>,
+        colour: Option<&str>,
+        effect: Option<&str>,
+        effect_colour: Option<&str>,
+        fade_up_ms: Option<u64>,
+        fade_down_ms: Option<u64>,
+    ) -> Result<Self, String> {
+        Ok(TimedTextAppearance {
+            font_size,
+            colour: match colour {
+                Some(text) => Some(argb(parse_colour_flag("--subtitle-colour", text)?)),
+                None => None,
+            },
+            effect: match effect {
+                Some(text) => Some(
+                    dcst_effect_name(parse_effect_flag("--subtitle-effect", text)?).to_string(),
+                ),
+                None => None,
+            },
+            effect_colour: match effect_colour {
+                Some(text) => Some(argb(parse_colour_flag("--subtitle-effect-colour", text)?)),
+                None => None,
+            },
+            fade_up_ms,
+            fade_down_ms,
+        })
+    }
+
+    /// The ST 428-7 `Font` attributes, each falling back to what the packaged
+    /// track has always carried.
+    fn font_attributes(&self) -> String {
+        format!(
+            "Color=\"{}\" Size=\"{}\" Effect=\"{}\" EffectColor=\"{}\"",
+            self.colour.as_deref().unwrap_or(DEFAULT_TIMED_TEXT_COLOUR),
+            self.font_size.unwrap_or(DEFAULT_TIMED_TEXT_SIZE),
+            self.effect.as_deref().unwrap_or(DEFAULT_TIMED_TEXT_EFFECT),
+            self.effect_colour
+                .as_deref()
+                .unwrap_or(DEFAULT_TIMED_TEXT_EFFECT_COLOUR),
+        )
+    }
+
+    /// The fade up and fade down lengths as timecodes at the edit rate.
+    fn fades(&self, fps: u32) -> (String, String) {
+        (
+            fade_timecode(self.fade_up_ms, fps),
+            fade_timecode(self.fade_down_ms, fps),
+        )
+    }
+}
+
+/// A fade length in milliseconds as a timecode, rounded to whole frames at
+/// `fps`. Without one, the twelfth of a second the packaged tracks have always
+/// used.
+fn fade_timecode(ms: Option<u64>, fps: u32) -> String {
+    let rate = fps.max(1) as f64;
+    let frames = match ms {
+        Some(ms) => (ms as f64 * rate / 1000.0).round(),
+        None => (rate / DEFAULT_FADE_DIVISOR).round(),
+    };
+    frames_to_dcst(frames as u64, fps)
+}
+
+/// A colour flag written `RRGGBB` or `RRGGBBAA`, refused under the flag's own
+/// name.
+pub fn parse_colour_flag(flag: &str, text: &str) -> Result<Rgba, String> {
+    Rgba::parse_hex(text).map_err(|e| format!("{flag}: {e}"))
+}
+
+/// An effect flag (none, outline or shadow), refused under the flag's own name.
+pub fn parse_effect_flag(flag: &str, text: &str) -> Result<BurnEffect, String> {
+    postkit::subtitle_raster::parse_burn_effect(text).map_err(|e| format!("{flag}: {e}"))
+}
+
+/// The ST 428-7 `Effect` spelling for an effect: the standard writes an outline
+/// `border`, where postkit names it `Outline`.
+fn dcst_effect_name(effect: BurnEffect) -> &'static str {
+    match effect {
+        BurnEffect::None => "none",
+        BurnEffect::Outline => "border",
+        BurnEffect::Shadow => "shadow",
+    }
 }
 
 /// The head/tail trim already applied to the picture and sound, so timed text
@@ -198,11 +319,13 @@ pub fn load_styled_cues(path: &Path, fps: u32) -> Result<Vec<StyledCue>, String>
 ///
 /// `font` is the face to shape text with; without one the system faces fontdb
 /// finds are used, and a machine with no font at all is an error rather than a
-/// silently subtitle-free encode.
+/// silently subtitle-free encode. `style` is what the `--burn-*` appearance
+/// flags named, laid over postkit's defaults.
 pub fn prepare_subtitle_burn(
     input: &Path,
     font: Option<&Path>,
     fps: u32,
+    style: &BurnStyleOverrides,
 ) -> Result<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>, String> {
     if detect_subtitle_kind(input)? == SubtitleInputKind::SmpteDcstPassthrough {
         return Err(format!(
@@ -216,15 +339,13 @@ pub fn prepare_subtitle_burn(
     {
         return Err(format!("burn-in font not found: {}", path.display()));
     }
+    let style = style
+        .apply(BurnStyle::default())
+        .map_err(|e| format!("burn-in appearance: {e}"))?;
     let cues = load_styled_cues(input, fps)?;
-    postkit::subtitle_raster::SubtitleBurn::new(
-        cues,
-        font,
-        postkit::subtitle_raster::BurnStyle::default(),
-        fps.max(1) as f64,
-    )
-    .map(std::sync::Arc::new)
-    .map_err(|e| format!("cannot burn {}: {e}", input.display()))
+    postkit::subtitle_raster::SubtitleBurn::new(cues, font, style, fps.max(1) as f64)
+        .map(std::sync::Arc::new)
+        .map_err(|e| format!("cannot burn {}: {e}", input.display()))
 }
 
 /// Refuse a `--burn-subtitle` the encode cannot honour, before anything is
@@ -1047,7 +1168,7 @@ fn render_dcst_styled(
     head_frames: u64,
 ) -> String {
     let sub_id = uuid::Uuid::new_v4();
-    let fade = format!("00:00:00:{:02}", (fps as f64 / 12.0).round() as u64);
+    let (fade_up, fade_down) = opts.appearance.fades(fps);
     let z_attr = opts
         .zposition
         .map(|z| format!(" Zposition=\"{z}\""))
@@ -1075,15 +1196,16 @@ fn render_dcst_styled(
         ));
     }
     xml.push_str("  <dcst:SubtitleList>\n");
-    xml.push_str(
-        "    <dcst:Font ID=\"font1\" Color=\"FFFFFFFF\" Size=\"42\" Effect=\"shadow\" EffectColor=\"FF000000\">\n",
-    );
+    xml.push_str(&format!(
+        "    <dcst:Font ID=\"font1\" {}>\n",
+        opts.appearance.font_attributes()
+    ));
 
     for (i, cue) in cues.iter().enumerate() {
         let tin = frames_to_dcst(cue.start_ms * fps64 / 1000 + head_frames, fps);
         let tout = frames_to_dcst(cue.end_ms * fps64 / 1000 + head_frames, fps);
         xml.push_str(&format!(
-            "      <dcst:Subtitle SpotNumber=\"{}\" TimeIn=\"{tin}\" TimeOut=\"{tout}\" FadeUpTime=\"{fade}\" FadeDownTime=\"{fade}\">\n",
+            "      <dcst:Subtitle SpotNumber=\"{}\" TimeIn=\"{tin}\" TimeOut=\"{tout}\" FadeUpTime=\"{fade_up}\" FadeDownTime=\"{fade_down}\">\n",
             i + 1,
         ));
         let (halign, valign, base) = placement(cue, opts);
@@ -1262,6 +1384,63 @@ mod tests {
             xml.contains("Vposition=\"8.0\" Valign=\"bottom\" Halign=\"center\""),
             "{xml}"
         );
+    }
+
+    #[test]
+    fn the_default_font_line_is_what_the_track_has_always_carried() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = write(dir.path(), "in.srt", SRT2);
+        let xml = render(&srt, &SubtitleOptions::default());
+        assert!(
+            xml.contains(
+                "<dcst:Font ID=\"font1\" Color=\"FFFFFFFF\" Size=\"42\" Effect=\"shadow\" EffectColor=\"FF000000\">"
+            ),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("FadeUpTime=\"00:00:00:02\" FadeDownTime=\"00:00:00:02\""),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn a_named_appearance_reaches_the_font_line_and_the_fades() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = write(dir.path(), "in.srt", SRT2);
+        let opts = SubtitleOptions {
+            appearance: TimedTextAppearance::from_flags(
+                Some(50),
+                Some("FFFF00"),
+                Some("outline"),
+                Some("112233AA"),
+                Some(200),
+                Some(200),
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let xml = render(&srt, &opts);
+        assert!(
+            xml.contains(
+                "<dcst:Font ID=\"font1\" Color=\"FFFFFF00\" Size=\"50\" Effect=\"border\" EffectColor=\"AA112233\">"
+            ),
+            "{xml}"
+        );
+        // 200 ms at 24 fps is 4.8 frames, so 5
+        assert!(
+            xml.contains("FadeUpTime=\"00:00:00:05\" FadeDownTime=\"00:00:00:05\""),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn a_bad_appearance_value_is_refused_under_its_flag() {
+        let colour = TimedTextAppearance::from_flags(None, Some("nope"), None, None, None, None)
+            .unwrap_err();
+        assert!(colour.contains("--subtitle-colour"), "got: {colour}");
+        let effect = TimedTextAppearance::from_flags(None, None, Some("glow"), None, None, None)
+            .unwrap_err();
+        assert!(effect.contains("--subtitle-effect"), "got: {effect}");
     }
 
     #[test]
