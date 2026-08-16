@@ -4,7 +4,8 @@
 
 use crate::dcp::DcpConfig;
 use crate::isdcf_name::{
-    IsdcfDate, IsdcfNameInput, SoundtrackChannel, TerritoryType, TextKind, isdcf_name,
+    DEFAULT_CONTAINER_SIZE, IsdcfDate, IsdcfNameInput, SoundtrackChannel, TerritoryType, TextKind,
+    isdcf_name,
 };
 use chrono::Datelike;
 
@@ -101,7 +102,7 @@ pub fn isdcf_title(
         two_d_version_of_three_d: options.two_d_version_of_three_d,
         luminance: config.luminance.clone(),
         frame_rate: rounded_frame_rate(config.frame_rate_num, config.frame_rate_den),
-        container_size: (config.container_width, config.container_height),
+        container_size: container_size(config),
         // the CPL declares the stored area as the active one, so the name has no
         // interior aspect to spell
         active_picture_size: None,
@@ -127,6 +128,20 @@ pub fn isdcf_title(
     };
 
     isdcf_name(&input)
+}
+
+/// The container whose aspect the name spells. Without one the CPL declares the
+/// coded raster as the active area, so the raster is the container.
+fn container_size(config: &DcpConfig) -> (u32, u32) {
+    if config.container_width > 0 && config.container_height > 0 {
+        return (config.container_width, config.container_height);
+    }
+    config
+        .j2k_dir
+        .as_deref()
+        .and_then(|dir| crate::cpl::picture_geometry(dir, 0, 0).ok())
+        .map(|geometry| (geometry.stored_width, geometry.stored_height))
+        .unwrap_or(DEFAULT_CONTAINER_SIZE)
 }
 
 /// The open text languages and whether they are burnt in. A registered subtitle
@@ -284,6 +299,35 @@ mod tests {
             )),
             "{name}"
         );
+    }
+
+    #[test]
+    fn no_container_takes_the_aspect_from_the_coded_raster() {
+        let dir = tempfile::tempdir().unwrap();
+        let frames = dir.path().join("frames");
+        std::fs::create_dir_all(&frames).unwrap();
+        crate::pad::generate_black_frame(2048, 858, 24, &frames.join("frame_00000.j2c"))
+            .expect("encode frame");
+
+        let config = DcpConfig {
+            container_width: 0,
+            container_height: 0,
+            j2k_dir: Some(frames),
+            ..config()
+        };
+        let name = isdcf_title(&config, &options(), &stereo(), false);
+        assert!(name.contains("_S_"), "2048x858 frames are scope: {name}");
+    }
+
+    #[test]
+    fn no_container_and_no_frames_fall_back_to_flat() {
+        let config = DcpConfig {
+            container_width: 0,
+            container_height: 0,
+            ..config()
+        };
+        let name = isdcf_title(&config, &options(), &stereo(), false);
+        assert!(name.contains("_F_"), "{name}");
     }
 
     #[test]

@@ -13,7 +13,8 @@ const FACILITY_LETTERS: usize = 3;
 const UNSPECIFIED_LANGUAGE: &str = "XX";
 const STANDARD_FRAME_RATE: u32 = 24;
 const DEFAULT_VERSION_NUMBER: u32 = 1;
-const DEFAULT_CONTAINER_SIZE: (u32, u32) = (1998, 1080);
+/// Flat, the shape the convention assumes when nothing declares a container.
+pub const DEFAULT_CONTAINER_SIZE: (u32, u32) = (1998, 1080);
 const CANDELA_PER_SQUARE_METRE_PER_FOOT_LAMBERT: f64 = 3.426;
 const ASPECT_TOLERANCE: f32 = 0.01;
 
