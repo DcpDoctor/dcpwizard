@@ -46,6 +46,11 @@ struct CreateAudioQol {
     /// Audio gain in dB, applied after any upmix and loudness pass.
     #[arg(long)]
     audio_gain: Option<f64>,
+    /// Shift the sound against the picture by this many milliseconds: positive
+    /// arrives later, negative earlier. The running time is unchanged, so the
+    /// shift is made up with silence at the other end.
+    #[arg(long, value_name = "MILLISECONDS", allow_negative_numbers = true)]
+    audio_delay: Option<i64>,
     /// Fade the audio up from silence over this many seconds.
     #[arg(long)]
     audio_fade_in: Option<f64>,
@@ -107,6 +112,70 @@ struct CreateSubtitleOpts {
     /// Closed-caption language code (e.g. "en", "fr")
     #[arg(long, default_value = "en")]
     ccap_language: String,
+}
+
+/// Source-shaping options: what colour the source carries, how much of it to
+/// keep, and how long to hold a still. Boxed into the Create variant.
+#[derive(Args)]
+struct CreateSourceOpts {
+    /// Colour space the source carries. rec709 (default) and xyz are the two the
+    /// encoder can land on X'Y'Z' by itself; convert any other space first with
+    /// `dcpwizard colour --target xyz` and then pass xyz.
+    #[arg(long, default_value = "rec709")]
+    source_colourspace: String,
+    /// Trim this much off the head of the source before encoding. Duration with
+    /// a unit: frames (48f) or seconds (2s). Trim runs before padding, so
+    /// `--trim-start 2s --pad-head 1s` drops two seconds and then prepends one.
+    #[arg(long)]
+    trim_start: Option<String>,
+    /// Trim this much off the tail of the source. Same syntax as --trim-start.
+    #[arg(long)]
+    trim_end: Option<String>,
+    /// Hold a single-image --video for this long. Same syntax as --trim-start.
+    /// Required for a still input, and refused for anything else.
+    #[arg(long)]
+    still_length: Option<String>,
+}
+
+/// The KDM choices beyond the certificates and the window, shared by `kdm`,
+/// `kdm-batch` and `kdm-rewrap`.
+#[derive(Args)]
+struct KdmOptionArgs {
+    /// KDM formulation: the dci- ones add a ContentAuthenticator;
+    /// multiple-modified-transitional-1 and dci-specific list the --device-cert
+    /// devices, the other two trust any device. Absent derives it from whether
+    /// --device-cert was given.
+    #[arg(long)]
+    formulation: Option<postkit::certificate::KdmFormulation>,
+    /// Disable forensic marking of the picture essence, as press and festival
+    /// screenings are usually ordered
+    #[arg(short = 'p', long)]
+    disable_forensic_marking_picture: bool,
+    /// Disable forensic marking of the audio essence, optionally only above a
+    /// given channel (e.g. 12) so the HI/VI tracks below it keep theirs
+    #[arg(short = 'a', long, num_args = 0..=1, value_name = "CHANNEL")]
+    disable_forensic_marking_audio: Option<Option<u32>>,
+}
+
+impl From<KdmOptionArgs> for dcpwizard_core::kdm::KdmOptions {
+    fn from(args: KdmOptionArgs) -> Self {
+        use postkit::certificate::{AudioForensicMarking, PictureForensicMarking};
+        dcpwizard_core::kdm::KdmOptions {
+            formulation: args.formulation,
+            picture_forensic_marking: if args.disable_forensic_marking_picture {
+                PictureForensicMarking::Disabled
+            } else {
+                PictureForensicMarking::Enabled
+            },
+            // absent leaves marking on, bare disables every channel, a number
+            // disables the channels above it
+            audio_forensic_marking: match args.disable_forensic_marking_audio {
+                None => AudioForensicMarking::Enabled,
+                Some(None) => AudioForensicMarking::Disabled,
+                Some(Some(channel)) => AudioForensicMarking::DisabledAboveChannel(channel),
+            },
+        }
+    }
 }
 
 /// CPL/PKL signing identity. Boxed into the Create variant so it stays under
@@ -289,6 +358,8 @@ enum Commands {
         composition_metadata: Box<CreateCompositionMetadata>,
         #[command(flatten)]
         audio_qol: Box<CreateAudioQol>,
+        #[command(flatten)]
+        source_opts: Box<CreateSourceOpts>,
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
         #[command(flatten)]
@@ -626,6 +697,8 @@ enum Commands {
         /// then plays only on the devices listed here.
         #[arg(long = "device-cert")]
         device_cert: Vec<String>,
+        #[command(flatten)]
+        kdm_options: KdmOptionArgs,
     },
     /// Re-wrap a DKDM to a new recipient
     KdmRewrap {
@@ -661,6 +734,8 @@ enum Commands {
         /// because it names the DKDM recipient's devices, not the new one's.
         #[arg(long = "device-cert")]
         device_cert: Vec<String>,
+        #[command(flatten)]
+        kdm_options: KdmOptionArgs,
     },
     /// Copy DCP to drive
     Copy {
@@ -1105,6 +1180,8 @@ enum Commands {
         /// KDM format: smpte (default) or interop (legacy, needs real-gear validation)
         #[arg(long, default_value = "smpte")]
         format: String,
+        #[command(flatten)]
+        kdm_options: KdmOptionArgs,
     },
 
     /// Manage the cinema/screen database
@@ -1671,13 +1748,123 @@ fn build_sign_language_audio(
     Ok((combined, main_channels))
 }
 
+/// The raster a still is encoded at: its own, checked against `--twok`/`--fourk`
+/// when one of those was asked for, since nothing here scales the image.
+fn still_raster(image: &Path, twok: bool, fourk: bool) -> Result<(u32, u32), String> {
+    let info = dcpwizard_core::probe::probe_video(image)
+        .ok_or_else(|| format!("cannot read the size of {}", image.display()))?;
+    let forced = fourk
+        .then_some(dcpwizard_core::Resolution::FourK)
+        .or(twok.then_some(dcpwizard_core::Resolution::TwoK));
+    match forced {
+        Some(resolution) => {
+            dcpwizard_core::encode::check_encode_raster(
+                info.width,
+                info.height,
+                resolution.width(),
+                resolution.height(),
+            )?;
+            Ok((resolution.width(), resolution.height()))
+        }
+        None => Ok((info.width, info.height)),
+    }
+}
+
+/// A resolved `--trim-start`/`--trim-end` request: what is cut, and what is left.
+#[derive(Debug, Clone, Copy, Default)]
+struct TrimPlan {
+    start_frames: u64,
+    end_frames: u64,
+    /// frames surviving the trim, zero when nothing was asked for
+    kept_frames: u64,
+}
+
+impl TrimPlan {
+    fn is_active(&self) -> bool {
+        self.kept_frames > 0
+    }
+
+    fn source_trim(&self) -> dcpwizard_core::subtitle::SourceTrim {
+        dcpwizard_core::subtitle::SourceTrim {
+            start_frames: self.start_frames,
+            kept_frames: self.kept_frames,
+        }
+    }
+
+    /// Trim the encoded codestreams into `out_dir`, and the sound to match.
+    /// Returns the trimmed frame directory, or `j2k_dir` when nothing was asked.
+    fn apply(
+        &self,
+        j2k_dir: &Path,
+        out_dir: &Path,
+        audio: Option<PathBuf>,
+        fps: u32,
+    ) -> Result<(PathBuf, Option<PathBuf>), String> {
+        if !self.is_active() {
+            return Ok((j2k_dir.to_path_buf(), audio));
+        }
+        let kept = dcpwizard_core::trim::link_trimmed_frames(
+            j2k_dir,
+            self.start_frames,
+            self.end_frames,
+            out_dir,
+        )?;
+        tracing::info!("Trimmed the picture to {kept} frame(s)");
+        let audio = match audio {
+            Some(input) => {
+                let out = out_dir.with_extension("wav");
+                dcpwizard_core::trim::trim_wav(
+                    &input,
+                    self.start_frames,
+                    self.kept_frames,
+                    fps,
+                    &out,
+                )?;
+                Some(out)
+            }
+            None => None,
+        };
+        Ok((out_dir.to_path_buf(), audio))
+    }
+}
+
+/// Resolve `--trim-start`/`--trim-end` against a `total_frames` source at `fps`.
+fn resolve_trim(
+    start: Option<&str>,
+    end: Option<&str>,
+    total_frames: u64,
+    fps: u32,
+) -> Result<TrimPlan, String> {
+    let parse = |spec: Option<&str>, flag: &str| match spec {
+        Some(spec) => {
+            dcpwizard_core::pad::parse_pad_frames(spec, fps).map_err(|e| format!("{flag}: {e}"))
+        }
+        None => Ok(0),
+    };
+    let start_frames = parse(start, "--trim-start")?;
+    let end_frames = parse(end, "--trim-end")?;
+    if start_frames + end_frames == 0 {
+        return Ok(TrimPlan::default());
+    }
+    let kept_frames = dcpwizard_core::trim::kept_frames(total_frames, start_frames, end_frames)?;
+    Ok(TrimPlan {
+        start_frames,
+        end_frames,
+        kept_frames,
+    })
+}
+
 /// Create-time audio processing (W5): filename channel routing when `audio` is a
-/// directory (dom#2134), then stereo->5.1 upmix (dom#921/#1080), then loudness
-/// normalization (dom#1382). Intermediates go under `work_dir` (a scratch dir).
-/// Runs before sign-language packing and any pull-up.
+/// directory (dom#2134), then stereo->5.1 upmix (dom#921/#1080), then the
+/// picture/sound delay, then loudness normalization (dom#1382). The delay comes
+/// before loudness so normalisation measures the silence that actually ships.
+/// Intermediates go under `work_dir` (a scratch dir). Runs before sign-language
+/// packing and any pull-up.
+#[allow(clippy::too_many_arguments)]
 fn prepare_create_audio(
     audio: Option<PathBuf>,
     upmix: Option<&str>,
+    delay_ms: Option<i64>,
     loudness_target: Option<&str>,
     true_peak_ceiling: Option<f64>,
     adjust: &dcpwizard_core::audio_adjust::AudioAdjust,
@@ -1705,6 +1892,13 @@ fn prepare_create_audio(
         postkit::upmix::upmix_wav(variant, &path, &out).map_err(|e| e.to_string())?;
         tracing::info!("Upmixed stereo to 5.1 (variant {v})");
         path = out;
+    }
+
+    if let Some(delay_ms) = delay_ms.filter(|ms| *ms != 0) {
+        std::fs::create_dir_all(work_dir).map_err(|e| e.to_string())?;
+        let out = work_dir.join("delayed.wav");
+        path = dcpwizard_core::audio_adjust::apply_delay(&path, &out, delay_ms)?;
+        tracing::info!("Delayed the sound by {delay_ms}ms against the picture");
     }
 
     if let Some(spec) = loudness_target {
@@ -1882,9 +2076,22 @@ struct KdmBatchArgs {
     email_only_additional: bool,
     keys: Option<String>,
     format: String,
+    options: dcpwizard_core::kdm::KdmOptions,
 }
 
 fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
+    // a batch carries no device list (see the empty one passed below), so a
+    // formulation that lists devices has nothing to name. Refused here, where the
+    // reason can be spelled out, rather than by resolve_formulation per recipient.
+    if let Some(formulation) = a.options.formulation.filter(|f| f.lists_supplied_devices()) {
+        tracing::error!(
+            "--formulation {formulation} lists the devices named by --device-cert, and kdm-batch \
+             takes none: a batch spans cinemas and one device list cannot fit them all. Use \
+             --formulation {}, or issue the restricted KDMs one at a time with `kdm --device-cert`",
+            formulation.device_list_counterpart()
+        );
+        return 1;
+    }
     let format = match dcpwizard_core::kdm::parse_format(&a.format) {
         Ok(f) => f,
         Err(e) => {
@@ -2001,7 +2208,7 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             // no --device-cert here: a batch spans cinemas, and one device list
             // shared across them would lock every recipient to someone else's gear
             Vec::new(),
-            Default::default(),
+            a.options,
         );
     }
 
@@ -2036,7 +2243,7 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             None,
             history.clone(),
             Vec::new(),
-            Default::default(),
+            a.options.clone(),
         );
         if code != 0 {
             failures += 1;
@@ -2546,6 +2753,7 @@ fn run() {
             markers,
             composition_metadata,
             audio_qol,
+            source_opts,
             signer_opts,
         } => {
             let CreateAudioQol {
@@ -2553,6 +2761,7 @@ fn run() {
                 true_peak_ceiling,
                 upmix,
                 audio_gain,
+                audio_delay,
                 audio_fade_in,
                 audio_fade_out,
                 video_fade_in,
@@ -2561,6 +2770,12 @@ fn run() {
                 resume,
                 shutdown_when_done,
             } = *audio_qol;
+            let CreateSourceOpts {
+                source_colourspace,
+                trim_start,
+                trim_end,
+                still_length,
+            } = *source_opts;
             let CreateCompositionMetadata {
                 content_type,
                 release_territory,
@@ -2618,6 +2833,33 @@ fn run() {
                 fade_in_seconds: audio_fade_in,
                 fade_out_seconds: audio_fade_out,
             };
+            // source colour space, and the HDR flags that decide the encoder
+            // transform themselves: two answers to one question, so refuse both.
+            let source_space =
+                match dcpwizard_core::encode::parse_source_colourspace(&source_colourspace) {
+                    Ok(space) => space,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+            let colourspace_applies_xyz =
+                match dcpwizard_core::encode::applies_xyz_transform(source_space) {
+                    Ok(applies) => applies,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+            if !colourspace_applies_xyz
+                && (hdr_to_dci_lut.is_some() || hdr_already_pq || allow_generic_hdr_tonemap)
+            {
+                tracing::error!(
+                    "--source-colourspace {source_colourspace} and the HDR source flags both decide \
+                     the encoder's colour transform: pass one or the other"
+                );
+                std::process::exit(1);
+            }
             let parsed_luminance = match luminance
                 .as_deref()
                 .map(dcpwizard_core::cpl::Luminance::parse)
@@ -2719,6 +2961,33 @@ fn run() {
                     })
                     .unwrap_or(false);
 
+            // a single image is a third input shape beside a video and a
+            // codestream directory, and it is the only one with no length of its
+            // own, so the hold has to be asked for and cannot be asked for
+            // anywhere else.
+            let still_input = dcpwizard_core::still::is_still(&video_path);
+            if still_input && still_length.is_none() {
+                tracing::error!(
+                    "--video {} is a single image and has no length: pass --still-length",
+                    video_path.display()
+                );
+                std::process::exit(1);
+            }
+            if !still_input && still_length.is_some() {
+                tracing::error!(
+                    "--still-length applies to a single-image --video; a video or codestream \
+                     directory carries its own length"
+                );
+                std::process::exit(1);
+            }
+            if still_input && (trim_start.is_some() || trim_end.is_some()) {
+                tracing::error!(
+                    "--trim-start/--trim-end cut a source down; a still is held for exactly \
+                     --still-length, so shorten that instead"
+                );
+                std::process::exit(1);
+            }
+
             let CreateSubtitleOpts {
                 subtitle_halign,
                 subtitle_valign,
@@ -2782,9 +3051,10 @@ fn run() {
                 };
 
                 let mut encode_video_path = range_src.clone();
-                // the hdr-lut branch outputs x'y'z' already; every other source is
-                // display rgb and needs grok's dcdm transform at encode time
-                let mut content_already_xyz = false;
+                // the hdr-lut branch outputs x'y'z' already, and so does an
+                // --source-colourspace xyz source; every other source is display
+                // rgb and needs grok's dcdm transform at encode time
+                let mut content_already_xyz = !colourspace_applies_xyz;
                 let hdr_type = dcpwizard_core::dolby_vision::detect_hdr_type(&range_src);
                 if hdr_already_pq {
                     // the operator's assertion beats detection: a pq source can
@@ -2859,6 +3129,21 @@ fn run() {
                     .as_ref()
                     .map(|v| (v.width, v.height, v.total_frames))
                     .unwrap_or((2048, 1080, 0));
+
+                // head/tail trim of the source, resolved before the encode so a
+                // trim that leaves nothing fails in a second rather than an hour
+                let trim = match resolve_trim(
+                    trim_start.as_deref(),
+                    trim_end.as_deref(),
+                    total_frames as u64,
+                    fps,
+                ) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
 
                 // reject an illegal fps/resolution combo before the encode runs
                 if let Err(e) = dcpwizard_core::hfr::validate_fps_resolution(
@@ -3063,6 +3348,7 @@ fn run() {
                 let audio_path = match prepare_create_audio(
                     raw_audio,
                     upmix.as_deref(),
+                    audio_delay,
                     loudness_target.as_deref(),
                     true_peak_ceiling,
                     &audio_adjust,
@@ -3110,6 +3396,35 @@ fn run() {
                     audio_path
                 };
 
+                // trim after the pull-up, whose resample changes what a frame of
+                // audio is worth, and before sign language, which is packed to
+                // cover the picture the package actually carries
+                let (packaged_j2k_dir, audio_path) =
+                    match trim.apply(&j2k_dir, &output_dir.join("j2k_trimmed"), audio_path, fps) {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+                let packaged_right_eye_dir = match right_eye_dir.as_ref() {
+                    Some(dir) => {
+                        match trim.apply(dir, &output_dir.join("j2k_right_trimmed"), None, fps) {
+                            Ok((trimmed, _)) => Some(trimmed),
+                            Err(e) => {
+                                tracing::error!("right eye: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let picture_frames = if trim.is_active() {
+                    trim.kept_frames
+                } else {
+                    total_frames as u64
+                };
+
                 // sign-language video (ISDCF Doc 13): pack VP9 onto channel 15,
                 // overriding the sound track with the combined 16-channel WAV
                 let (audio_path, sl_main_channels) = if let Some(slv) = sign_language_video.as_ref()
@@ -3117,7 +3432,7 @@ fn run() {
                     match build_sign_language_audio(
                         slv,
                         audio_path.as_deref(),
-                        total_frames as u64,
+                        picture_frames,
                         fps,
                         &output_dir,
                     ) {
@@ -3168,7 +3483,7 @@ fn run() {
                     container_width,
                     container_height,
                     max_bitrate_mbps: video_bit_rate.unwrap_or(0),
-                    j2k_dir: Some(j2k_dir.clone()),
+                    j2k_dir: Some(packaged_j2k_dir.clone()),
                     audio_path: audio_path.clone(),
                     audio_input_order,
                     subtitle_path: subtitle.clone().map(PathBuf::from),
@@ -3177,14 +3492,15 @@ fn run() {
                     ccap_path: ccap.clone().map(PathBuf::from),
                     ccap_language: ccap_language.clone(),
                     reel_length_minutes: reel_length.unwrap_or(0),
-                    right_eye_dir: right_eye_dir.clone(),
+                    right_eye_dir: packaged_right_eye_dir.clone(),
                     atmos_path: atmos.clone().map(PathBuf::from),
                     hi_channel,
                     vi_channel,
-                    stereo_3d: right_eye_dir.is_some(),
+                    stereo_3d: packaged_right_eye_dir.is_some(),
                     pad_head: pad_head.clone(),
                     pad_tail: pad_tail.clone(),
                     pad_color: pad_color.clone(),
+                    source_trim: trim.source_trim(),
                     reel_split_frames,
                     sign_language_lang: sign_language_lang.clone(),
                     release_territory: release_territory.clone(),
@@ -3205,19 +3521,18 @@ fn run() {
 
                 // Clean up intermediate files
                 let _ = std::fs::remove_dir_all(&j2k_dir);
+                let _ = std::fs::remove_dir_all(output_dir.join("j2k_trimmed"));
+                let _ = std::fs::remove_dir_all(output_dir.join("j2k_right_trimmed"));
+                let _ = std::fs::remove_file(output_dir.join("j2k_trimmed.wav"));
                 let _ = std::fs::remove_dir_all(output_dir.join("audio_work"));
                 dcpwizard_core::encode_qol::EncodeState::clear(&output_dir);
                 if let Some(ref d) = right_eye_dir {
                     let _ = std::fs::remove_dir_all(d);
                 }
-                if let Some(ref wav) = audio_path
-                    && matches!(
-                        wav.file_name().and_then(|f| f.to_str()),
-                        Some("audio_demux.wav" | "audio_pullup.wav")
-                    )
-                {
-                    let _ = std::fs::remove_file(wav);
-                }
+                // both are ours whenever they exist, and a later stage may have
+                // moved audio_path off them, so remove them by name
+                let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
+                let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
                 let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
                 code
             } else {
@@ -3249,12 +3564,71 @@ fn run() {
                         }
                     };
 
+                // a still becomes a codestream directory here: one encode, then
+                // the codestream linked for every frame of the hold
+                let still_j2k_dir = output_dir.join("j2k_still");
+                let source_j2k_dir = if still_input {
+                    let spec = still_length.as_deref().unwrap_or_default();
+                    let frames = match dcpwizard_core::pad::parse_pad_frames(spec, fps) {
+                        Ok(0) => {
+                            tracing::error!(
+                                "--still-length: a still must be held for at least one frame"
+                            );
+                            std::process::exit(1);
+                        }
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::error!("--still-length: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    let (width, height) = match still_raster(&video_path, twok, fourk) {
+                        Ok(dims) => dims,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    let _ = std::fs::create_dir_all(&output_dir);
+                    if let Err(e) = dcpwizard_core::still::build_still_frames(
+                        &video_path,
+                        frames,
+                        fps,
+                        width,
+                        height,
+                        colourspace_applies_xyz,
+                        &still_j2k_dir,
+                    ) {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                    tracing::info!("Held the still for {frames} frame(s) at {width}x{height}");
+                    still_j2k_dir.clone()
+                } else {
+                    video_path.clone()
+                };
+
+                let source_frames = dcpwizard_core::trim::frame_count(&source_j2k_dir);
+                let trim = match resolve_trim(
+                    trim_start.as_deref(),
+                    trim_end.as_deref(),
+                    source_frames,
+                    fps,
+                ) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+
                 // W5 audio processing: filename channel routing (a --audio
                 // directory), stereo->5.1 upmix, then loudness normalization.
                 let work_dir = output_dir.join("audio_work");
                 let prepared_audio = match prepare_create_audio(
                     audio.map(PathBuf::from),
                     upmix.as_deref(),
+                    audio_delay,
                     loudness_target.as_deref(),
                     true_peak_ceiling,
                     &audio_adjust,
@@ -3267,17 +3641,24 @@ fn run() {
                     }
                 };
 
+                let (packaged_j2k_dir, prepared_audio) = match trim.apply(
+                    &source_j2k_dir,
+                    &output_dir.join("j2k_trimmed"),
+                    prepared_audio,
+                    fps,
+                ) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+
                 // sign-language video (ISDCF Doc 13): pack VP9 onto channel 15.
                 // Cover at least the J2K frame count so the sound spans the picture.
                 let (audio_path, sl_main_channels) = if let Some(slv) = sign_language_video.as_ref()
                 {
-                    let frames = std::fs::read_dir(&video_path)
-                        .map(|rd| {
-                            rd.filter_map(|e| e.ok())
-                                .filter(|e| e.path().is_file())
-                                .count()
-                        })
-                        .unwrap_or(0) as u64;
+                    let frames = dcpwizard_core::trim::frame_count(&packaged_j2k_dir);
                     match build_sign_language_audio(
                         slv,
                         prepared_audio.as_deref(),
@@ -3308,7 +3689,7 @@ fn run() {
                     container_width,
                     container_height,
                     max_bitrate_mbps: video_bit_rate.unwrap_or(0),
-                    j2k_dir: Some(video_path),
+                    j2k_dir: Some(packaged_j2k_dir),
                     audio_path,
                     audio_input_order,
                     subtitle_path: subtitle.map(PathBuf::from),
@@ -3325,6 +3706,7 @@ fn run() {
                     pad_head,
                     pad_tail,
                     pad_color,
+                    source_trim: trim.source_trim(),
                     reel_split_frames,
                     sign_language_lang,
                     sign_language_main_channels: sl_main_channels,
@@ -3343,6 +3725,9 @@ fn run() {
                     None => dcpwizard_core::dcp::create_dcp(&config),
                 };
                 let _ = std::fs::remove_dir_all(&work_dir);
+                let _ = std::fs::remove_dir_all(&still_j2k_dir);
+                let _ = std::fs::remove_dir_all(output_dir.join("j2k_trimmed"));
+                let _ = std::fs::remove_file(output_dir.join("j2k_trimmed.wav"));
                 code
             };
 
@@ -3684,6 +4069,7 @@ fn run() {
             format,
             annotation,
             device_cert,
+            kdm_options,
         } => {
             let format = match dcpwizard_core::kdm::parse_format(&format) {
                 Ok(f) => f,
@@ -3729,7 +4115,7 @@ fn run() {
                 annotation,
                 Some(history_path(history_file)),
                 device_cert.into_iter().map(PathBuf::from).collect(),
-                Default::default(),
+                kdm_options.into(),
             );
             if code == 0 {
                 if let Some(cfg_path) = smtp_config {
@@ -3759,6 +4145,7 @@ fn run() {
             valid_to,
             output,
             device_cert,
+            kdm_options,
         } => dcpwizard_core::kdm::rewrap_dkdm(
             PathBuf::from(dkdm),
             PathBuf::from(dkdm_key),
@@ -3770,7 +4157,7 @@ fn run() {
             valid_to,
             PathBuf::from(output),
             device_cert.into_iter().map(PathBuf::from).collect(),
-            Default::default(),
+            kdm_options.into(),
         ),
 
         Commands::Copy { src, dst } => {
@@ -4569,6 +4956,7 @@ fn run() {
             email_only_additional,
             keys,
             format,
+            kdm_options,
         } => run_kdm_batch(KdmBatchArgs {
             cpl_id,
             content_title,
@@ -4591,6 +4979,7 @@ fn run() {
             email_only_additional,
             keys,
             format,
+            options: kdm_options.into(),
         }),
 
         Commands::Cinema { db, action } => run_cinema(db, action),

@@ -65,6 +65,11 @@ pub struct DcpConfig {
     /// Black-frame + silence padding appended at the tail of the program. Same
     /// syntax as `pad_head`.
     pub pad_tail: Option<String>,
+    /// Head/tail trim the caller already applied to the picture frames and the
+    /// sound. Timed text still carries the source's timing, so it is re-timed
+    /// here; trim is applied before `pad_head`, never after.
+    #[serde(default)]
+    pub source_trim: crate::subtitle::SourceTrim,
     /// Background/pad colour as `#RRGGBB` sRGB. Absent = black. Applied to the
     /// head/tail pad frames (run through the DCDM transform before J2K encoding).
     #[serde(default)]
@@ -138,8 +143,8 @@ pub fn validate_container_dims(width: u32, height: u32, is_4k: bool) -> Result<(
 const ATMOS_DATA_TYPE_UL: &str = "urn:smpte:ul:060e2b34.04010105.0e090604.00000000";
 
 /// Wrap a timed-text input into an MXF: SRT/styled formats are converted to
-/// DCST (cues shifted by `head_frames`, fonts/PNGs embedded), a supplied SMPTE
-/// DCST is wrapped unchanged. Returns the track duration, or None on failure
+/// DCST (cues moved onto the packaged `timing`, fonts/PNGs embedded), a supplied
+/// SMPTE DCST is wrapped unchanged. Returns the track duration, or None on failure
 /// (already logged). Used for the closed-caption track; the open subtitle path
 /// stays inline in create_dcp.
 fn wrap_timed_text_track(
@@ -147,7 +152,7 @@ fn wrap_timed_text_track(
     out_mxf: &std::path::Path,
     lang: &str,
     fps: u32,
-    head_frames: u64,
+    timing: crate::subtitle::CueTiming,
     opts: &crate::subtitle::SubtitleOptions,
     asset_uuid: [u8; 16],
 ) -> Option<u64> {
@@ -182,12 +187,7 @@ fn wrap_timed_text_track(
     } else {
         let dcst_path = out_mxf.with_extension("dcst.xml");
         let prepared = match crate::subtitle::prepare_subtitle_track(
-            input,
-            head_frames,
-            lang,
-            fps,
-            opts,
-            &dcst_path,
+            input, timing, lang, fps, opts, &dcst_path,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -372,6 +372,33 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         None => [0, 0, 0],
     };
 
+    let cue_timing = crate::subtitle::CueTiming {
+        trim: config.source_trim,
+        pad_head_frames: head_frames,
+    };
+    // supplied SMPTE XML carries authored timing we will not rewrite; every
+    // parsed format (SRT/ASS/PAC/... ) is regenerated so it can be re-timed.
+    let supplied_xml = |path: &Option<PathBuf>| {
+        path.as_ref()
+            .filter(|p| p.exists())
+            .map(|p| {
+                matches!(
+                    crate::subtitle::detect_subtitle_kind(p),
+                    Ok(crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough)
+                )
+            })
+            .unwrap_or(false)
+    };
+    let supplied_subtitle_xml = supplied_xml(&config.subtitle_path);
+    if config.source_trim.is_active() && (supplied_subtitle_xml || supplied_xml(&config.ccap_path))
+    {
+        tracing::error!(
+            "trimming cannot re-time supplied SMPTE timed-text XML; supply SRT or another parsable \
+             format, or trim nothing"
+        );
+        return -1;
+    }
+
     let padding = head_frames + tail_frames > 0;
     if padding {
         if config.reel_length_minutes > 0 || !config.reel_split_frames.is_empty() {
@@ -390,20 +417,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             );
             return -1;
         }
-        // supplied SMPTE XML carries authored timing we will not rewrite; every
-        // parsed format (SRT/ASS/PAC/... ) is regenerated so it can be shifted.
-        let supplied_xml = config
-            .subtitle_path
-            .as_ref()
-            .filter(|p| p.exists())
-            .map(|p| {
-                matches!(
-                    crate::subtitle::detect_subtitle_kind(p),
-                    Ok(crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough)
-                )
-            })
-            .unwrap_or(false);
-        if head_frames > 0 && supplied_xml {
+        if head_frames > 0 && supplied_subtitle_xml {
             tracing::error!(
                 "head padding cannot re-time supplied SMPTE subtitle XML; supply SRT to shift, or pad only the tail"
             );
@@ -789,7 +803,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 .join(format!("subtitle_{subtitle_uuid}.xml"));
             let prepared = match crate::subtitle::prepare_subtitle_track(
                 subtitle_path,
-                head_frames,
+                cue_timing,
                 subtitle_lang,
                 fps,
                 &config.subtitle_opts,
@@ -847,7 +861,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             &ccap_mxf_path,
             ccap_lang,
             fps,
-            head_frames,
+            cue_timing,
             &crate::subtitle::SubtitleOptions::default(),
             *ccap_uuid.as_bytes(),
         ) {

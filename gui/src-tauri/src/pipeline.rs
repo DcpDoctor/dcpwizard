@@ -96,6 +96,15 @@ struct JobConfig {
     pad_head: Option<String>,
     pad_tail: Option<String>,
     pad_color: Option<String>,
+    // shift the sound against the picture, keeping the running time
+    audio_delay_ms: i64,
+    // head/tail trim of the source in frames, applied before any padding
+    trim_start_frames: u64,
+    trim_end_frames: u64,
+    // how long a single-image input is held, in frames. Zero = not a still
+    still_length_frames: u64,
+    // colour space the source carries, which decides the encoder transform
+    source_colourspace: postkit::colour::ColourSpace,
     // stereo -> 5.1 upmix applied before loudness normalization
     upmix: Option<postkit::upmix::Upmixer>,
     reel_length_minutes: u32,
@@ -196,6 +205,11 @@ pub async fn submit_job(
     pad_head: Option<String>,
     pad_tail: Option<String>,
     pad_color: Option<String>,
+    audio_delay_ms: Option<i64>,
+    trim_start: Option<String>,
+    trim_end: Option<String>,
+    still_length: Option<String>,
+    source_colourspace: Option<String>,
     upmix: Option<String>,
     reel_length_minutes: Option<u32>,
     split_at: Option<String>,
@@ -252,6 +266,41 @@ pub async fn submit_job(
         dcpwizard_core::pad::parse_pad_color(spec)?;
     }
 
+    // trim and still specs share the pad syntax, and are parsed here for the same
+    // reason: a bad spec must fail before the encode, not after it.
+    let duration_frames = |spec: Option<&str>, label: &str| -> Result<u64, String> {
+        match spec.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(spec) => dcpwizard_core::pad::parse_pad_frames(spec, fps_num)
+                .map_err(|e| format!("{label}: {e}")),
+            None => Ok(0),
+        }
+    };
+    let trim_start_frames = duration_frames(trim_start.as_deref(), "Trim start")?;
+    let trim_end_frames = duration_frames(trim_end.as_deref(), "Trim end")?;
+    let still_length_frames = duration_frames(still_length.as_deref(), "Still length")?;
+
+    let video = PathBuf::from(&video_path);
+    let still_input = dcpwizard_core::still::is_still(&video);
+    if still_input && still_length_frames == 0 {
+        return Err("The video is a single image and has no length: set a still length".into());
+    }
+    if !still_input && still_length_frames > 0 {
+        return Err(
+            "Still length applies to a single-image video; a video carries its own length".into(),
+        );
+    }
+    if still_input && trim_start_frames + trim_end_frames > 0 {
+        return Err(
+            "A still is held for exactly its still length: shorten that instead of trimming".into(),
+        );
+    }
+
+    let source_colourspace = dcpwizard_core::encode::parse_source_colourspace(
+        source_colourspace.as_deref().unwrap_or("rec709"),
+    )?;
+    let colourspace_applies_xyz =
+        dcpwizard_core::encode::applies_xyz_transform(source_colourspace)?;
+
     let upmix = parse_upmixer(upmix.as_deref())?;
 
     // reel splitting: length, timecodes and chapters are three ways to say the
@@ -292,7 +341,7 @@ pub async fn submit_job(
     let right_eye = right_eye.filter(|s| !s.is_empty());
     let hdr_dci = hdr_dci.unwrap_or(false);
     let allow_generic_hdr_tonemap = allow_generic_hdr_tonemap.unwrap_or(false);
-    let source_colour = resolve_hdr(
+    let hdr_source_colour = resolve_hdr(
         &HdrPanelOptions {
             dci: hdr_dci,
             lut: hdr_to_dci_lut,
@@ -305,6 +354,22 @@ pub async fn submit_job(
         reel_length_minutes > 0 || !reel_split_frames.is_empty() || split_chapters,
         !versions.is_empty(),
     )?;
+    // the source colour space and the HDR options both answer "does the encoder
+    // run its X'Y'Z' transform?", so only one of them may.
+    let source_colour = match (
+        colourspace_applies_xyz,
+        hdr_source_colour.applies_xyz_transform(),
+    ) {
+        (true, _) => hdr_source_colour,
+        // postkit spells "compress untransformed" AlreadyPq; an X'Y'Z' source is
+        // that same route without the PQ label, which only --hdr-dci writes
+        (false, true) => postkit::encode::SourceColour::AlreadyPq,
+        (false, false) => {
+            return Err(
+                "The source colour space and the HDR options both decide the encoder's colour transform: set one or the other".into(),
+            );
+        }
+    };
 
     let job = JobConfig {
         id,
@@ -337,6 +402,11 @@ pub async fn submit_job(
         pad_head,
         pad_tail,
         pad_color,
+        audio_delay_ms: audio_delay_ms.unwrap_or(0),
+        trim_start_frames,
+        trim_end_frames,
+        still_length_frames,
+        source_colourspace,
         upmix,
         reel_length_minutes,
         reel_split_frames,
@@ -938,8 +1008,8 @@ fn count_frames(j2k_dir: &std::path::Path) -> u64 {
 }
 
 /// Create-time audio processing: filename channel routing from a directory of
-/// mono WAVs, then stereo-to-5.1 upmix, then loudness normalization. Same order
-/// as the CLI create path. Intermediates go under `<output>/audio_work`.
+/// mono WAVs, then stereo-to-5.1 upmix, then the picture/sound delay, then
+/// loudness normalization. Same order as the CLI create path. Intermediates go under `<output>/audio_work`.
 fn prepare_audio(
     job: &JobConfig,
     output: &std::path::Path,
@@ -970,6 +1040,20 @@ fn prepare_audio(
         audio_path = Some(out);
     }
 
+    if let (true, Some(input)) = (job.audio_delay_ms != 0, &audio_path) {
+        std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
+        let out = work_dir.join("delayed.wav");
+        audio_path = Some(dcpwizard_core::audio_adjust::apply_delay(
+            input,
+            &out,
+            job.audio_delay_ms,
+        )?);
+        log(&format!(
+            "[AUDIO] Delayed the sound by {}ms against the picture",
+            job.audio_delay_ms
+        ));
+    }
+
     if let (Some(spec), Some(input)) = (job.loudness_target.as_deref(), &audio_path) {
         let target = dcpwizard_core::loudness::parse_loudness_target(spec)?;
         let ceiling = job
@@ -987,6 +1071,70 @@ fn prepare_audio(
     }
 
     Ok(audio_path)
+}
+
+/// Build a still's frame directory: one encode, linked for every frame of the
+/// hold. Shaped as an [`postkit::pipeline::EncodeResult`] so the rest of the job
+/// does not care which kind of input it got.
+fn encode_still(
+    job: &JobConfig,
+    output: &std::path::Path,
+    fps: u32,
+    log: impl Fn(&str),
+) -> Result<postkit::pipeline::EncodeResult, String> {
+    let started = std::time::Instant::now();
+    let info = dcpwizard_core::probe::probe_video(&job.video_path)
+        .ok_or_else(|| format!("cannot read the size of {}", job.video_path.display()))?;
+    let j2k_dir = output.join("j2k");
+    dcpwizard_core::still::build_still_frames(
+        &job.video_path,
+        job.still_length_frames,
+        fps,
+        info.width,
+        info.height,
+        dcpwizard_core::encode::applies_xyz_transform(job.source_colourspace)?,
+        &j2k_dir,
+    )?;
+    log(&format!(
+        "[ENCODE] Still held for {} frame(s) at {}x{}",
+        job.still_length_frames, info.width, info.height
+    ));
+    Ok(postkit::pipeline::EncodeResult {
+        j2k_dir,
+        frames_encoded: job.still_length_frames,
+        elapsed_secs: started.elapsed().as_secs_f64(),
+    })
+}
+
+/// Trim the encoded frames and the sound to the kept window, or hand both back
+/// unchanged when no trim was asked for.
+fn apply_trim(
+    job: &JobConfig,
+    j2k_dir: &std::path::Path,
+    output: &std::path::Path,
+    audio: Option<PathBuf>,
+    fps: u32,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    if job.trim_start_frames + job.trim_end_frames == 0 {
+        return Ok((j2k_dir.to_path_buf(), audio));
+    }
+    let trimmed = output.join("j2k_trimmed");
+    let kept = dcpwizard_core::trim::link_trimmed_frames(
+        j2k_dir,
+        job.trim_start_frames,
+        job.trim_end_frames,
+        &trimmed,
+    )?;
+    let audio = match audio {
+        Some(input) => {
+            let out = output.join("audio_work").join("trimmed.wav");
+            std::fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
+            dcpwizard_core::trim::trim_wav(&input, job.trim_start_frames, kept, fps, &out)?;
+            Some(out)
+        }
+        None => None,
+    };
+    Ok((trimmed, audio))
 }
 
 fn build_dcp_config(
@@ -1020,6 +1168,14 @@ fn build_dcp_config(
 
     let (frame_rate_num, frame_rate_den) = frame_rate_of(&job.framerate);
 
+    // after a trim, j2k_dir holds exactly the frames that survived it, which is
+    // the window the timed text has to be clamped to
+    let kept_after_trim = if job.trim_start_frames + job.trim_end_frames > 0 {
+        dcpwizard_core::trim::frame_count(&j2k_dir)
+    } else {
+        0
+    };
+
     dcpwizard_core::dcp::DcpConfig {
         title: job.title.clone(),
         standard,
@@ -1046,6 +1202,10 @@ fn build_dcp_config(
         pad_head: job.pad_head.clone(),
         pad_tail: job.pad_tail.clone(),
         pad_color: job.pad_color.clone(),
+        source_trim: dcpwizard_core::subtitle::SourceTrim {
+            start_frames: job.trim_start_frames,
+            kept_frames: kept_after_trim,
+        },
         reel_length_minutes: job.reel_length_minutes,
         reel_split_frames,
         sign_language_lang: job.sign_language_tag.clone(),
@@ -1123,31 +1283,36 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
     };
 
-    // Encode using shared pipeline
+    // Encode using shared pipeline. A still never reaches it: it is one encode
+    // whose codestream is linked for every frame of the hold.
     let job_id = job.id;
     let app_ref = app.clone();
     let log_ref = log_file.clone();
-    let encode_result = postkit::pipeline::run_encode_with_options(
-        &encode_input,
-        output,
-        &encode_options,
-        &cancel,
-        &pause,
-        |p| {
-            emit_progress(
-                &app_ref,
-                job_id,
-                &p.stage,
-                &p.message,
-                p.frame,
-                p.total_frames,
-                p.fps,
-                p.elapsed_secs,
-                p.percent,
-            );
-        },
-        |msg| log_to(&log_ref, msg),
-    )?;
+    let encode_result = if job.still_length_frames > 0 {
+        encode_still(job, output, fps_num, |msg| log_to(&log_ref, msg))?
+    } else {
+        postkit::pipeline::run_encode_with_options(
+            &encode_input,
+            output,
+            &encode_options,
+            &cancel,
+            &pause,
+            |p| {
+                emit_progress(
+                    &app_ref,
+                    job_id,
+                    &p.stage,
+                    &p.message,
+                    p.frame,
+                    p.total_frames,
+                    p.fps,
+                    p.elapsed_secs,
+                    p.percent,
+                );
+            },
+            |msg| log_to(&log_ref, msg),
+        )?
+    };
 
     // Stereoscopic 3D: encode the right eye into its own subdir at the same
     // ratio/fps (the main input is the left eye).
@@ -1177,16 +1342,20 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     let audio_path = prepare_audio(job, output, |msg| log_to(&log_file, msg))?;
 
+    // trim before sign language, which is packed to cover the picture the
+    // package actually carries
+    let (j2k_dir, audio_path) =
+        apply_trim(job, &encode_result.j2k_dir, output, audio_path, fps_num).map_err(|e| {
+            log_to(&log_file, &format!("[TRIM] {e}"));
+            e
+        })?;
+
     // sign-language video (ISDCF Doc 13): pack VP9 onto channel 15, replacing
     // the sound track with the combined 16-channel WAV.
     let (audio_path, sign_language_main_channels) = match job.sign_language_video.as_deref() {
         Some(video) => {
             log_to(&log_file, &format!("[AUDIO] Sign language: {video}"));
-            let frames = if encode_result.frames_encoded > 0 {
-                encode_result.frames_encoded
-            } else {
-                count_frames(&encode_result.j2k_dir)
-            };
+            let frames = count_frames(&j2k_dir);
             let combined = output.join("slvs_sound.wav");
             let main_channels = dcpwizard_core::sign_language::build_slvs_sound(
                 std::path::Path::new(video),
@@ -1216,7 +1385,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     let config = build_dcp_config(
         job,
-        encode_result.j2k_dir.clone(),
+        j2k_dir,
         right_eye_dir,
         audio_path,
         sign_language_main_channels,
@@ -1369,6 +1538,11 @@ mod tests {
             pad_head: None,
             pad_tail: None,
             pad_color: None,
+            audio_delay_ms: 0,
+            trim_start_frames: 0,
+            trim_end_frames: 0,
+            still_length_frames: 0,
+            source_colourspace: postkit::colour::ColourSpace::Rec709,
             upmix: None,
             reel_length_minutes: 0,
             reel_split_frames: Vec::new(),
@@ -1499,6 +1673,75 @@ mod tests {
         let prepared = prepare_audio(&job, dir.path(), |_| {}).unwrap();
         assert_eq!(prepared, Some(wav));
         assert!(!dir.path().join("audio_work").exists());
+    }
+
+    #[test]
+    fn the_audio_delay_reaches_the_sound_and_keeps_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("sound.wav");
+        write_mono(&wav, 1234, 48_000);
+
+        let mut job = test_job();
+        job.audio_path = Some(wav.to_string_lossy().into_owned());
+        job.audio_delay_ms = 100;
+
+        let delayed = prepare_audio(&job, dir.path(), |_| {}).unwrap().unwrap();
+        assert_eq!(delayed, dir.path().join("audio_work").join("delayed.wav"));
+        let reader = WavReader::open(&delayed).unwrap();
+        assert_eq!(
+            reader.duration(),
+            48_000,
+            "a delay must not change the running time"
+        );
+    }
+
+    #[test]
+    fn a_trim_reaches_the_frames_the_sound_and_the_cue_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let j2k = dir.path().join("j2k");
+        std::fs::create_dir_all(&j2k).unwrap();
+        for i in 0..48u64 {
+            std::fs::write(j2k.join(format!("frame_{i:08}.j2c")), [i as u8]).unwrap();
+        }
+        let wav = dir.path().join("sound.wav");
+        write_mono(&wav, 1234, 96_000); // 48 frames at 24 fps
+
+        let mut job = test_job();
+        job.trim_start_frames = 12;
+        job.trim_end_frames = 12;
+
+        let (trimmed_dir, trimmed_audio) =
+            apply_trim(&job, &j2k, dir.path(), Some(wav), 24).unwrap();
+        assert_eq!(dcpwizard_core::trim::frame_count(&trimmed_dir), 24);
+        let reader = WavReader::open(trimmed_audio.unwrap()).unwrap();
+        assert_eq!(reader.duration(), 48_000, "24 frames at 24 fps");
+
+        let config = build_dcp_config(&job, trimmed_dir, None, None, None, Vec::new());
+        assert_eq!(
+            config.source_trim,
+            dcpwizard_core::subtitle::SourceTrim {
+                start_frames: 12,
+                kept_frames: 24,
+            },
+            "subtitles are clamped to the frames that survived"
+        );
+    }
+
+    #[test]
+    fn no_trim_leaves_the_frames_and_the_cue_window_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let j2k = dir.path().join("j2k");
+        std::fs::create_dir_all(&j2k).unwrap();
+        std::fs::write(j2k.join("frame_00000000.j2c"), [0u8]).unwrap();
+
+        let job = test_job();
+        let (same, audio) = apply_trim(&job, &j2k, dir.path(), None, 24).unwrap();
+        assert_eq!(same, j2k, "an untrimmed job must not relink a thing");
+        assert!(audio.is_none());
+        assert_eq!(
+            build_dcp_config(&job, j2k, None, None, None, Vec::new()).source_trim,
+            dcpwizard_core::subtitle::SourceTrim::default()
+        );
     }
 
     #[test]

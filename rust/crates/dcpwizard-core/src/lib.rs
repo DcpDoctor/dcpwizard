@@ -59,13 +59,17 @@ pub mod report;
 pub mod rest_api;
 pub mod shell_completion;
 pub mod sign_language;
+pub mod still;
 pub mod store;
 pub mod subtitle;
 pub mod subtitle_edit;
 pub mod subtitle_extract;
 pub mod subtitle_retime;
+#[cfg(test)]
+pub(crate) mod test_wav;
 pub mod trailer;
 pub mod transcode;
+pub mod trim;
 pub mod verify;
 pub mod version_tracker;
 pub mod versions;

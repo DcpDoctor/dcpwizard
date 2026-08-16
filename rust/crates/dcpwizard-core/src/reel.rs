@@ -226,9 +226,24 @@ pub(crate) fn write_reel_wav(
     sample_count: u64,
     out: &Path,
 ) -> Result<(), String> {
+    write_shifted_wav(src, info, 0, start_sample, sample_count, out)
+}
+
+/// Write `head_silence` samples of silence followed by `src`'s payload from
+/// `start_sample`, for exactly `sample_count` samples in total. A source that
+/// runs short is filled out with silence at the tail.
+pub(crate) fn write_shifted_wav(
+    src: &Path,
+    info: &WavInfo,
+    head_silence: u64,
+    start_sample: u64,
+    sample_count: u64,
+    out: &Path,
+) -> Result<(), String> {
     let ba = info.block_align as u64;
     let want_bytes = sample_count * ba;
     let start_byte = start_sample * ba;
+    let head_bytes = (head_silence * ba).min(want_bytes);
 
     let mut header = info.header.clone();
     let riff_size = (info.header.len() as u64 - 8) + want_bytes;
@@ -239,7 +254,18 @@ pub(crate) fn write_reel_wav(
     let mut w = std::fs::File::create(out).map_err(|e| format!("cannot create {out:?}: {e}"))?;
     w.write_all(&header).map_err(|e| e.to_string())?;
 
-    let avail = info.data_size.saturating_sub(start_byte).min(want_bytes);
+    let zeros = vec![0u8; 1 << 16];
+    let mut lead = head_bytes;
+    while lead > 0 {
+        let take = lead.min(zeros.len() as u64) as usize;
+        w.write_all(&zeros[..take]).map_err(|e| e.to_string())?;
+        lead -= take as u64;
+    }
+
+    let avail = info
+        .data_size
+        .saturating_sub(start_byte)
+        .min(want_bytes - head_bytes);
     if avail > 0 {
         let mut r = std::fs::File::open(src).map_err(|e| e.to_string())?;
         r.seek(SeekFrom::Start(info.data_offset + start_byte))
@@ -254,8 +280,7 @@ pub(crate) fn write_reel_wav(
         }
     }
     // pad the shortfall with silence so the reel is exactly sample_count samples
-    let mut pad = want_bytes - avail;
-    let zeros = vec![0u8; 1 << 16];
+    let mut pad = want_bytes - head_bytes - avail;
     while pad > 0 {
         let take = pad.min(zeros.len() as u64) as usize;
         w.write_all(&zeros[..take]).map_err(|e| e.to_string())?;
@@ -342,6 +367,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     let subtitle_plan = match config.subtitle_path.as_ref().filter(|p| p.exists()) {
         Some(path) => match crate::subtitle::plan_reel_subtitles(
             path,
+            config.source_trim,
             fps,
             &config.subtitle_opts,
             &config.output_dir,
@@ -365,6 +391,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     let ccap_plan = match config.ccap_path.as_ref().filter(|p| p.exists()) {
         Some(path) => match crate::subtitle::plan_reel_subtitles(
             path,
+            config.source_trim,
             fps,
             &crate::subtitle::SubtitleOptions::default(),
             &config.output_dir,

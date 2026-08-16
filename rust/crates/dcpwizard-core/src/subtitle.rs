@@ -41,6 +41,51 @@ pub struct SubtitleOptions {
     pub no_subset: bool,
 }
 
+/// The head/tail trim already applied to the picture and sound, so timed text
+/// can follow them. Cues slide back by `start_frames` and are clamped to the
+/// `kept_frames` that survive; `kept_frames == 0` means nothing was trimmed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceTrim {
+    pub start_frames: u64,
+    pub kept_frames: u64,
+}
+
+impl SourceTrim {
+    pub fn is_active(&self) -> bool {
+        self.kept_frames > 0
+    }
+}
+
+/// Where a source cue lands in the packaged programme: the trim already applied
+/// to picture and sound, then the head padding prepended after it. Trim first,
+/// pad second, matching the order the picture went through.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CueTiming {
+    pub trim: SourceTrim,
+    pub pad_head_frames: u64,
+}
+
+/// Move cues onto the trimmed programme's timeline: a cue wholly outside the
+/// kept window is dropped, one straddling a boundary is clamped to it, and the
+/// rest slide back so the first kept frame is zero.
+pub fn apply_source_trim(cues: &[StyledCue], trim: SourceTrim, fps: u32) -> Vec<StyledCue> {
+    if !trim.is_active() {
+        return cues.to_vec();
+    }
+    let fps = fps.max(1) as u64;
+    let to_ms = |frames: u64| frames * 1000 / fps;
+    let window_start = to_ms(trim.start_frames);
+    let window_end = to_ms(trim.start_frames + trim.kept_frames);
+    cues.iter()
+        .filter(|cue| cue.end_ms > window_start && cue.start_ms < window_end)
+        .map(|cue| StyledCue {
+            start_ms: cue.start_ms.max(window_start) - window_start,
+            end_ms: cue.end_ms.min(window_end) - window_start,
+            ..cue.clone()
+        })
+        .collect()
+}
+
 /// Result of building a subtitle track: the DCST XML plus any ancillary
 /// resources (embedded font, bitmap PNGs) with the asset id each is referenced
 /// by from the XML. `dcp.rs`/reel splitting wrap these into the timed-text MXF.
@@ -149,18 +194,18 @@ pub fn load_styled_cues(path: &Path, fps: u32) -> Result<Vec<StyledCue>, String>
 }
 
 /// Build a subtitle track from any supported input, applying wrap/RTL/placement/
-/// font options and shifting every cue later by `head_frames`. Writes the DCST
-/// XML to `out` and returns it plus any ancillary resources (font, PNGs) to
-/// embed in the timed-text MXF. Callers wrap `[dcst_path]` + the resources.
+/// font options and the `timing` the packaged programme puts the cues on. Writes
+/// the DCST XML to `out` and returns it plus any ancillary resources (font, PNGs)
+/// to embed in the timed-text MXF. Callers wrap `[dcst_path]` + the resources.
 pub fn prepare_subtitle_track(
     input: &Path,
-    head_frames: u64,
+    timing: CueTiming,
     lang: &str,
     fps: u32,
     opts: &SubtitleOptions,
     out: &Path,
 ) -> Result<PreparedSubtitle, String> {
-    let mut cues = load_styled_cues(input, fps)?;
+    let mut cues = apply_source_trim(&load_styled_cues(input, fps)?, timing.trim, fps);
 
     // wrap first (adds '\n'), then RTL reorder each line to visual order
     if let Some(cols) = opts.wrap_cols.filter(|c| *c > 0) {
@@ -186,9 +231,17 @@ pub fn prepare_subtitle_track(
     // bitmap subs: each distinct PNG is embedded and referenced by its asset id
     assign_image_ids(&cues, &mut resources);
 
-    // head padding shifts the program: slide every cue later by head_frames,
-    // applied in the frame domain so the timecodes stay frame-accurate
-    let xml = render_dcst_styled(&cues, lang, fps, opts, font_ref, &resources, head_frames);
+    // head padding shifts the program: slide every cue later by the pad, applied
+    // in the frame domain so the timecodes stay frame-accurate
+    let xml = render_dcst_styled(
+        &cues,
+        lang,
+        fps,
+        opts,
+        font_ref,
+        &resources,
+        timing.pad_head_frames,
+    );
     std::fs::write(out, xml).map_err(|e| format!("write {}: {e}", out.display()))?;
     Ok(PreparedSubtitle {
         dcst_path: out.to_path_buf(),
@@ -289,11 +342,12 @@ pub struct ReelSubtitlePlan {
     pub font: Option<(PathBuf, [u8; 16])>,
 }
 
-/// Parse any supported subtitle format for reel splitting, applying wrap/RTL and
-/// staging a shared embedded font. A supplied SMPTE DCST XML is rejected: its
-/// authored timing cannot be safely re-split across reels.
+/// Parse any supported subtitle format for reel splitting, applying the source
+/// `trim`, wrap/RTL and staging a shared embedded font. A supplied SMPTE DCST XML
+/// is rejected: its authored timing cannot be safely re-split across reels.
 pub fn plan_reel_subtitles(
     input: &Path,
+    trim: SourceTrim,
     fps: u32,
     opts: &SubtitleOptions,
     stage_dir: &Path,
@@ -303,7 +357,7 @@ pub fn plan_reel_subtitles(
             "reel splitting cannot re-time a supplied SMPTE subtitle XML; supply SRT or a parsable format".into(),
         );
     }
-    let mut cues = load_styled_cues(input, fps)?;
+    let mut cues = apply_source_trim(&load_styled_cues(input, fps)?, trim, fps);
     if let Some(cols) = opts.wrap_cols.filter(|c| *c > 0) {
         cues = cues
             .iter()
@@ -977,6 +1031,66 @@ fn render_dcst_styled(
 }
 
 #[cfg(test)]
+mod trim_tests {
+    use super::*;
+
+    const FPS: u32 = 24;
+
+    fn cue(start_ms: u64, end_ms: u64, text: &str) -> StyledCue {
+        StyledCue::text(start_ms, end_ms, vec![StyledRun::plain(text)])
+    }
+
+    // the picture moved, so the cues have to move with it: this is what makes
+    // `--trim-start` keep subtitles in sync instead of sliding them a second late
+    #[test]
+    fn cues_move_with_the_picture_and_the_outsiders_go() {
+        // keep source frames 24..72, i.e. 1000ms..3000ms at 24 fps
+        let trim = SourceTrim {
+            start_frames: 24,
+            kept_frames: 48,
+        };
+        let cues = vec![
+            cue(0, 500, "before"),
+            cue(500, 1500, "straddles the head"),
+            cue(1600, 2000, "inside"),
+            cue(2500, 4000, "straddles the tail"),
+            cue(3500, 4000, "after"),
+        ];
+        let moved = apply_source_trim(&cues, trim, FPS);
+
+        let texts: Vec<&str> = moved.iter().map(|c| c.runs[0].text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["straddles the head", "inside", "straddles the tail"],
+            "cues wholly outside the kept window are dropped"
+        );
+        assert_eq!(
+            (moved[0].start_ms, moved[0].end_ms),
+            (0, 500),
+            "clamped to the head"
+        );
+        assert_eq!(
+            (moved[1].start_ms, moved[1].end_ms),
+            (600, 1000),
+            "an inside cue slides back by the head trim"
+        );
+        assert_eq!(
+            (moved[2].start_ms, moved[2].end_ms),
+            (1500, 2000),
+            "clamped to the tail"
+        );
+    }
+
+    #[test]
+    fn no_trim_leaves_every_cue_where_it_was() {
+        let cues = vec![cue(0, 500, "a"), cue(9_000, 9_500, "b")];
+        let same = apply_source_trim(&cues, SourceTrim::default(), FPS);
+        assert_eq!(same.len(), 2);
+        assert_eq!((same[1].start_ms, same[1].end_ms), (9_000, 9_500));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1037,7 +1151,8 @@ mod tests {
 
     fn render(input: &std::path::Path, opts: &SubtitleOptions) -> String {
         let out = input.with_extension("out.xml");
-        let prepared = prepare_subtitle_track(input, 0, "en", 24, opts, &out).unwrap();
+        let prepared =
+            prepare_subtitle_track(input, CueTiming::default(), "en", 24, opts, &out).unwrap();
         let xml = std::fs::read_to_string(&prepared.dcst_path).unwrap();
         std::fs::remove_file(&out).ok();
         xml
@@ -1152,9 +1267,15 @@ mod tests {
             "<DCSubtitle Version=\"1.0\"><Subtitle TimeIn=\"00:00:01:00\" TimeOut=\"00:00:04:00\"><Image VAlign=\"bottom\" HAlign=\"center\" VPosition=\"8\">s1.png</Image></Subtitle></DCSubtitle>",
         );
         let out = dir.path().join("out.xml");
-        let prepared =
-            prepare_subtitle_track(&xml_in, 0, "en", 24, &SubtitleOptions::default(), &out)
-                .unwrap();
+        let prepared = prepare_subtitle_track(
+            &xml_in,
+            CueTiming::default(),
+            "en",
+            24,
+            &SubtitleOptions::default(),
+            &out,
+        )
+        .unwrap();
         let xml = std::fs::read_to_string(&prepared.dcst_path).unwrap();
         assert_eq!(prepared.resources.len(), 1, "one embedded png");
         let id = uuid::Uuid::from_bytes(prepared.resources[0].1)

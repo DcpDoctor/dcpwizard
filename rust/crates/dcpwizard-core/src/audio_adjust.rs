@@ -1,5 +1,5 @@
-//! Gain and fades applied to the programme audio before it is wrapped, and
-//! the matching fade filter for the picture.
+//! Gain, fades and the picture/sound delay applied to the programme audio before
+//! it is wrapped, and the matching fade filter for the picture.
 //!
 //! Every adjustment here keeps the running time the same, so the sound still
 //! matches the picture duration the CPL declares. Anything that would change
@@ -107,6 +107,40 @@ pub fn apply(
             "ffmpeg failed to apply the audio filters '{chain}'"
         ));
     }
+    Ok(output.to_path_buf())
+}
+
+/// Shift the sound against the picture by `delay_ms`, keeping the running time.
+/// A positive delay prepends that much silence and drops the same from the tail
+/// (the sound arrives later); a negative delay drops from the head and appends
+/// silence. A delay at least as long as the programme is refused, since it would
+/// leave nothing but silence.
+pub fn apply_delay(input: &Path, output: &Path, delay_ms: i64) -> Result<PathBuf, String> {
+    if delay_ms == 0 {
+        return Ok(input.to_path_buf());
+    }
+    let info = crate::reel::parse_wav(input)?;
+    if info.sample_rate == 0 || info.block_align == 0 {
+        return Err(format!("{} has no usable WAV format", input.display()));
+    }
+    let total_samples = info.data_size / info.block_align as u64;
+    let shift = delay_ms.unsigned_abs() * info.sample_rate as u64 / 1000;
+    if shift >= total_samples {
+        let programme_ms = total_samples * 1000 / info.sample_rate as u64;
+        return Err(format!(
+            "audio delay of {delay_ms}ms is at least as long as the {programme_ms}ms programme, \
+             which would leave silence"
+        ));
+    }
+    let (head_silence, start_sample) = if delay_ms > 0 { (shift, 0) } else { (0, shift) };
+    crate::reel::write_shifted_wav(
+        input,
+        &info,
+        head_silence,
+        start_sample,
+        total_samples,
+        output,
+    )?;
     Ok(output.to_path_buf())
 }
 
@@ -226,6 +260,88 @@ mod tests {
         );
         let err = video_fade_filter(Some(DURATION + 1.0), None, DURATION).unwrap_err();
         assert!(err.contains("longer than"), "got: {err}");
+    }
+
+    /// A 48 kHz mono ramp of `samples`, and the sample count of a WAV.
+    fn ramp(dir: &std::path::Path, name: &str, samples: u64) -> PathBuf {
+        let path = dir.join(name);
+        crate::test_wav::write_ramp_wav(&path, 1, samples);
+        path
+    }
+
+    fn sample_count(path: &Path) -> u64 {
+        let info = crate::reel::parse_wav(path).unwrap();
+        info.data_size / info.block_align as u64
+    }
+
+    fn sample_at(path: &Path, index: u64) -> u16 {
+        let info = crate::reel::parse_wav(path).unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        let at = (info.data_offset + index * info.block_align as u64) as usize;
+        u16::from_le_bytes([bytes[at], bytes[at + 1]])
+    }
+
+    // the running-time invariant this whole module is built on: a delay may not
+    // change how many samples ship, only which ones
+    #[test]
+    fn a_delay_keeps_the_sample_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = ramp(dir.path(), "in.wav", 48_000);
+        for delay_ms in [250i64, -250, 1, -1] {
+            let out = dir.path().join(format!("out{delay_ms}.wav"));
+            apply_delay(&src, &out, delay_ms).unwrap();
+            assert_eq!(
+                sample_count(&out),
+                48_000,
+                "a {delay_ms}ms delay must not change the running time"
+            );
+        }
+    }
+
+    #[test]
+    fn a_positive_delay_leads_with_silence_and_a_negative_one_starts_late() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = ramp(dir.path(), "in.wav", 48_000);
+
+        // +250ms is 12000 samples of silence, then the ramp from its own zero
+        let later = dir.path().join("later.wav");
+        apply_delay(&src, &later, 250).unwrap();
+        assert_eq!(sample_at(&later, 11_999), 0, "lead-in is silent");
+        assert_eq!(sample_at(&later, 12_000), 0, "the ramp restarts at zero");
+        assert_eq!(
+            sample_at(&later, 12_100),
+            100,
+            "the ramp follows the silence"
+        );
+
+        // -250ms drops the first 12000 samples and appends the same in silence
+        let earlier = dir.path().join("earlier.wav");
+        apply_delay(&src, &earlier, -250).unwrap();
+        assert_eq!(sample_at(&earlier, 0), 12_000);
+        assert_eq!(
+            sample_at(&earlier, 47_999),
+            0,
+            "the tail is made up in silence"
+        );
+    }
+
+    #[test]
+    fn a_delay_longer_than_the_programme_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = ramp(dir.path(), "in.wav", 48_000);
+        let err = apply_delay(&src, &dir.path().join("out.wav"), 2_000).unwrap_err();
+        assert!(err.contains("leave silence"), "got: {err}");
+        assert!(apply_delay(&src, &dir.path().join("out.wav"), -2_000).is_err());
+    }
+
+    #[test]
+    fn a_zero_delay_leaves_the_input_alone() {
+        let input = Path::new("in.wav");
+        assert_eq!(
+            apply_delay(input, Path::new("out.wav"), 0).unwrap(),
+            input.to_path_buf(),
+            "nothing to do must not rewrite the audio"
+        );
     }
 
     // a gain of zero is a real request (it is what --audio-gain 0 means), so it

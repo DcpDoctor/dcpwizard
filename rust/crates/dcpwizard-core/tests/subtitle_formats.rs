@@ -68,8 +68,15 @@ fn ass_dcst_validates_against_st428_7_schema() {
         wrap_cols: Some(6),
         ..Default::default()
     };
-    let prepared =
-        dcpwizard_core::subtitle::prepare_subtitle_track(&ass, 0, "en", FPS, &opts, &out).unwrap();
+    let prepared = dcpwizard_core::subtitle::prepare_subtitle_track(
+        &ass,
+        Default::default(),
+        "en",
+        FPS,
+        &opts,
+        &out,
+    )
+    .unwrap();
     let xml = std::fs::read_to_string(&prepared.dcst_path).unwrap();
     assert!(xml.contains("Italic=\"yes\""), "styling preserved: {xml}");
     assert!(xml.contains("Valign=\"top\""), "placement applied: {xml}");

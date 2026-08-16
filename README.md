@@ -26,6 +26,9 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Explicit reel splits** via `create --split-at <tc>[,<tc>...]` (HH:MM:SS or HH:MM:SS:FF) or `create --split-chapters` (source chapter marks via ffprobe)
 - **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): declares the active area a projector masks to. The CPL's stored area and aspect always come from the coded raster the encoder produced, so a container larger than the frames is refused
 - **Head/tail padding** via `create --pad-head <dur> --pad-tail <dur>` (`48f`/`2s`), with `--pad-color <RRGGBB>` for a filled pad instead of black
+- **Trim** via `create --trim-start <dur> --trim-end <dur>` (same syntax), cutting the source before any padding; picture, sound and subtitles move together
+- **Still images** via `create --video <image> --still-length <dur>`: one image held for a duration, encoded once and repeated
+- **Source colour space** via `create --source-colourspace rec709|xyz` (default `rec709`), declaring whether the compressor still has to run the DCI X'Y'Z' transform
 - **Input decode range** override via `create --input-range full|legal`, correcting wrong or absent source range flags
 - **High Bitrate (HBR)**, up to 500 Mbps for demanding content
 - **CPL / PKL / ASSETMAP / VOLINDEX** generation
@@ -54,6 +57,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Signed SMPTE KDM** (ST 430-1 / 430-3) carrying the DCP's image and audio content keys
 - **Batch KDM**, generate for multiple screens in one pass
 - **DKDM re-wrap**, re-issue KDMs from a Distribution KDM
+- **KDM formulation** via `--formulation` on `kdm`/`kdm-batch`/`kdm-rewrap` (the four ISDCF Doc 5 spellings; derived from `--device-cert` when omitted)
+- **Forensic marking control** via `-p/--disable-forensic-marking-picture` and `-a/--disable-forensic-marking-audio [CHANNEL]`, for press and festival screenings
 - **Certificate generation**, X.509 cert chain (root → intermediate → signer)
 - **Certificate inspection**, display subject, issuer, validity, thumbprint, CA status
 
@@ -76,6 +81,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Loudness measurement**, EBU R128 / ATSC A/85
 - **Loudness normalization** to a target via `create --loudness-target leqm=<db>|lufs=<v>` (with `--true-peak-ceiling`)
 - **Stereo→5.1 upmix** at create via `create --upmix a|b`
+- **Audio delay** via `create --audio-delay <ms>` (positive later, negative earlier), keeping the running time
 - **Filename channel auto-routing**: point `create --audio` at a directory of mono `name_L.wav`/`_R`/`_C`/`_Lfe`/`_Ls`/`_Rs`… files
 - **Crossfade join** of two WAVs via `crossfade --a --b -o --overlap`
 - **Mid-side decode** via `mid-side-decode -i -o --mid --side`

@@ -10,7 +10,8 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-/// Parse a pad duration into a whole number of frames at `fps`.
+/// Parse a duration into a whole number of frames at `fps`. Shared by the pad,
+/// trim and still-length specs.
 ///
 /// The value must carry an explicit unit: `f` for frames (e.g. `48f`) or `s` for
 /// seconds (e.g. `2s`, `1.5s`). A bare number is rejected as ambiguous. Seconds
@@ -20,7 +21,7 @@ pub fn parse_pad_frames(spec: &str, fps: u32) -> Result<u64, String> {
     let fps = fps.max(1);
     let spec = spec.trim();
     let ambiguous =
-        || format!("pad duration '{spec}' needs a unit: frames (e.g. 48f) or seconds (e.g. 2s)");
+        || format!("duration '{spec}' needs a unit: frames (e.g. 48f) or seconds (e.g. 2s)");
     let Some(unit) = spec.chars().last() else {
         return Err(ambiguous());
     };
@@ -29,23 +30,21 @@ pub fn parse_pad_frames(spec: &str, fps: u32) -> Result<u64, String> {
         'f' | 'F' => {
             let frames: u64 = number
                 .parse()
-                .map_err(|_| format!("invalid frame count in pad duration '{spec}'"))?;
+                .map_err(|_| format!("invalid frame count in duration '{spec}'"))?;
             Ok(frames)
         }
         's' | 'S' => {
             let seconds: f64 = number
                 .parse()
-                .map_err(|_| format!("invalid seconds in pad duration '{spec}'"))?;
+                .map_err(|_| format!("invalid seconds in duration '{spec}'"))?;
             if !seconds.is_finite() || seconds < 0.0 {
-                return Err(format!(
-                    "pad duration '{spec}' must be a non-negative number"
-                ));
+                return Err(format!("duration '{spec}' must be a non-negative number"));
             }
             let exact = seconds * fps as f64;
             let rounded = exact.round();
             if (exact - rounded).abs() > 1e-6 {
                 return Err(format!(
-                    "pad duration '{spec}' is {exact} frames at {fps} fps; use a whole-frame duration"
+                    "duration '{spec}' is {exact} frames at {fps} fps; use a whole-frame duration"
                 ));
             }
             Ok(rounded as u64)

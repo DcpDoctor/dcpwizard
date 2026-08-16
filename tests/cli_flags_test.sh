@@ -116,6 +116,22 @@ smoke "create loudness+upmix" create --title x --video "$C" --output "$C" \
                             --loudness-target leqm=85 --true-peak-ceiling=-1.0 --upmix a
 smoke "create start-at+resume" create --title x --video "$C" --output "$C" \
                             --start-at +0s --resume --shutdown-when-done
+smoke "create audio-delay" create --title x --video "$C" --output "$C" --audio-delay -250
+smoke "create trim"      create --title x --video "$C" --output "$C" --trim-start 48f --trim-end 2s
+smoke "create colourspace" create --title x --video "$C" --output "$C" --source-colourspace xyz
+# KDM formulation + forensic marking, on all three KDM commands
+smoke "kdm formulation"  kdm --cpl-id "$UUID" --content-title x --cert "$C" \
+                            --signer-cert "$C" --signer-key "$C" -o "$C" \
+                            --formulation dci-any -p -a 12
+smoke "kdm marking bare" kdm --cpl-id "$UUID" --content-title x --cert "$C" \
+                            --signer-cert "$C" --signer-key "$C" -o "$C" \
+                            --disable-forensic-marking-audio
+smoke "kdm-batch formulation" kdm-batch --cpl-id "$UUID" --content-title x --cert "$C" \
+                            --signer-cert "$C" --signer-key "$C" -o "$C" \
+                            --formulation dci-any --disable-forensic-marking-picture
+smoke "kdm-rewrap formulation" kdm-rewrap --dkdm "$C" --dkdm-key "$C" --cert "$C" \
+                            --signer-cert "$C" --signer-key "$C" -o "$C" \
+                            --formulation multiple-modified-transitional-1 --device-cert "$C"
 smoke "crossfade"        crossfade --a "$C" --b "$C" -o "$C" --overlap 1.0
 smoke "mid-side-decode"  mid-side-decode -i "$C" -o "$C" --mid 0 --side 1
 smoke "pipeline input-range" pipeline -i "$C" -t x -o "$C" --input-range legal --split-chapters
@@ -186,6 +202,22 @@ refuse() {
 }
 refuse "create --hdr-dci needs PQ path" "needs the source path to PQ" \
        create --title x --video "$C" --output "$C" --hdr-dci
+
+# A colour space with no transform inside the encode must be refused, not
+# approximated, and it must name the conversion pass that does have one.
+refuse "create --source-colourspace p3" "colour --source" \
+       create --title x --video "$C" --output "$C" --source-colourspace p3
+# --still-length only means something for a single-image --video
+refuse "create --still-length without a still" "carries its own length" \
+       create --title x --video "$C" --output "$C" --still-length 5s
+# a device-listing formulation has no device list to name on a batch
+refuse "kdm-batch --formulation dci-specific" "spans cinemas" \
+       kdm-batch --cpl-id "$UUID" --content-title x --cert "$C" \
+       --signer-cert "$C" --signer-key "$C" -o "$C" --formulation dci-specific
+# an unknown formulation is a clap value error, not a runtime one
+reject "kdm --formulation nonsense" \
+       kdm --cpl-id "$UUID" --content-title x --cert "$C" \
+       --signer-cert "$C" --signer-key "$C" -o "$C" --formulation nonsense
 
 echo ""
 echo "=== Summary ==="

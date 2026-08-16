@@ -256,6 +256,7 @@ document.getElementById("import-video")?.addEventListener("click", async () => {
     directory: false, multiple: false,
     filters: [
       { name: 'Video', extensions: ['mp4','mkv','mov','avi','mxf','webm'] },
+      { name: 'Still image', extensions: ['png','jpg','jpeg','tif','tiff','bmp','dpx','exr'] },
       { name: 'All', extensions: ['*'] }
     ]
   });
@@ -818,6 +819,11 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       padHead: document.getElementById("prop-pad-head")?.value || null,
       padTail: document.getElementById("prop-pad-tail")?.value || null,
       padColor: document.getElementById("prop-pad-color")?.value || null,
+      audioDelayMs: parseInt(document.getElementById("prop-audio-delay")?.value) || 0,
+      trimStart: document.getElementById("prop-trim-start")?.value || null,
+      trimEnd: document.getElementById("prop-trim-end")?.value || null,
+      stillLength: document.getElementById("prop-still-length")?.value || null,
+      sourceColourspace: document.getElementById("prop-source-colourspace")?.value || "rec709",
       upmix: document.getElementById("prop-upmix")?.value || "none",
       reelLengthMinutes: parseInt(document.getElementById("prop-reel-length")?.value) || 0,
       splitAt: document.getElementById("prop-split-at")?.value || null,
@@ -972,6 +978,10 @@ document.getElementById("run-kdm")?.addEventListener("click", async () => {
   const to = document.getElementById("kdm-to").value;
   const template = document.getElementById("kdm-template")?.value.trim();
   const format = document.getElementById("kdm-format")?.value || "smpte";
+  const formulation = document.getElementById("kdm-formulation")?.value || "";
+  const noForensicPicture = document.getElementById("kdm-no-forensic-picture")?.checked || false;
+  const audioMarking = document.getElementById("kdm-audio-marking")?.value || "on";
+  const audioMarkingChannel = document.getElementById("kdm-audio-marking-channel")?.value;
   const resultsBox = document.getElementById("kdm-results");
   resultsBox.classList.add("visible");
   resultsBox.textContent = "Generating KDM...";
@@ -981,6 +991,13 @@ document.getElementById("run-kdm")?.addEventListener("click", async () => {
   if (template) args.push("--template", template);
   if (from) args.push("-f", from);
   if (to) args.push("-t", to);
+  if (formulation) args.push("--formulation", formulation);
+  if (noForensicPicture) args.push("--disable-forensic-marking-picture");
+  // bare disables every channel, a value disables the channels above it
+  if (audioMarking === "off") args.push("--disable-forensic-marking-audio");
+  if (audioMarking === "above" && audioMarkingChannel) {
+    args.push("--disable-forensic-marking-audio", audioMarkingChannel);
+  }
   const cmd = Command.sidecar("dcpwizard", args);
   const result = await cmd.execute();
   resultsBox.textContent = result.code === 0

@@ -57,6 +57,46 @@ pub fn video_compression_ratio(
     }
 }
 
+/// Parse a `--source-colourspace` value into postkit's [`ColourSpace`].
+///
+/// [`ColourSpace`]: postkit::colour::ColourSpace
+pub fn parse_source_colourspace(spec: &str) -> Result<postkit::colour::ColourSpace, String> {
+    use postkit::colour::ColourSpace;
+    match spec.trim().to_lowercase().as_str() {
+        "rec709" | "bt709" => Ok(ColourSpace::Rec709),
+        "p3" => Ok(ColourSpace::P3),
+        "xyz" => Ok(ColourSpace::Xyz),
+        "rec2020" | "bt2020" => Ok(ColourSpace::Rec2020),
+        "aces" => Ok(ColourSpace::Aces),
+        "acescg" => Ok(ColourSpace::AcesCg),
+        "logc" => Ok(ColourSpace::LogC),
+        other => Err(format!(
+            "unknown source colour space '{other}' (use rec709, p3, xyz, rec2020, aces, acescg or logc)"
+        )),
+    }
+}
+
+/// Whether the compressor has to run its Rec.709 RGB to DCI X'Y'Z' transform for
+/// a source carrying `space`.
+///
+/// Only two spaces reach X'Y'Z' from inside the encode: Rec.709, which the
+/// compressor converts itself, and X'Y'Z', which is already there. Every other
+/// space needs a real transform first, which `dcpwizard colour --target xyz`
+/// (P3, Rec.2020) or a 3D LUT (the log and ACES spaces) does as its own pass, so
+/// asking for one here is refused rather than approximated.
+pub fn applies_xyz_transform(space: postkit::colour::ColourSpace) -> Result<bool, String> {
+    use postkit::colour::ColourSpace;
+    match space {
+        ColourSpace::Rec709 => Ok(true),
+        ColourSpace::Xyz => Ok(false),
+        other => Err(format!(
+            "--source-colourspace {other:?} has no transform inside the encode: convert the source \
+             to X'Y'Z' first (`dcpwizard colour --source <space> --target xyz`, or a 3D LUT via \
+             --hdr-to-dci-lut) and then pass --source-colourspace xyz"
+        )),
+    }
+}
+
 /// Refuse a video encode whose source raster is not the raster the encoder will
 /// read. The pipeline decodes with ffmpeg and slices its raw output into
 /// width*height frames with no scaling filter, so any other source size is read
@@ -243,5 +283,59 @@ mod tests {
             video_compression_ratio(2048, 1080, 24, None, true),
             DEFAULT_COMPRESSION_RATIO * 2.0
         );
+    }
+
+    // the default must not move a single output byte: rec709 is what every
+    // encode did before --source-colourspace existed, and it is the compressor's
+    // own X'Y'Z' transform that does it
+    #[test]
+    fn rec709_is_the_default_and_keeps_the_encoder_transform() {
+        use postkit::colour::ColourSpace;
+        assert_eq!(
+            parse_source_colourspace("rec709").unwrap(),
+            ColourSpace::Rec709
+        );
+        assert!(
+            applies_xyz_transform(ColourSpace::Rec709).unwrap(),
+            "rec709 must leave the compressor doing the conversion, as it always did"
+        );
+        assert!(
+            !applies_xyz_transform(ColourSpace::Xyz).unwrap(),
+            "an X'Y'Z' source must be compressed untransformed"
+        );
+    }
+
+    #[test]
+    fn a_space_with_no_transform_here_is_refused_rather_than_approximated() {
+        use postkit::colour::ColourSpace;
+        for space in [
+            ColourSpace::P3,
+            ColourSpace::Rec2020,
+            ColourSpace::Aces,
+            ColourSpace::AcesCg,
+            ColourSpace::LogC,
+        ] {
+            let err = applies_xyz_transform(space).unwrap_err();
+            assert!(
+                err.contains("colour --source"),
+                "{space:?} must name the conversion pass: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_postkit_space_has_a_spelling_and_a_typo_does_not() {
+        use postkit::colour::ColourSpace;
+        for (spelling, space) in [
+            ("p3", ColourSpace::P3),
+            ("xyz", ColourSpace::Xyz),
+            ("rec2020", ColourSpace::Rec2020),
+            ("aces", ColourSpace::Aces),
+            ("acescg", ColourSpace::AcesCg),
+            ("logc", ColourSpace::LogC),
+        ] {
+            assert_eq!(parse_source_colourspace(spelling).unwrap(), space);
+        }
+        assert!(parse_source_colourspace("rec601").is_err());
     }
 }

@@ -214,6 +214,36 @@
                     <label for="prop-bandwidth">Bandwidth (Mbps)</label>
                     <input type="number" id="prop-bandwidth" value="230" min="50" max="500">
                   </div>
+                  <div class="prop-field">
+                    <label for="prop-source-colourspace">Source colour space</label>
+                    <select id="prop-source-colourspace">
+                      <option value="rec709">Rec. 709 (encoder converts to X'Y'Z')</option>
+                      <option value="xyz">X'Y'Z' (already converted)</option>
+                      <option value="p3">DCI-P3</option>
+                      <option value="rec2020">Rec. 2020</option>
+                      <option value="aces">ACES</option>
+                      <option value="acescg">ACEScg</option>
+                      <option value="logc">Alexa LogC</option>
+                    </select>
+                  </div>
+                  <p class="field-hint">Only Rec. 709 and X'Y'Z' reach X'Y'Z' from inside the encode. Convert any other space first with the Colour tool, then pick X'Y'Z'.</p>
+                </fieldset>
+
+                <fieldset>
+                  <legend>Trim &amp; Stills</legend>
+                  <div class="prop-field">
+                    <label for="prop-trim-start">Trim off the head</label>
+                    <input id="prop-trim-start" type="text" placeholder="48f or 2s">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-trim-end">Trim off the tail</label>
+                    <input id="prop-trim-end" type="text" placeholder="48f or 2s">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-still-length">Still length (single-image video)</label>
+                    <input id="prop-still-length" type="text" placeholder="48f or 2s">
+                  </div>
+                  <p class="field-hint">Trim runs before padding. A single-image video needs a still length and cannot be trimmed.</p>
                 </fieldset>
 
                 <fieldset>
@@ -339,6 +369,10 @@
                       <option value="dcp">DCP (L, R, C, LFE, Ls, Rs)</option>
                       <option value="lrc-ls-rs-lfe">L, R, C, Ls, Rs, LFE</option>
                     </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-audio-delay">Audio delay (ms, negative is earlier)</label>
+                    <input id="prop-audio-delay" type="number" step="1" placeholder="0">
                   </div>
                   <div class="prop-field">
                     <label for="prop-loudness">Loudness target</label>
@@ -532,6 +566,31 @@
                   <option value="smpte" selected>SMPTE</option>
                   <option value="interop">Interop (legacy)</option>
                 </select>
+              </div>
+              <div class="prop-field">
+                <label>Formulation</label>
+                <select id="kdm-formulation">
+                  <option value="" selected>Derive from the device list</option>
+                  <option value="modified-transitional-1">modified-transitional-1</option>
+                  <option value="multiple-modified-transitional-1">multiple-modified-transitional-1</option>
+                  <option value="dci-any">dci-any</option>
+                  <option value="dci-specific">dci-specific</option>
+                </select>
+              </div>
+              <div class="prop-field">
+                <label><input type="checkbox" id="kdm-no-forensic-picture"> Disable picture forensic marking</label>
+              </div>
+              <div class="prop-field">
+                <label for="kdm-audio-marking">Audio forensic marking</label>
+                <select id="kdm-audio-marking">
+                  <option value="on" selected>On for every channel</option>
+                  <option value="off">Off for every channel</option>
+                  <option value="above">Off above a channel</option>
+                </select>
+              </div>
+              <div class="prop-field">
+                <label for="kdm-audio-marking-channel">Marking stops above this channel</label>
+                <input id="kdm-audio-marking-channel" type="number" min="0" placeholder="12">
               </div>
               <div class="prop-field">
                 <label>Output</label>
