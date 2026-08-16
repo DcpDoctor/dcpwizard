@@ -113,7 +113,7 @@ refreshButtonTooltips();
 
 // === Preferences (localStorage) ===
 const PREFS_KEY = "dcpwizard-preferences";
-const PREFS_VERSION = 4;
+const PREFS_VERSION = 5;
 
 // clear of DCI's 250 on purpose: at 250 exactly, rate allocation overshoot is a
 // peak bitrate failure, and validators warn from 230 up
@@ -124,7 +124,7 @@ const PREF_DEFAULTS = {
   standard: "SMPTE", resolution: "2K", framerate: DEFAULT_FRAMERATE,
   encrypt: false, stereo3d: false, validate: true,
   creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: -1,
-  signingCert: "", signingKey: "", outputDir: "", naming: "",
+  signingCert: "", signingKey: "", outputDir: "", isdcfNaming: false,
   channels: "5.1",
 };
 
@@ -135,6 +135,7 @@ function getPrefs() {
       const migrated = { ...PREF_DEFAULTS, ...stored, _version: PREFS_VERSION };
       // a saved 250 encodes at the DCI ceiling and fails validation
       migrated.bandwidth = Math.min(migrated.bandwidth, DEFAULT_BANDWIDTH_MBPS);
+      delete migrated.naming;
       savePrefs(migrated);
       return migrated;
     }
@@ -160,12 +161,14 @@ function loadSettings() {
     "set-signing-cert": prefs.signingCert,
     "set-signing-key": prefs.signingKey,
     "set-output-dir": prefs.outputDir,
-    "set-naming": prefs.naming,
   };
   for (const [id, val] of Object.entries(map)) {
     const el = document.getElementById(id);
     if (el) el.value = val;
   }
+  const naming = document.getElementById("set-isdcf-naming");
+  if (naming) naming.checked = prefs.isdcfNaming;
+  refreshIsdcfPreview();
 }
 
 document.getElementById("settings-form")?.addEventListener("submit", (e) => {
@@ -180,9 +183,10 @@ document.getElementById("settings-form")?.addEventListener("submit", (e) => {
     signingCert: document.getElementById("set-signing-cert")?.value,
     signingKey: document.getElementById("set-signing-key")?.value,
     outputDir: document.getElementById("set-output-dir")?.value,
-    naming: document.getElementById("set-naming")?.value,
+    isdcfNaming: document.getElementById("set-isdcf-naming")?.checked || false,
   };
   savePrefs(prefs);
+  refreshIsdcfPreview();
   setStatus("Settings saved");
 });
 
@@ -427,6 +431,7 @@ function renderReels() {
   });
 
   refreshAudioMapMatrix();
+  refreshIsdcfPreview();
 }
 
 // === Source picture ===
@@ -791,6 +796,123 @@ document.getElementById("prop-browse-ccap")?.addEventListener("click", async () 
   if (path) document.getElementById("prop-ccap").value = path;
 });
 
+// === ISDCF naming and metadata ===
+
+let ratingNextId = 1;
+const ratings = [];
+
+function renderRatings() {
+  const list = document.getElementById("prop-rating-list");
+  if (!list) return;
+  list.innerHTML = ratings.map(rating => `
+    <div class="field-row rating-row" data-id="${rating.id}">
+      <div class="prop-field">
+        <label>Agency (URI)</label>
+        <input type="text" class="rating-agency" value="${rating.agency}" placeholder="http://www.mpaa.org/2003-ratings">
+      </div>
+      <div class="prop-field">
+        <label>Label</label>
+        <input type="text" class="rating-label" value="${rating.label}" placeholder="PG-13">
+      </div>
+      <button class="btn-sm rating-remove" type="button" title="Remove rating">✕</button>
+    </div>
+  `).join("");
+  refreshIsdcfPreview();
+}
+
+document.getElementById("prop-add-rating")?.addEventListener("click", () => {
+  ratings.push({ id: ratingNextId++, agency: "", label: "" });
+  renderRatings();
+});
+
+// Rows are re-rendered, so edits and removal go through delegation. An edit must
+// not re-render or the field being typed into loses focus.
+document.getElementById("prop-rating-list")?.addEventListener("input", (e) => {
+  const row = e.target.closest(".rating-row");
+  const rating = ratings.find(r => r.id === parseInt(row?.dataset.id));
+  if (!rating) return;
+  if (e.target.classList.contains("rating-agency")) rating.agency = e.target.value;
+  if (e.target.classList.contains("rating-label")) rating.label = e.target.value;
+  refreshIsdcfPreview();
+});
+
+document.getElementById("prop-rating-list")?.addEventListener("click", (e) => {
+  if (!e.target.classList.contains("rating-remove")) return;
+  const row = e.target.closest(".rating-row");
+  const index = ratings.findIndex(r => r.id === parseInt(row?.dataset.id));
+  if (index < 0) return;
+  ratings.splice(index, 1);
+  renderRatings();
+});
+
+function namingMetadata() {
+  return {
+    audioLanguage: document.getElementById("prop-audio-language")?.value || null,
+    studio: document.getElementById("prop-studio")?.value || null,
+    territoryType: document.getElementById("prop-territory-type")?.value || "specific",
+    contentVersions: document.getElementById("prop-content-versions")?.value || null,
+    ratings: ratings
+      .filter(rating => rating.agency.trim() && rating.label.trim())
+      .map(rating => ({ agency: rating.agency.trim(), label: rating.label.trim() })),
+    tempVersion: document.getElementById("prop-temp-version")?.checked || false,
+    preRelease: document.getElementById("prop-pre-release")?.checked || false,
+    redBand: document.getElementById("prop-red-band")?.checked || false,
+    twoDVersionOfThreeD: document.getElementById("prop-two-d-version-of-three-d")?.checked || false,
+    versionFile: document.getElementById("prop-version-file")?.checked || false,
+    isdcfNaming: getPrefs().isdcfNaming || false,
+  };
+}
+
+// Everything the built name reads, so the preview and the build agree.
+function isdcfNameRequest() {
+  const reel = project.reels[0];
+  return {
+    title: document.getElementById("prop-title")?.value?.trim() || "",
+    standard: document.getElementById("prop-standard")?.value || "smpte",
+    resolution: document.getElementById("prop-resolution")?.value || "2k-full",
+    framerate: document.getElementById("prop-framerate")?.value || String(DEFAULT_FRAMERATE),
+    contentKind: document.getElementById("prop-content-kind")?.value || "feature",
+    audioPath: reel?.sound?.path || null,
+    subtitle: reel?.subtitle?.path || null,
+    subtitleLanguage: document.getElementById("prop-subtitle-language")?.value || "en",
+    burnSubtitle: document.getElementById("prop-burn-subtitle")?.value || null,
+    ccap: document.getElementById("prop-ccap")?.value || null,
+    ccapLanguage: document.getElementById("prop-ccap-language")?.value || "en",
+    rightEye: document.getElementById("prop-right-eye")?.value || null,
+    atmos: document.getElementById("prop-atmos")?.value || null,
+    facility: getPrefs().facility || null,
+    naming: namingMetadata(),
+  };
+}
+
+async function refreshIsdcfPreview() {
+  const preview = document.getElementById("prop-isdcf-preview");
+  if (!preview) return;
+  const request = isdcfNameRequest();
+  if (!request.naming.isdcfNaming || !request.title) {
+    preview.hidden = true;
+    return;
+  }
+  preview.hidden = false;
+  try {
+    preview.textContent = "ISDCF name: " + await invoke("isdcf_name_preview", { request });
+  } catch (e) {
+    preview.textContent = String(e);
+  }
+}
+
+const ISDCF_PREVIEW_CONTROLS = [
+  "prop-title", "prop-content-kind", "prop-standard", "prop-resolution", "prop-framerate",
+  "prop-subtitle-language", "prop-ccap-language", "prop-audio-language", "prop-studio",
+  "prop-territory-type", "prop-content-versions", "prop-temp-version", "prop-pre-release",
+  "prop-red-band", "prop-two-d-version-of-three-d", "prop-version-file",
+];
+for (const id of ISDCF_PREVIEW_CONTROLS) {
+  document.getElementById(id)?.addEventListener("input", refreshIsdcfPreview);
+}
+
+renderRatings();
+
 document.getElementById("btn-build")?.addEventListener("click", async () => {
   // a second build would queue behind the first and encode all over again
   if (buildInFlight) return;
@@ -948,6 +1070,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       hdrToDciLut: document.getElementById("prop-hdr-lut")?.value || null,
       hdrAlreadyPq: document.getElementById("prop-hdr-already-pq")?.checked || false,
       allowGenericHdrTonemap: document.getElementById("prop-hdr-generic-tonemap")?.checked || false,
+      facility: getPrefs().facility || null,
+      naming: namingMetadata(),
     });
     setStatus("Building DCP...");
   } catch (e) {

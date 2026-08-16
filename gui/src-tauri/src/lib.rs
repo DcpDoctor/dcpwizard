@@ -112,6 +112,7 @@ pub fn run() {
             pipeline::list_profiles,
             pipeline::detect_source_crop,
             pipeline::probe_audio_map,
+            pipeline::isdcf_name_preview,
             pipeline::create_vf,
             timeline::list_cpls,
             timeline::get_timeline,

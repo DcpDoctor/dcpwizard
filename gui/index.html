@@ -153,6 +153,7 @@
                   <div class="prop-field">
                     <label for="prop-title">Title</label>
                     <input id="prop-title" type="text" placeholder="My Feature Film">
+                    <p class="field-hint" id="prop-isdcf-preview" hidden></p>
                   </div>
                   <div class="prop-field">
                     <label for="prop-content-kind">Content Kind</label>
@@ -179,6 +180,50 @@
                     </select>
                     <p class="field-hint" id="prop-profile-hint"></p>
                   </div>
+                </fieldset>
+
+                <fieldset>
+                  <legend>Naming and metadata</legend>
+                  <div class="prop-field">
+                    <label for="prop-audio-language">Audio language (RFC 5646)</label>
+                    <input id="prop-audio-language" type="text" placeholder="en">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-studio">Studio</label>
+                    <input id="prop-studio" type="text" placeholder="Four-letter studio code">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-territory-type">Territory type</label>
+                    <select id="prop-territory-type">
+                      <option value="specific">Specific territory</option>
+                      <option value="international-texted">International texted</option>
+                      <option value="international-textless">International textless</option>
+                    </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-content-versions">Content versions (comma separated)</label>
+                    <input id="prop-content-versions" type="text" placeholder="Final Cut">
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-temp-version"> Temp version</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-pre-release"> Pre-release</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-red-band"> Red band</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-two-d-version-of-three-d"> 2D version of 3D</label>
+                  </div>
+                  <div class="prop-field">
+                    <label><input type="checkbox" id="prop-version-file"> Version file (VF)</label>
+                  </div>
+                  <div class="panel-header">
+                    <h2>Ratings</h2>
+                    <button id="prop-add-rating" class="btn-sm" type="button">+ Rating</button>
+                  </div>
+                  <div id="prop-rating-list" class="rating-list"></div>
                 </fieldset>
 
                 <fieldset>
@@ -1092,8 +1137,7 @@
                   <input type="text" id="set-output-dir" placeholder="/path/to/output">
                 </div>
                 <div class="prop-field">
-                  <label for="set-naming">Naming Template (ISDCF)</label>
-                  <input type="text" id="set-naming" placeholder="%title_%std_%res_%fps_%audio_%date">
+                  <label><input type="checkbox" id="set-isdcf-naming"> Name DCPs by the ISDCF convention</label>
                 </div>
               </fieldset>
               <div class="form-actions">

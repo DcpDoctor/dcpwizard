@@ -76,3 +76,13 @@
   flex: 0 0 auto;
   margin-bottom: 4px;
 }
+
+/* Rating rows: agency URI plus its label */
+.rating-row {
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+.rating-row .rating-remove {
+  flex: 0 0 auto;
+  margin-bottom: 4px;
+}

@@ -55,6 +55,217 @@ pub struct JobInfo {
     pub percent: f64,
 }
 
+// ─── ISDCF naming ──────────────────────────────────────────────────────────
+
+/// One certification rating as the panel collects it.
+#[derive(Clone, Default, Deserialize)]
+pub struct RatingInput {
+    pub agency: String,
+    pub label: String,
+}
+
+/// The naming fieldset plus the ISDCF naming setting. Every field is package
+/// metadata in its own right, so it lands in the CPL whether or not the built
+/// name replaces the title.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NamingMetadata {
+    pub audio_language: Option<String>,
+    pub studio: Option<String>,
+    pub territory_type: Option<String>,
+    /// Comma-separated, the way the panel's single field collects them.
+    pub content_versions: Option<String>,
+    pub ratings: Vec<RatingInput>,
+    pub temp_version: bool,
+    pub pre_release: bool,
+    pub red_band: bool,
+    pub two_d_version_of_three_d: bool,
+    pub version_file: bool,
+    pub isdcf_naming: bool,
+}
+
+/// Everything the ISDCF content title is built from, so the panel's preview and
+/// the submitted job read the same facts.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct IsdcfNameRequest {
+    pub title: String,
+    pub standard: Option<String>,
+    pub resolution: Option<String>,
+    pub framerate: Option<String>,
+    pub content_kind: Option<String>,
+    pub audio_path: Option<String>,
+    pub subtitle: Option<String>,
+    pub subtitle_language: Option<String>,
+    pub burn_subtitle: Option<String>,
+    pub ccap: Option<String>,
+    pub ccap_language: Option<String>,
+    pub right_eye: Option<String>,
+    pub atmos: Option<String>,
+    pub facility: Option<String>,
+    pub naming: NamingMetadata,
+}
+
+const CONTENT_VERSION_SEPARATOR: char = ',';
+
+fn standard_of(standard: &str) -> dcpwizard_core::Standard {
+    match standard {
+        "interop" => dcpwizard_core::Standard::Interop,
+        _ => dcpwizard_core::Standard::Smpte,
+    }
+}
+
+fn resolution_of(resolution: &str) -> dcpwizard_core::Resolution {
+    if resolution.contains("4k") {
+        dcpwizard_core::Resolution::FourK
+    } else {
+        dcpwizard_core::Resolution::TwoK
+    }
+}
+
+fn content_type_of(content_kind: &str) -> dcpwizard_core::ContentType {
+    match content_kind {
+        "trailer" => dcpwizard_core::ContentType::Trailer,
+        "test" => dcpwizard_core::ContentType::Test,
+        "short" => dcpwizard_core::ContentType::Short,
+        "advertisement" => dcpwizard_core::ContentType::Advertisement,
+        "episode" => dcpwizard_core::ContentType::Episode,
+        _ => dcpwizard_core::ContentType::Feature,
+    }
+}
+
+fn content_versions_of(spec: Option<&str>) -> Vec<String> {
+    spec.unwrap_or_default()
+        .split(CONTENT_VERSION_SEPARATOR)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn ratings_of(ratings: &[RatingInput]) -> Vec<dcpwizard_core::isdcf_name::Rating> {
+    ratings
+        .iter()
+        .filter(|rating| !rating.agency.trim().is_empty() && !rating.label.trim().is_empty())
+        .map(|rating| dcpwizard_core::isdcf_name::Rating {
+            agency: rating.agency.trim().to_string(),
+            label: rating.label.trim().to_string(),
+        })
+        .collect()
+}
+
+fn territory_type_of(
+    territory_type: Option<&str>,
+) -> Result<dcpwizard_core::isdcf_name::TerritoryType, String> {
+    match territory_type.unwrap_or("specific") {
+        "specific" => Ok(dcpwizard_core::isdcf_name::TerritoryType::Specific),
+        "international-texted" => {
+            Ok(dcpwizard_core::isdcf_name::TerritoryType::InternationalTexted)
+        }
+        "international-textless" => {
+            Ok(dcpwizard_core::isdcf_name::TerritoryType::InternationalTextless)
+        }
+        other => Err(format!("Unknown territory type '{other}'")),
+    }
+}
+
+/// The ISDCF content title for what the panel currently holds.
+fn isdcf_name_for(request: &IsdcfNameRequest) -> Result<String, String> {
+    let resolution = request.resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION);
+    let (container_width, container_height) = container_of(resolution);
+    let (frame_rate_num, frame_rate_den) =
+        frame_rate_of(request.framerate.as_deref().unwrap_or(DEFAULT_FRAME_RATE.0));
+    let some_path = |value: &Option<String>| {
+        value
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    };
+
+    let config = dcpwizard_core::dcp::DcpConfig {
+        title: request.title.clone(),
+        standard: standard_of(request.standard.as_deref().unwrap_or(DEFAULT_STANDARD)),
+        resolution: resolution_of(resolution),
+        content_type: content_type_of(
+            request
+                .content_kind
+                .as_deref()
+                .unwrap_or(DEFAULT_CONTENT_KIND),
+        ),
+        frame_rate_num,
+        frame_rate_den,
+        container_width,
+        container_height,
+        stereo_3d: some_path(&request.right_eye).is_some(),
+        atmos_path: some_path(&request.atmos),
+        subtitle_path: some_path(&request.subtitle),
+        subtitle_language: request
+            .subtitle_language
+            .clone()
+            .unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
+        ccap_path: some_path(&request.ccap),
+        ccap_language: request
+            .ccap_language
+            .clone()
+            .unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
+        facility: request.facility.clone().filter(|code| !code.is_empty()),
+        audio_language: request
+            .naming
+            .audio_language
+            .clone()
+            .filter(|tag| !tag.is_empty()),
+        ratings: ratings_of(&request.naming.ratings),
+        content_versions: content_versions_of(request.naming.content_versions.as_deref()),
+        ..Default::default()
+    };
+
+    let options = dcpwizard_core::isdcf_title::IsdcfNamingOptions {
+        studio: request
+            .naming
+            .studio
+            .clone()
+            .filter(|code| !code.is_empty()),
+        temp_version: request.naming.temp_version,
+        pre_release: request.naming.pre_release,
+        red_band: request.naming.red_band,
+        two_d_version_of_three_d: request.naming.two_d_version_of_three_d,
+        territory_type: territory_type_of(request.naming.territory_type.as_deref())?,
+        date: None,
+        version_file: request.naming.version_file,
+    };
+
+    // the panel has no accessibility channel fields, so the summary is the
+    // selected WAV's channel count and nothing else
+    let channel_count = match some_path(&request.audio_path) {
+        Some(path) => dcpwizard_core::audio_map::probe_channel_count(&path)?,
+        None => 0,
+    };
+    let sound = dcpwizard_core::isdcf_title::soundtrack_summary(channel_count, None, None);
+
+    Ok(dcpwizard_core::isdcf_title::isdcf_title(
+        &config,
+        &options,
+        &sound,
+        some_path(&request.burn_subtitle).is_some(),
+    ))
+}
+
+/// The output folder under its new name, when the panel derived it from the
+/// title. A folder the user chose themselves is left alone.
+fn renamed_output_dir(output_dir: &str, title: &str, name: &str) -> PathBuf {
+    let output_path = PathBuf::from(output_dir);
+    match output_path.file_name().and_then(|folder| folder.to_str()) {
+        Some(folder) if folder == title => output_path.with_file_name(name),
+        _ => output_path,
+    }
+}
+
+/// The ISDCF content title the panel would build, for the live preview.
+#[tauri::command]
+pub async fn isdcf_name_preview(request: IsdcfNameRequest) -> Result<String, String> {
+    isdcf_name_for(&request)
+}
+
 // ─── Job types ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -129,6 +340,10 @@ struct JobConfig {
     source_colour: postkit::encode::SourceColour,
     // tone map an HDR source down to SDR with ffmpeg's generic transform
     allow_generic_hdr_tonemap: bool,
+    // mastering facility for the composition metadata and the ISDCF name
+    facility: Option<String>,
+    // naming and metadata from the panel's fieldset
+    naming: NamingMetadata,
 }
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
@@ -240,6 +455,8 @@ pub async fn submit_job(
     hdr_to_dci_lut: Option<String>,
     hdr_already_pq: Option<bool>,
     allow_generic_hdr_tonemap: Option<bool>,
+    facility: Option<String>,
+    naming: Option<NamingMetadata>,
 ) -> Result<u64, String> {
     let queue = app.state::<JobQueue>();
     let id = queue.next_id.fetch_add(1, Ordering::Relaxed);
@@ -249,21 +466,51 @@ pub async fn submit_job(
         return Err("Key Output File is required when encrypting".into());
     }
 
+    let framerate = framerate.unwrap_or_else(|| DEFAULT_FRAME_RATE.0.into());
+    let naming = naming.unwrap_or_default();
+    let facility = facility.filter(|code| !code.is_empty());
+
+    // the ISDCF name replaces the title, and the panel derives the output folder
+    // from the title, so the folder follows the name it was derived from
+    let (title, output_path) = if naming.isdcf_naming {
+        let name = isdcf_name_for(&IsdcfNameRequest {
+            title: title.clone(),
+            standard: standard.clone(),
+            resolution: resolution.clone(),
+            framerate: Some(framerate.clone()),
+            content_kind: content_kind.clone(),
+            audio_path: audio_path.clone(),
+            subtitle: subtitle.clone(),
+            subtitle_language: subtitle_language.clone(),
+            burn_subtitle: burn_subtitle.clone(),
+            ccap: ccap.clone(),
+            ccap_language: ccap_language.clone(),
+            right_eye: right_eye.clone(),
+            atmos: atmos.clone(),
+            facility: facility.clone(),
+            naming: naming.clone(),
+        })?;
+        let output_path = renamed_output_dir(&output_dir, &title, &name);
+        (name, output_path)
+    } else {
+        (title, PathBuf::from(&output_dir))
+    };
+
     // packages are folders named by title, so a reused title lands in the old
     // package. refuse now, not after the encode.
-    let output_path = PathBuf::from(&output_dir);
     if holds_dcp(&output_path) {
         return Err(format!(
-            "Output folder already holds a DCP: {output_dir}. Use a new title or output folder, or delete the old package first."
+            "Output folder already holds a DCP: {}. Use a new title or output folder, or delete the old package first.",
+            output_path.display()
         ));
     }
     if queue.is_building_into(&output_path) {
         return Err(format!(
-            "A build is already running into {output_dir}. Wait for it to finish or cancel it."
+            "A build is already running into {}. Wait for it to finish or cancel it.",
+            output_path.display()
         ));
     }
 
-    let framerate = framerate.unwrap_or_else(|| DEFAULT_FRAME_RATE.0.into());
     let audio_input_order = parse_audio_input_order(audio_input_order.as_deref())?;
 
     let sign_language_video = sign_language_video.filter(|s| !s.is_empty());
@@ -484,7 +731,7 @@ pub async fn submit_job(
         id,
         video_path: PathBuf::from(&video_path),
         title: title.clone(),
-        output_dir: PathBuf::from(&output_dir),
+        output_dir: output_path,
         audio_path,
         validate: validate.unwrap_or(false),
         standard: standard.unwrap_or_else(|| DEFAULT_STANDARD.into()),
@@ -528,6 +775,8 @@ pub async fn submit_job(
         hdr_dci,
         source_colour,
         allow_generic_hdr_tonemap,
+        facility,
+        naming,
     };
 
     {
@@ -1420,26 +1669,10 @@ fn build_dcp_config(
     sign_language_main_channels: Option<u32>,
     reel_split_frames: Vec<u64>,
 ) -> dcpwizard_core::dcp::DcpConfig {
-    let standard = match job.standard.as_str() {
-        "interop" => dcpwizard_core::Standard::Interop,
-        _ => dcpwizard_core::Standard::Smpte,
-    };
-
-    let resolution = if job.resolution.contains("4k") {
-        dcpwizard_core::Resolution::FourK
-    } else {
-        dcpwizard_core::Resolution::TwoK
-    };
+    let standard = standard_of(&job.standard);
+    let resolution = resolution_of(&job.resolution);
     let (container_width, container_height) = container_of(&job.resolution);
-
-    let content_type = match job.content_kind.as_str() {
-        "trailer" => dcpwizard_core::ContentType::Trailer,
-        "test" => dcpwizard_core::ContentType::Test,
-        "short" => dcpwizard_core::ContentType::Short,
-        "advertisement" => dcpwizard_core::ContentType::Advertisement,
-        "episode" => dcpwizard_core::ContentType::Episode,
-        _ => dcpwizard_core::ContentType::Feature,
-    };
+    let content_type = content_type_of(&job.content_kind);
 
     let (frame_rate_num, frame_rate_den) = frame_rate_of(&job.framerate);
 
@@ -1486,6 +1719,14 @@ fn build_dcp_config(
         sign_language_lang: job.sign_language_tag.clone(),
         sign_language_main_channels,
         hdr_dci: job.hdr_dci,
+        facility: job.facility.clone(),
+        audio_language: job
+            .naming
+            .audio_language
+            .clone()
+            .filter(|tag| !tag.is_empty()),
+        ratings: ratings_of(&job.naming.ratings),
+        content_versions: content_versions_of(job.naming.content_versions.as_deref()),
         ..Default::default()
     }
 }
@@ -1842,7 +2083,68 @@ mod tests {
             hdr_dci: false,
             source_colour: postkit::encode::SourceColour::DisplayRgb,
             allow_generic_hdr_tonemap: false,
+            facility: None,
+            naming: NamingMetadata::default(),
         }
+    }
+
+    #[test]
+    fn the_isdcf_name_takes_over_a_folder_derived_from_the_title() {
+        assert_eq!(
+            renamed_output_dir(
+                "/out/My Film",
+                "My Film",
+                "MyFilm_TST-1_F_EN-XX_20_2K_SMPTE_OV"
+            ),
+            PathBuf::from("/out/MyFilm_TST-1_F_EN-XX_20_2K_SMPTE_OV")
+        );
+    }
+
+    #[test]
+    fn a_folder_the_user_chose_keeps_its_name() {
+        assert_eq!(
+            renamed_output_dir(
+                "/out/deliveries",
+                "My Film",
+                "MyFilm_TST-1_F_EN-XX_20_2K_SMPTE_OV"
+            ),
+            PathBuf::from("/out/deliveries")
+        );
+    }
+
+    #[test]
+    fn the_panel_builds_the_name_from_what_it_holds() {
+        let request = IsdcfNameRequest {
+            title: "My Film".into(),
+            standard: Some("smpte".into()),
+            resolution: Some("2k-flat".into()),
+            framerate: Some("24".into()),
+            content_kind: Some("test".into()),
+            facility: Some("PPF".into()),
+            naming: NamingMetadata {
+                audio_language: Some("en".into()),
+                content_versions: Some("Final Cut, ".into()),
+                isdcf_naming: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let name = isdcf_name_for(&request).unwrap();
+        assert!(name.starts_with("MyFilm_TST-1_F_EN-XX_MOS_2K_"), "{name}");
+        assert!(name.ends_with("_PPF_SMPTE_OV"), "{name}");
+    }
+
+    #[test]
+    fn an_unknown_territory_type_is_refused() {
+        let request = IsdcfNameRequest {
+            title: "My Film".into(),
+            naming: NamingMetadata {
+                territory_type: Some("worldwide".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(isdcf_name_for(&request).is_err());
     }
 
     fn hdr_panel() -> HdrPanelOptions {
