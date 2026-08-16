@@ -574,3 +574,81 @@ fn create_refuses_a_subtitle_appearance_with_no_subtitle_track() {
         .stdout(predicate::str::contains("--subtitle-effect"))
         .stdout(predicate::str::contains("--subtitle"));
 }
+
+// ── create --check: the pre-build refusals and hints ─────────────────────────
+
+/// One SRT cue, so a test can place the first subtitle where it wants it.
+fn write_subtitle(path: &std::path::Path, start: &str, end: &str, text: &str) {
+    std::fs::write(path, format!("1\n{start} --> {end}\n{text}\n")).unwrap();
+}
+
+#[test]
+fn check_refuses_a_container_larger_than_the_frames_without_encoding() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+    let out = dir.path().join("out");
+
+    create_with(&dir, &video, &["--check", "--container", "2k-scope"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "container 2048x858 is larger than the 1920x1080",
+        ));
+    assert!(
+        !out.join("j2k").exists(),
+        "the check must refuse before anything is encoded"
+    );
+}
+
+#[test]
+fn check_hints_a_first_subtitle_before_four_seconds() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("flat.mp4");
+    write_test_video(&video, 1998, 1080);
+    let subtitle = dir.path().join("subs.srt");
+    write_subtitle(&subtitle, "00:00:01,000", "00:00:05,000", "hello");
+
+    create_with(
+        &dir,
+        &video,
+        &["--check", "--subtitle", subtitle.to_str().unwrap()],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "The first subtitle in subs.srt starts at 00:00:01.000",
+    ));
+}
+
+#[test]
+fn check_hints_a_frame_rate_not_every_projector_plays() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("flat.mp4");
+    write_test_video(&video, 1998, 1080);
+
+    create_with(&dir, &video, &["--check", "--frame-rate", "25"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("The DCP is 25 fps"))
+        .stdout(predicate::str::contains(
+            "24 fps is the rate to fall back to",
+        ));
+}
+
+#[test]
+fn a_clean_check_passes_with_no_hint_and_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("flat.mp4");
+    write_test_video(&video, 1998, 1080);
+    let out = dir.path().join("out");
+
+    create_with(&dir, &video, &["--check", "--content-type", "SHR"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Pre-build check passed with 0 hint(s)",
+        ))
+        .stdout(predicate::str::contains("hint:").not());
+    assert!(!out.exists(), "a check must write nothing under --output");
+}

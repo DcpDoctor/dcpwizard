@@ -90,6 +90,8 @@ struct CreateNaming {
 
 /// An agency is a URI, so it carries colons and only the first '=' separates it
 /// from the label.
+/// The edit rate a job runs at when neither the flags nor the source name one.
+const DEFAULT_FRAME_RATE: u32 = 24;
 const RATING_SEPARATOR: char = '=';
 const ISDCF_DATE_PARTS: usize = 3;
 
@@ -773,6 +775,11 @@ enum Commands {
         isdcf_naming: Box<CreateIsdcfNaming>,
         #[command(flatten)]
         signer_opts: Box<SignerOpts>,
+
+        /// Run the pre-build check and stop: every refusal and every hint,
+        /// without encoding or writing anything under --output.
+        #[arg(long)]
+        check: bool,
     },
     /// Rebuild ASSETMAP and PKL to cover every asset file present (metadata-only
     /// repackaging; no re-wrap or re-encode). For re-ingesting exported OV/VF
@@ -3224,6 +3231,7 @@ fn run() {
             picture_opts,
             isdcf_naming,
             signer_opts,
+            check,
         } => {
             let CreateAudioQol {
                 loudness_target,
@@ -3614,6 +3622,106 @@ fn run() {
                     }
                 };
 
+            // one description of the job, checked and hinted before anything is
+            // encoded. The frame count costs a decode, so the source is probed
+            // once here and the video branch reuses it.
+            let source_info = (is_video_file || still_input)
+                .then(|| dcpwizard_core::probe::probe_video(&video_path))
+                .flatten();
+            let plan_fps = frame_rate.unwrap_or_else(|| {
+                source_info
+                    .as_ref()
+                    .filter(|_| is_video_file)
+                    .map(|info| {
+                        dcpwizard_core::hfr::source_rate_to_dcp(info.fps_num, info.fps_den).0
+                    })
+                    .unwrap_or(DEFAULT_FRAME_RATE)
+            });
+            let duration_frames = |spec: Option<&str>, flag: &str| -> u64 {
+                match spec {
+                    Some(spec) => match dcpwizard_core::pad::parse_pad_frames(spec, plan_fps) {
+                        Ok(frames) => frames,
+                        Err(e) => {
+                            tracing::error!("{flag}: {e}");
+                            std::process::exit(1);
+                        }
+                    },
+                    None => 0,
+                }
+            };
+            let plan = dcpwizard_core::preflight::CreatePlan {
+                picture: video_path.clone(),
+                picture_kind: match (still_input, is_video_file) {
+                    (true, _) => dcpwizard_core::preflight::PictureKind::Still,
+                    (_, true) => dcpwizard_core::preflight::PictureKind::Video,
+                    _ => dcpwizard_core::preflight::PictureKind::Codestreams,
+                },
+                source: source_info.clone(),
+                still_frames: duration_frames(still_length.as_deref(), "--still-length"),
+                fps: plan_fps,
+                picture_options: picture_options.clone(),
+                geometry: encode_geometry(twok, fourk, (container_width, container_height)),
+                trim_start_frames: duration_frames(trim_start.as_deref(), "--trim-start"),
+                trim_end_frames: duration_frames(trim_end.as_deref(), "--trim-end"),
+                pad_head_frames: duration_frames(pad_head.as_deref(), "--pad-head"),
+                pad_tail_frames: duration_frames(pad_tail.as_deref(), "--pad-tail"),
+                audio: audio.as_deref().map(PathBuf::from),
+                audio_map: audio_map.clone(),
+                upmix: upmix.is_some(),
+                audio_language: naming.audio_language.clone(),
+                subtitle: subtitle.as_deref().map(PathBuf::from),
+                ccap: ccap.as_deref().map(PathBuf::from),
+                burn_subtitle: burn_subtitle.as_deref().map(PathBuf::from),
+                burn_subtitle_font: burn_subtitle_font.as_deref().map(PathBuf::from),
+                burn_style: burn_style.clone(),
+                source_colourspace: source_space,
+                frames_already_xyz: matches!(
+                    xyz_route,
+                    dcpwizard_core::encode::XyzRoute::AlreadyXyz
+                ) || hdr_already_pq
+                    || hdr_to_dci_lut.is_some(),
+                atmos: atmos.as_deref().map(PathBuf::from),
+                markers: markers.clone(),
+                standard: std_val,
+                content_type: content_type
+                    .as_deref()
+                    .and_then(dcpwizard_core::ContentType::from_abbrev)
+                    .unwrap_or_default(),
+                encrypt,
+                hdr_dci,
+                video_bit_rate_mbps: video_bit_rate.unwrap_or(0),
+                right_eye: right_eye.as_deref().map(PathBuf::from),
+                four_k: fourk,
+                reel_length_minutes: reel_length.unwrap_or(0),
+                reel_split_frames: match resolve_reel_splits(
+                    split_at.as_deref(),
+                    split_chapters,
+                    is_video_file.then_some(video_path.as_path()),
+                    plan_fps,
+                ) {
+                    Ok(frames) => frames,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                },
+            };
+            if let Err(e) = dcpwizard_core::preflight::check_before_encode(&plan) {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+            let hints = dcpwizard_core::hints::gather_hints(&plan);
+            for hint in &hints {
+                tracing::warn!("hint: {}", hint.text);
+            }
+            if check {
+                println!(
+                    "Pre-build check passed with {} hint(s); nothing was encoded or written",
+                    hints.len()
+                );
+                return;
+            }
+
             let code = if is_video_file {
                 // Full pipeline: video → J2K encode → MXF wrap → DCP
                 use postkit::grok_encoder::{self, CompressParams, EncodeProgress};
@@ -3711,8 +3819,13 @@ fn run() {
 
                 tracing::info!("Detected video file input — using grok encoder");
 
-                // Probe video for frame rate and resolution
-                let video_info = dcpwizard_core::probe::probe_video(&encode_video_path);
+                // Probe video for frame rate and resolution. The plan already
+                // probed the source, so only a rewritten one is read again.
+                let video_info = if encode_video_path == video_path {
+                    source_info.clone()
+                } else {
+                    dcpwizard_core::probe::probe_video(&encode_video_path)
+                };
                 match dcpwizard_core::probe::video_has_alpha(&encode_video_path) {
                     Ok(true) => {
                         tracing::error!(
