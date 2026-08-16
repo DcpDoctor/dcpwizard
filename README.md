@@ -25,6 +25,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Reel splitting** via `create --reel-length <minutes>` (multi-reel CPL, sample-accurate audio and per-reel subtitle boundaries)
 - **Explicit reel splits** via `create --split-at <tc>[,<tc>...]` (HH:MM:SS or HH:MM:SS:FF) or `create --split-chapters` (source chapter marks via ffprobe)
 - **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): declares the active area a projector masks to. The CPL's stored area and aspect always come from the coded raster the encoder produced, so a container larger than the frames is refused
+- **Automatic source fitting**: with `create --twok`/`--fourk` the source is scaled to the container preserving its aspect and centred on the DCI raster with black around it, so a 1998x1080 flat master or a 1920x1080 HD master encodes at 2048x1080 instead of being refused
+- **Source picture processing** on `create`: `--crop-left/--crop-right/--crop-top/--crop-bottom <px>` (source pixels, before any rotation), `--auto-crop` with `--auto-crop-threshold <0..1>` (black borders measured over the content), `--fill-crop` (crop to the container aspect so the picture fills the frame), `--deinterlace`, `--denoise`, `--rotate 90|180|270` (clockwise) and `--flip horizontal|vertical|both`
 - **Head/tail padding** via `create --pad-head <dur> --pad-tail <dur>` (`48f`/`2s`), with `--pad-color <RRGGBB>` for a filled pad instead of black
 - **Trim** via `create --trim-start <dur> --trim-end <dur>` (same syntax), cutting the source before any padding; picture, sound and subtitles move together
 - **Still images** via `create --video <image> --still-length <dur>`: one image held for a duration, encoded once and repeated
@@ -81,6 +83,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **PCM audio wrapping** (48 kHz)
 - **Loudness measurement**, EBU R128 / ATSC A/85
 - **Loudness normalization** to a target via `create --loudness-target leqm=<db>|lufs=<v>` (with `--true-peak-ceiling`)
+- **Channel mapping matrix** via `create --audio-map <IN:OUT[@GAIN],...>`: any source channel to any DCP lane at any gain in dB, summing where several land on one lane. OUT is a lane name (L, R, C, LFE, Ls, Rs, Lc, Rc, BsL, BsR, HI, VI) or a 1-based number, and the track is widened to the smallest DCP sound layout that holds every named lane
 - **Stereo→5.1 upmix** at create via `create --upmix a|b`
 - **Audio delay** via `create --audio-delay <ms>` (positive later, negative earlier), keeping the running time
 - **Filename channel auto-routing**: point `create --audio` at a directory of mono `name_L.wav`/`_R`/`_C`/`_Lfe`/`_Ls`/`_Rs`… files
@@ -284,6 +287,15 @@ dcpwizard create --title "My Feature" --video movie.mov --output ./dcp --split-c
 # Custom container: a named DCI container or arbitrary even dimensions
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --container 2k-flat
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --container-dims 1920x1080
+
+# Fit an HD master into the scope container on the 2K raster: the black bars are
+# cropped off, the picture is scaled to 2048x858 and centred on a 2048x1080 frame
+dcpwizard create --title "My Film" --video movie.mov --output ./dcp \
+    --twok --container 2k-scope --fill-crop --deinterlace
+
+# Route a stereo source across the DCP lanes: L and R untouched, a -6 dB centre
+dcpwizard create --title "My Film" --video movie.mov --audio stereo.wav \
+    --output ./dcp --audio-map "1:L,2:R,1:C@-6"
 
 # Head/tail padding with a coloured pad frame (48f or 2s; default black)
 dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./dcp \

@@ -40,11 +40,13 @@ user-facing surface is here.
   `--encrypt` refuses a package carrying a subtitle, closed-caption or Atmos track
   (CORE/encrypt.rs `check_encryptable_tracks`). Then: an MDSK key type for timed
   text, the key ids into the CPL/AuxData and the keys file, and a KDM covering them.
-- Automatic source fitting for `create --twok/--fourk` (PK grok_encoder.rs): the
-  ffmpeg decode has no scale/pad filter, so the source raster must already equal the
-  encode raster and a mismatch is refused (CORE/encode.rs `check_encode_raster`).
-  Fitting means scaling to the container preserving aspect and padding with black in
-  the decode command, then dropping the guard.
+- Source fitting from the GUI without a crop (GUI pipeline.rs `job_geometry`): the
+  create panel names a container, never a raster, so it forces a raster only when
+  Fill container is ticked. A letterboxed HD source with 2K Scope selected and the
+  box clear therefore still encodes at its own raster and the package is refused
+  for declaring an active area wider than the frames, as it was before fitting
+  landed. It needs a raster control of its own, or the container select split into
+  raster plus active area the way the CLI's `--twok` and `--container` are.
 - Distributed encoding across machines (dom#155, dom#1635, dom#2605). Out of scope
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is
@@ -196,9 +198,10 @@ should also land there and are noted in its DESIGN_TODO.
   worst frame bytes against the cap), which PK j2k.rs can already parse. The
   forensics half applies to imfwizard too, Leq(m) is cinema-only.
 - Crop indicator in the preview. Their preview stamps "+-275px top/bottom cropped"
-  on the frame. We show nothing about how source maps to container. Belongs with
-  whatever lands crop/auto-crop and the automatic source fitting bullet above.
-  imfwizard too.
+  on the frame. `create` now logs the picture plan ("crop 0/0/138/138 to 1920x804,
+  ... pad to 2048x1080 at (0,112)") in both the CLI and the GUI job log, and the
+  GUI's auto-crop button shows it beside the crop fields, so what is left is
+  drawing it over the preview frame itself. imfwizard too.
 - Post-build actions. Their build-complete state offers Inspect DCP, Play DCP and
   Show in Finder in one place. We send a notification and have a context-menu
   reveal. Three buttons wired to things already shipped (dcpdoctor report, the
