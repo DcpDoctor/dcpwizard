@@ -90,16 +90,18 @@ user-facing surface is here.
   Serialize/Deserialize, so persist to an XDG-dir JSONL on submit and state change
   and reload pending jobs on daemon start, and have the GUI submit over the existing
   IPC when the daemon is up, falling back to in-process when it is not.
-- `--source-colourspace` accepts postkit's full ColourSpace set but only rec709 and
-  xyz encode; p3, rec2020, aces, acescg and logc are refused at runtime, pointing at
-  `colour --target xyz` as the separate pass. The in-encode transform they need does
-  not exist in a reachable form: PK `colour::convert_colour` refuses any X'Y'Z'
-  target without a 3D LUT, and PK `dcdm` has the real P3/Rec.2020 matrices but only
-  behind `create_dcdm`, which writes a TIFF sequence. Closing this means a public
-  in-memory per-frame transform in postkit (its `dcdm` internals exposed, or a
-  generalised `rgb_to_xyz_inplace(buf, space)`), applied with grok's transform off.
-  The one ffmpeg route (P3 -> Rec.709 -> grok) silently clips out-of-gamut colour
-  and was rejected: a wrong picture is worse than a refusal.
+- `--source-colourspace`: p3 and rec2020 encode as of PK 02d3002 / 8d128f2
+  (PK `colour::DcdmTransform` per frame on the encoder threads, grok's transform
+  off, verified against independent matrix math within one code value). Still
+  refused: aces and acescg, correctly, they need a rendering transform (LUT), and
+  logc, where "correctly" is softer: DCP-o-matic handles Sony S-Log3/S-Gamut3
+  analytically (inverse log curve then matrix, libdcp `s_gamut3_to_xyz`), and ARRI
+  LogC's EOTF is published math, so a transfer-function-ahead-of-matrix arm in
+  DcdmTransform is the shape if a customer shows up with LogC masters. Image
+  sequences also stay refused for p3/rec2020 (`encode_parallel` hands files to
+  grk_compress, which only converts Rec.709), GUI-only surface. DCP-o-matic also
+  allows fully custom conversions (user chromaticities, white point, gamma), a
+  flexibility we do not have anywhere.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
