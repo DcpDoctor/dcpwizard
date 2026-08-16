@@ -88,6 +88,38 @@ user-facing surface is here.
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
 
+### Batch E (easyDCP parity, surveyed 2026-08-16)
+
+From en.easydcp.com easyDCP Plus and IMF Studio (both now EUR 3567.62 permanent or
+EUR 164.22/month, so the README's "EUR 2,998" line is stale). Most of what those
+pages advertise is already here. These five are not.
+
+- GPU J2K encoding. Both easyDCP products sell GPU/CUDA acceleration, and
+  DCP-o-matic reaches grok's GPU path (`dcpomatic2_cli list-gpus` and `config
+  grok-licence`). Nothing here touches it: postkit `grok_encoder.rs` and `grok.rs`
+  mention no device, no gpu and no cuda. The concept exists on the decode side only,
+  where postkit `PlaybackOptions` carries a `gpu_device`. Worth checking what the
+  pinned grok tag actually exposes through grok-ffi before scoping this.
+- HD-SDI monitoring output. easyDCP Player+ and IMF Player both drive Blackmagic
+  hardware. This is a port rather than new work: imfwizard already has `sdi-preview`,
+  which runs a GStreamer decklink pipeline and probes for the plugin first
+  (imfwizard-core `tools.rs`, `has_gst_decklink`). The open question is whether the
+  embedded preview should feed it or it stays a separate command.
+- JPEG and BMP still input. easyDCP takes DPX, TIFF, JPEG, BMP, PNG, J2K and
+  QuickTime. `create` takes DPX, TIFF, EXR and PNG (EXR is ours, they have no
+  equivalent). Small, and it belongs with whatever lands `--still-length`.
+- Atmos KDM. easyDCP's KDM Generator+ advertises "SMPTE (incl. Dolby Atmos)". Not a
+  new item: it is the tail of the encrypted timed text and Atmos bullet above, since
+  a KDM can only carry an Atmos key once `wrap_atmos` encrypts the essence.
+- imfwizard's GUI frame-rate menu stops at 60 while its CLI takes an arbitrary
+  `--fps-num`/`--fps-den`, against easyDCP's advertised 23.98 to 120. Tracked in
+  imfwizard's own DESIGN_TODO, noted here so the survey stays whole.
+
+Two claims from those pages we could not judge and should read the specs for before
+calling them gaps: "Dolby Vision 4.0 packaging" (imfwizard converts RPU profiles 8.1
+and 8.4, unclear whether that is what 4.0 means) and the IMF "Extended" application
+alongside App2 and ProRes.
+
 ## Done 2026-08-12
 
 - `edit` drops the signature from every document it rewrites (the CPL, any PKL
