@@ -19,6 +19,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 
 ### DCP Creation & Packaging
 - **Original Version (OV) DCP** creation from J2K + WAV
+- **Pre-build check** on `create`: every refusal the packager can make is made before the encode starts, from one shared check, so a job that cannot be packaged fails in a second instead of after an hour of J2K. `create --check` runs that check plus the advisory hints and stops, encoding nothing and writing nothing under `--output`
 - **SMPTE & Interop** standard support
 - **2K and 4K** resolution (2048×1080, 4096×2160)
 - **Frame rates** 24, 25, 30 fps (2K/4K); HFR 48, 50, 60, 96, 100, 120 fps (2K only)
@@ -221,6 +222,7 @@ The GUI uses [Tauri 2](https://tauri.app/) (Rust backend + web frontend) with a 
 - Right-click context menus on assets (Preview, Remove, Show in Files)
 - Asset filter / search
 - Auto-detect framerate and resolution from imported video (via ffprobe)
+- Pre-build hints: a Before you build dialog lists what will package but is likely to be wrong on a cinema screen, with Build anyway or Go back. Turn it off from the dialog or in Settings ("Show hints before building"), and the hints still reach the job log
 - Progress in title bar (visible in taskbar during builds)
 - Desktop notifications on build complete/fail
 - Conditional button enabling (Build disabled until ready)
@@ -247,6 +249,10 @@ dcpwizard create --title "My Feature Film" --video ./j2k --audio ./audio.wav --o
 
 # Create from video file (full pipeline: decode → J2K encode → MXF wrap → DCP)
 dcpwizard create --title "My Film" --video movie.mov --output ./dcp
+
+# Check the job before committing to the encode: every refusal, then every hint.
+# Nothing is encoded and nothing is written under --output. Exits 1 on a refusal.
+dcpwizard create --title "My Film" --video movie.mov --output ./dcp --check
 
 # Transcode an existing DCP's picture essence to a lower bandwidth (audio and
 # subtitle tracks are copied unchanged; encrypted input is rejected)

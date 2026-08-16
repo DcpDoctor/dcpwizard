@@ -8,6 +8,32 @@ user-facing surface is here.
 
 ## Open
 
+- Hints not ported from DCP-o-matic's list, each for a reason. Signing certificate
+  checks (utf8 subject strings, a chain valid for more than 15 years) are about
+  the configured signer rather than the job, and our signer is held to ST 430-2
+  at sign time instead. MPEG2 and VOB inputs do not exist here. Mixed encryption
+  cannot happen: `--encrypt` is all or nothing. 3D content in a 2D DCP has no
+  equivalent, since a right eye is named per job rather than carried by content.
+  The size limits on text assets (an Interop font over 640 kB, a SMPTE reel over
+  4096 PNG subtitle resources, a caption XML over 256 kB, a subtitle MXF over
+  115 MB) are refusals here or in postkit's font subsetter rather than advice,
+  and the ones that are not would need the DCST rendered to measure, which the
+  hints pass deliberately does not do.
+- Checks left in the front ends on purpose, because each names a flag or a panel
+  control and the two spell them differently: every spelling parser (`--rotate`,
+  `--flip`, `--upmix`, `--container`, `--marker`, the appearance flags), and the
+  pairings that refuse two ways of saying one thing (`--audio-map` beside
+  `--upmix`, a channel WAV directory or `--audio-input-order lrc-ls-rs-lfe`;
+  `--still-length` with a video; a trim on a still; an appearance flag with no
+  track to style; the reel-split sources). `preflight` takes the rules whose
+  message names the content, not the control.
+- A marker past the composition length is still refused after the encode
+  (`markers::markers_for_composition`, from `create_dcp`). The plan-time pass
+  hints at a marker sitting at or past the picture length rather than refusing
+  one, because the frame count it works from is the source's and the packaged
+  length also depends on padding the packager applies. Moving the refusal forward
+  needs the padded length to be settled in the plan.
+
 - ISDCF naming, two open ends. The title builder takes free-text studio codes and
   territories, where it could pull the current ISDCF registry instead of naming
   from whatever the user typed. And the GUI builds the name at submit time, before
@@ -219,10 +245,6 @@ should also land there and are noted in its DESIGN_TODO.
   encode. We show stage plus fps. imfwizard too.
 - Player HUD counters for buffer depth and dropped frames next to frame and fps.
   imfwizard too.
-- CLI bitrate flag. The GUI takes 50-500 Mbit/s but the CLI has no bandwidth
-  flag at all, a gap of ours their page made visible. Their slider also marks the
-  DCI 250 limit and offers an IMAX 500 preset. Check imfwizard's CLI for the same
-  hole.
 - Unverified parity claim: their "Force Wild Track Format" toggle conforms any
   audio to a 16-channel container with silent fill and no upmix. Check whether we
   can pad to 16ch without upmixing before claiming we match. DCP-only.
