@@ -622,6 +622,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             stereoscopic: false,
             aux_data: None,
             markers: Vec::new(),
+            ..Default::default()
         });
     }
 

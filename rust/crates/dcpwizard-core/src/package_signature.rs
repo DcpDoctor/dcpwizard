@@ -236,6 +236,7 @@ mod tests {
             uuid: "3413599d-fed7-4d89-87a2-7c5e0929da5f".into(),
             namespace: namespace.into(),
             title: "Signing Test".into(),
+            annotation_text: None,
             content_kind: "test".into(),
             issuer: "PostPerfection".into(),
             creator: "dcpwizard".into(),

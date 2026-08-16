@@ -242,6 +242,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             stereoscopic: false,
             aux_data: None,
             markers: Vec::new(),
+            ..Default::default()
         });
     }
     crate::cpl::apply_default_markers(&mut cpl_reels);
@@ -268,6 +269,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
         standard,
         main_sound: None,
         sign_language: None,
+        ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {
         tracing::error!("Failed to generate VF CPL");

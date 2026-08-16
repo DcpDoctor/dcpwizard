@@ -16,6 +16,72 @@ pub struct CplConfig {
     /// carries the SignLanguageVideo ExtensionMetadata with this Language Tag.
     #[serde(default)]
     pub sign_language: Option<String>,
+    /// ST 429-16 composition identity. Every one is optional in the schema and
+    /// the order here is the order the schema requires them in.
+    #[serde(default)]
+    pub release_territory: Option<String>,
+    /// Defaults to 1 when unset, since Bv2.1 requires the element.
+    #[serde(default)]
+    pub version_number: Option<u32>,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(default)]
+    pub distributor: Option<String>,
+    #[serde(default)]
+    pub facility: Option<String>,
+    /// Mastering luminance, written with the required `units` attribute.
+    #[serde(default)]
+    pub luminance: Option<Luminance>,
+}
+
+/// Mastering luminance for the CompositionMetadataAsset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Luminance {
+    pub value: f64,
+    pub units: LuminanceUnits,
+}
+
+/// The two units ST 429-16 allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LuminanceUnits {
+    FootLambert,
+    CandelaPerSquareMetre,
+}
+
+impl LuminanceUnits {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FootLambert => "foot-lambert",
+            Self::CandelaPerSquareMetre => "candela-per-square-metre",
+        }
+    }
+}
+
+impl Luminance {
+    /// Parse `"<value> <units>"`, the two units ST 429-16 allows. The value must
+    /// be positive: the schema type excludes zero.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let (value, units) = spec.trim().split_once(char::is_whitespace).ok_or_else(|| {
+            format!("luminance '{spec}' must be a value and a unit, e.g. '14 foot-lambert'")
+        })?;
+        let value: f64 = value
+            .trim()
+            .parse()
+            .map_err(|_| format!("luminance value '{value}' is not a number"))?;
+        if value <= 0.0 {
+            return Err(format!("luminance {value} must be greater than zero"));
+        }
+        let units = match units.trim() {
+            "foot-lambert" => LuminanceUnits::FootLambert,
+            "candela-per-square-metre" => LuminanceUnits::CandelaPerSquareMetre,
+            other => {
+                return Err(format!(
+                    "luminance unit '{other}' must be foot-lambert or candela-per-square-metre"
+                ));
+            }
+        };
+        Ok(Self { value, units })
+    }
 }
 
 /// Sound layout for the SMPTE CompositionMetadataAsset (ST 429-16): the
@@ -57,6 +123,10 @@ pub struct CplReel {
     pub sound_entry_point: u64,
     /// KeyId (bare UUID) when the sound essence is encrypted.
     pub sound_key_id: Option<String>,
+    /// Base64 SHA-1 of each track file, repeated from the PKL so a server that
+    /// hash-checks against the CPL has something to check.
+    pub picture_hash: Option<String>,
+    pub sound_hash: Option<String>,
     /// Bare UUID of the timed-text (subtitle) track, when present.
     pub subtitle_id: Option<String>,
     pub subtitle_edit_rate_num: u32,
@@ -209,6 +279,8 @@ pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i
             sound_duration: r.sound_duration,
             sound_entry_point: r.sound_entry_point,
             sound_key_id: r.sound_key_id.clone(),
+            picture_hash: r.picture_hash.clone(),
+            sound_hash: r.sound_hash.clone(),
         })
         .collect();
 
@@ -220,6 +292,8 @@ pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i
         issuer: "DCP Wizard".into(),
         creator: "DCP Wizard".into(),
         issue_date: time_now_iso(),
+        // Bv2.1 8.1: present, and equal to the content title
+        annotation_text: Some(config.title.clone()),
         reels,
     };
 
@@ -320,6 +394,10 @@ fn splice_reel_extras(
 /// ST 429-16 CompositionMetadataAsset namespace.
 const NS_CPL_META: &str = "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metadata";
 
+/// Scope under which a `ReleaseTerritory` is a UN M.49 numeric code.
+const UNM49_SCOPE: &str =
+    "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metadata#scope/release-territory/UNM49";
+
 /// Build the ST 429-16 MainSoundConfiguration from the packaged sound MXF channel
 /// count plus optional HI/VI accessibility channels. Channels past the labeled
 /// soundfield are silent fill, written as '-'. Returns None for a layout with no
@@ -382,6 +460,45 @@ fn composition_metadata_block(config: &CplConfig, reel: &CplReel, sound: &MainSo
         "          <meta:FullContentTitleText>{}</meta:FullContentTitleText>\n",
         escape_xml(&config.title)
     ));
+    if let Some(ref territory) = config.release_territory {
+        // a numeric value is a UN M.49 code, which readers only accept as one
+        // when the scope says so; an alphabetic one is an RFC 5646 region
+        // subtag and takes the schema's own default scope.
+        let scope = if territory.chars().all(|c| c.is_ascii_digit()) {
+            format!(" scope=\"{UNM49_SCOPE}\"")
+        } else {
+            String::new()
+        };
+        b.push_str(&format!(
+            "          <meta:ReleaseTerritory{scope}>{}</meta:ReleaseTerritory>\n",
+            escape_xml(territory)
+        ));
+    }
+    // Bv2.1 8.6.1 requires this, so it is always written; the schema's own
+    // default is 1, which is what a first delivery is.
+    b.push_str(&format!(
+        "          <meta:VersionNumber>{}</meta:VersionNumber>\n",
+        config.version_number.unwrap_or(1)
+    ));
+    for (element, value) in [
+        ("Chain", config.chain.as_deref()),
+        ("Distributor", config.distributor.as_deref()),
+        ("Facility", config.facility.as_deref()),
+    ] {
+        if let Some(value) = value {
+            b.push_str(&format!(
+                "          <meta:{element}>{}</meta:{element}>\n",
+                escape_xml(value)
+            ));
+        }
+    }
+    if let Some(ref luminance) = config.luminance {
+        b.push_str(&format!(
+            "          <meta:Luminance units=\"{}\">{}</meta:Luminance>\n",
+            luminance.units.as_str(),
+            luminance.value
+        ));
+    }
     b.push_str(&format!(
         "          <meta:MainSoundConfiguration>{}</meta:MainSoundConfiguration>\n",
         sound.configuration

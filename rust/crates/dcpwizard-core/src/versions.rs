@@ -636,6 +636,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 stereoscopic: false,
                 aux_data: aux_data.clone(),
                 markers: Vec::new(),
+                ..Default::default()
             });
         }
         crate::cpl::apply_default_markers(&mut cpl_reels);

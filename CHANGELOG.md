@@ -3,9 +3,14 @@
 ## Unreleased
 
 ### Added
+- **Composition identity in the CPL** — `create` now writes the `AnnotationText` Bv2.1 requires (equal to the content title, on both CPL and PKL), a `VersionNumber` in the CompositionMetadataAsset, and a `<Hash>` on every reel asset, which some servers check instead of the PKL's. Our own validator flagged all four on our own output
+- **ST 429-16 composition metadata** — `create --release-territory/--version-number/--chain/--distributor/--facility/--luminance`. A numeric territory declares the UN M.49 scope, without which readers measure it against the RFC 5646 region grammar and reject it
+- `create-multi --container-dims`, matching `create`
 - **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
 
 ### Fixed
+- **A failed `create` exited 0** — eighteen fatal errors logged and returned without a failing exit code, so a watch folder or script read the run as a success and shipped nothing. They now exit non-zero. `--container` is also resolved before the encode rather than after it, so a bad value fails in a second instead of after a full J2K pass
+- **`create-multi` carried its own copy of the container table** — it skipped the dimension validation `create` applies and could drift from it. Both now resolve the container through one function
 - **`decrypt` and `transcode-dcp` dropped a package's markers** — both re-author the CPL around the same composition, and the marker track was not carried over, so a marked package came out unmarked. Markers are now read back from the source CPL and rewritten, offsets unchanged
 - **The CPL declared a geometry the essence did not have** — picture geometry came from the `--container` value or the 2K/4K preset, so an ordinary 1998x1080 flat master with no container flag was packaged with a CPL claiming 2048x1080. Every declaration now comes from the coded raster read back from the codestream: `MainPictureStoredArea` and `ScreenAspectRatio` describe the frames, `MainPictureActiveArea` carries the container (what a projector masks to), and a container larger than the frames is refused instead of declaring an active area the picture does not have
 - **Encrypted DCPs shipped cleartext subtitles and Atmos** — picture and sound were encrypted at wrap time while the timed-text and Atmos tracks went out in the clear, with nothing in the package saying so. `--encrypt` now refuses a package carrying either track. Encrypting them needs the content key threaded through postkit's timed-text and Atmos wraps

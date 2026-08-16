@@ -84,6 +84,19 @@ pub struct DcpConfig {
     /// config's soundfield layout (0 = SLVS-only, no leading soundfield).
     #[serde(default)]
     pub sign_language_main_channels: Option<u32>,
+    /// ST 429-16 composition identity, written into the CompositionMetadataAsset.
+    #[serde(default)]
+    pub release_territory: Option<String>,
+    #[serde(default)]
+    pub version_number: Option<u32>,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(default)]
+    pub distributor: Option<String>,
+    #[serde(default)]
+    pub facility: Option<String>,
+    #[serde(default)]
+    pub luminance: Option<crate::cpl::Luminance>,
     /// DCI HDR Addendum: wrap the picture MXF with TransferCharacteristic=ST 2084
     /// (PQ) and P3-D65 colour primaries. Source must already be PQ/DCI.
     #[serde(default)]
@@ -926,9 +939,18 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             }
         };
 
+    // hashed here rather than with the rest of the PKL entries because the CPL
+    // carries the same values and is written first
+    let pic_hash = crate::hash::hash_file(&picture_mxf_path).unwrap_or_default();
+    let snd_hash = has_sound
+        .then(|| crate::hash::hash_file(&sound_mxf_path).unwrap_or_default())
+        .filter(|h| !h.is_empty());
+
     let reel = crate::cpl::CplReel {
         reel_id: uuid::Uuid::new_v4().to_string(),
         picture_id: picture_uuid.to_string(),
+        picture_hash: (!pic_hash.is_empty()).then(|| pic_hash.clone()),
+        sound_hash: snd_hash.clone(),
         picture_width: geometry.stored_width,
         picture_height: geometry.stored_height,
         picture_active_width: geometry.active_width,
@@ -989,6 +1011,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         standard: config.standard,
         main_sound,
         sign_language: config.sign_language_lang.clone(),
+        release_territory: config.release_territory.clone(),
+        version_number: config.version_number,
+        chain: config.chain.clone(),
+        distributor: config.distributor.clone(),
+        facility: config.facility.clone(),
+        luminance: config.luminance.clone(),
         ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {
@@ -1013,7 +1041,6 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         size: cpl_size,
     }];
 
-    let pic_hash = crate::hash::hash_file(&picture_mxf_path).unwrap_or_default();
     let pic_size = std::fs::metadata(&picture_mxf_path)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -1025,7 +1052,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         size: pic_size,
     });
     if has_sound {
-        let snd_hash = crate::hash::hash_file(&sound_mxf_path).unwrap_or_default();
+        let snd_hash = snd_hash.clone().unwrap_or_default();
         let snd_size = std::fs::metadata(&sound_mxf_path)
             .map(|m| m.len())
             .unwrap_or(0);
@@ -1077,7 +1104,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         });
     }
 
-    if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, config.standard, None, &pkl_path) != 0 {
+    if crate::pkl::generate_pkl(
+        &pkl_entries,
+        &pkl_uuid,
+        config.standard,
+        Some(&config.title),
+        &pkl_path,
+    ) != 0
+    {
         tracing::error!("Failed to generate PKL");
         return -1;
     }

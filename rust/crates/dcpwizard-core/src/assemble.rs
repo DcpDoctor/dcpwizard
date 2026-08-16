@@ -207,6 +207,7 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
         standard,
         main_sound: None,
         sign_language: None,
+        ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {
         tracing::error!("failed to write assembled CPL");

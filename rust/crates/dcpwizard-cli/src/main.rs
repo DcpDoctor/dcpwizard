@@ -1,6 +1,33 @@
 use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+/// ST 429-16 composition identity, boxed into the Create variant.
+#[derive(Args)]
+struct CreateCompositionMetadata {
+    /// Content type: FTR, SHR, TLR, TST, XSN, RTG, TSR, POL, PSA, ADV
+    #[arg(long)]
+    content_type: Option<String>,
+    /// UN M.49 region code, or an RFC 5646 region subtag, the composition is
+    /// released for (e.g. 826, GB). A numeric value declares the M.49 scope.
+    #[arg(long)]
+    release_territory: Option<String>,
+    /// Composition version number. Defaults to 1, which Bv2.1 requires present.
+    #[arg(long)]
+    version_number: Option<u32>,
+    /// Exhibition chain the composition was mastered for.
+    #[arg(long)]
+    chain: Option<String>,
+    /// Distributor name for the composition metadata.
+    #[arg(long)]
+    distributor: Option<String>,
+    /// Mastering facility name for the composition metadata.
+    #[arg(long)]
+    facility: Option<String>,
+    /// Mastering luminance, e.g. "14 foot-lambert" or "48 candela-per-square-metre".
+    #[arg(long)]
+    luminance: Option<String>,
+}
+
 /// W5 create-time audio + encode QoL options, boxed into the Create variant.
 #[derive(Args)]
 struct CreateAudioQol {
@@ -150,6 +177,7 @@ enum Commands {
         /// RFC 5646 sign-language tag for --sign-language-video (e.g. sgn-ase).
         #[arg(long)]
         sign_language_lang: Option<String>,
+
         /// SRT file to convert, or supplied SMPTE subtitle XML to package unchanged
         #[arg(long, conflicts_with = "versions")]
         subtitle: Option<String>,
@@ -175,9 +203,6 @@ enum Commands {
         /// plaintext AES keys: point it outside the DCP and keep it secret.
         #[arg(long, required_if_eq("encrypt", "true"))]
         key_out: Option<String>,
-        /// Content type: FTR, SHR, TLR, TST, XSN, RTG, TSR, POL, PSA, ADV
-        #[arg(long)]
-        content_type: Option<String>,
         /// DCP frame rate (auto-detected from source if not specified)
         #[arg(long)]
         frame_rate: Option<u32>,
@@ -245,6 +270,8 @@ enum Commands {
         #[arg(long = "marker", value_name = "LABEL=TIMECODE")]
         markers: Vec<String>,
         // boxed so the Create variant stays small (clippy large_enum_variant).
+        #[command(flatten)]
+        composition_metadata: Box<CreateCompositionMetadata>,
         #[command(flatten)]
         audio_qol: Box<CreateAudioQol>,
         #[command(flatten)]
@@ -381,6 +408,10 @@ enum Commands {
         /// Picture container: 2k-scope, 2k-flat, 2k-full, 4k-scope, 4k-flat, 4k-full
         #[arg(long)]
         container: Option<String>,
+        /// Custom container dimensions WxH (e.g. 1920x1080). Must be even and fit
+        /// within the 2K (2048x1080) or 4K (4096x2160) container. Overrides --container.
+        #[arg(long, conflicts_with = "container")]
+        container_dims: Option<String>,
         /// Default subtitle language code for entries that omit one
         #[arg(long, default_value = "en")]
         subtitle_language: String,
@@ -2469,7 +2500,6 @@ fn run() {
             standard,
             encrypt,
             key_out,
-            content_type,
             frame_rate,
             twok,
             fourk,
@@ -2490,6 +2520,7 @@ fn run() {
             split_chapters,
             input_range,
             markers,
+            composition_metadata,
             audio_qol,
             signer_opts,
         } => {
@@ -2501,6 +2532,15 @@ fn run() {
                 resume,
                 shutdown_when_done,
             } = *audio_qol;
+            let CreateCompositionMetadata {
+                content_type,
+                release_territory,
+                version_number,
+                chain,
+                distributor,
+                facility,
+                luminance,
+            } = *composition_metadata;
             // fail loud on shutdown up front, before the long encode, so the
             // user is not left with a finished DCP and no power-off.
             if shutdown_when_done
@@ -2534,6 +2574,27 @@ fn run() {
                     }
                 }
             }
+            // resolved up front: it costs nothing and a bad value used to be
+            // caught only after the whole encode had run
+            let (container_width, container_height) =
+                match resolve_container(container.as_deref(), container_dims.as_deref(), fourk) {
+                    Ok(dims) => dims,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+            let parsed_luminance = match luminance
+                .as_deref()
+                .map(dcpwizard_core::cpl::Luminance::parse)
+            {
+                Some(Ok(l)) => Some(l),
+                Some(Err(e)) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+                None => None,
+            };
             let video_path = PathBuf::from(&video);
             let output_dir = PathBuf::from(&output);
             let std_val = if standard == "interop" {
@@ -2546,7 +2607,7 @@ fn run() {
                 "lrc-ls-rs-lfe" => dcpwizard_core::mxf_wrap::AudioInputOrder::LrcLsRsLfe,
                 value => {
                     tracing::error!("Unknown audio input order: {value}");
-                    return;
+                    std::process::exit(1);
                 }
             };
 
@@ -2557,7 +2618,7 @@ fn run() {
                     Ok(v) => Some(v),
                     Err(e) => {
                         tracing::error!("{e}");
-                        return;
+                        std::process::exit(1);
                     }
                 },
                 None => None,
@@ -2679,7 +2740,7 @@ fn run() {
                         }
                         Err(e) => {
                             tracing::error!("{e}");
-                            return;
+                            std::process::exit(1);
                         }
                     }
                 } else {
@@ -2702,7 +2763,7 @@ fn run() {
                         let lut = PathBuf::from(lut);
                         if !lut.is_file() {
                             tracing::error!("HDR-to-DCI LUT not found: {}", lut.display());
-                            return;
+                            std::process::exit(1);
                         }
                         let opts = postkit::colour::ColourConvertOptions {
                             input: range_src.clone(),
@@ -2713,7 +2774,7 @@ fn run() {
                         };
                         if let Err(e) = postkit::colour::convert_colour(&opts) {
                             tracing::error!("HDR-to-DCI LUT conversion failed: {e}");
-                            return;
+                            std::process::exit(1);
                         }
                         content_already_xyz = true;
                     } else if allow_generic_hdr_tonemap {
@@ -2732,7 +2793,7 @@ fn run() {
                         tracing::error!(
                             "HDR source requires --hdr-to-dci-lut. Use --allow-generic-hdr-tonemap only for an explicitly accepted generic transform."
                         );
-                        return;
+                        std::process::exit(1);
                     }
                     encode_video_path = converted;
                 }
@@ -2963,7 +3024,7 @@ fn run() {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!("{e}");
-                        return;
+                        std::process::exit(1);
                     }
                 };
 
@@ -3016,7 +3077,7 @@ fn run() {
                         Ok((wav, ch)) => (Some(wav), Some(ch)),
                         Err(e) => {
                             tracing::error!("{e}");
-                            return;
+                            std::process::exit(1);
                         }
                     }
                 } else {
@@ -3033,16 +3094,6 @@ fn run() {
                     .and_then(dcpwizard_core::ContentType::from_abbrev)
                     .unwrap_or_default();
 
-                let (container_width, container_height) =
-                    match resolve_container(container.as_deref(), container_dims.as_deref(), fourk)
-                    {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            return;
-                        }
-                    };
-
                 // reel-split boundaries from --split-at / --split-chapters
                 let reel_split_frames = match resolve_reel_splits(
                     split_at.as_deref(),
@@ -3053,7 +3104,7 @@ fn run() {
                     Ok(f) => f,
                     Err(e) => {
                         tracing::error!("{e}");
-                        return;
+                        std::process::exit(1);
                     }
                 };
 
@@ -3089,6 +3140,12 @@ fn run() {
                     pad_color: pad_color.clone(),
                     reel_split_frames,
                     sign_language_lang: sign_language_lang.clone(),
+                    release_territory: release_territory.clone(),
+                    version_number,
+                    chain: chain.clone(),
+                    distributor: distributor.clone(),
+                    facility: facility.clone(),
+                    luminance: parsed_luminance.clone(),
                     sign_language_main_channels: sl_main_channels,
                     hdr_dci,
                     signer: package_signer.clone(),
@@ -3132,18 +3189,8 @@ fn run() {
                     tracing::error!(
                         "--input-range applies to a video input; a J2K/image sequence carries no decode range"
                     );
-                    return;
+                    std::process::exit(1);
                 }
-
-                let (container_width, container_height) =
-                    match resolve_container(container.as_deref(), container_dims.as_deref(), fourk)
-                    {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            return;
-                        }
-                    };
 
                 let fps = frame_rate.unwrap_or(24);
                 let reel_split_frames =
@@ -3151,7 +3198,7 @@ fn run() {
                         Ok(f) => f,
                         Err(e) => {
                             tracing::error!("{e}");
-                            return;
+                            std::process::exit(1);
                         }
                     };
 
@@ -3168,7 +3215,7 @@ fn run() {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!("{e}");
-                        return;
+                        std::process::exit(1);
                     }
                 };
 
@@ -3193,7 +3240,7 @@ fn run() {
                         Ok((wav, ch)) => (Some(wav), Some(ch)),
                         Err(e) => {
                             tracing::error!("{e}");
-                            return;
+                            std::process::exit(1);
                         }
                     }
                 } else {
@@ -3236,6 +3283,12 @@ fn run() {
                     hdr_dci,
                     signer: package_signer,
                     markers,
+                    release_territory,
+                    version_number,
+                    chain,
+                    distributor,
+                    facility,
+                    luminance: parsed_luminance,
                 };
                 let code = match versions_specs.as_ref() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
@@ -3687,7 +3740,7 @@ fn run() {
                 Ok(f) => f,
                 Err(e) => {
                     tracing::error!("{e}");
-                    return;
+                    std::process::exit(1);
                 }
             };
             match dcpwizard_core::disk::format_drive(
@@ -4992,6 +5045,7 @@ fn run() {
             frame_rate,
             fourk,
             container,
+            container_dims,
             subtitle_language,
             content_type,
             encrypt,
@@ -5003,7 +5057,7 @@ fn run() {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("{e}");
-                        return;
+                        std::process::exit(1);
                     }
                 };
             let std_val = if standard == "interop" {
@@ -5016,19 +5070,14 @@ fn run() {
             } else {
                 dcpwizard_core::Resolution::TwoK
             };
-            let (container_width, container_height) = match container.as_deref() {
-                Some("2k-scope") => (2048, 858),
-                Some("2k-flat") => (1998, 1080),
-                Some("2k-full") => (2048, 1080),
-                Some("4k-scope") => (4096, 1716),
-                Some("4k-flat") => (3996, 2160),
-                Some("4k-full") => (4096, 2160),
-                Some(value) => {
-                    tracing::error!("Unknown container: {value}");
-                    return;
-                }
-                None => (0, 0),
-            };
+            let (container_width, container_height) =
+                match resolve_container(container.as_deref(), container_dims.as_deref(), fourk) {
+                    Ok(dims) => dims,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
             let ct = content_type
                 .as_deref()
                 .and_then(dcpwizard_core::ContentType::from_abbrev)
