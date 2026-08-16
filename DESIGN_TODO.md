@@ -233,16 +233,20 @@ should also land there and are noted in its DESIGN_TODO.
   ... pad to 2048x1080 at (0,112)") in both the CLI and the GUI job log, and the
   GUI's auto-crop button shows it beside the crop fields, so what is left is
   drawing it over the preview frame itself. imfwizard too.
-- Post-build actions. Their build-complete state offers Inspect DCP, Play DCP and
-  Show in Finder in one place. We send a notification and have a context-menu
-  reveal. Three buttons wired to things already shipped (dcpdoctor report, the
-  player, reveal). imfwizard too.
+- Post-build actions. Done: a finished build shows Play / Inspect / Reveal beside
+  the progress bar, wired to the embedded preview, the Verify view and the file
+  manager. The row belongs to the build in front of you, so a job picked out of the
+  Jobs list does not bring it back.
 - Ident and rating-card library. A drag-drop library of head idents, tail idents,
   rating cards and anti-piracy clips joined onto the build. Real ad and trailer
   workflow, but it is conform/concatenation work, so a real lift. DCP-only.
-- Encode log detail. Their log breaks each reel down into colour-convert,
-  encode-prep and encode ms/frame, and reports the MXF write overlapped with the
-  encode. We show stage plus fps. imfwizard too.
+- Encode log detail. The per-stage half is done: `[TIMING]` lines in the job log
+  give preflight, encode, audio, packaging, validation and the total. What is still
+  open is the breakdown inside an encode, colour convert against frame prep against
+  the J2K encode itself: postkit's `PipelineProgress` carries a stage name, a frame
+  count and an elapsed clock, and nothing that separates the three, so it would take
+  a wider progress payload from postkit first. Their claim that the MXF write
+  overlaps the encode is untouched here. imfwizard too.
 - Player HUD counters for buffer depth and dropped frames next to frame and fps.
   imfwizard too.
 - Unverified parity claim: their "Force Wild Track Format" toggle conforms any

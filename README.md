@@ -223,6 +223,8 @@ The GUI uses [Tauri 2](https://tauri.app/) (Rust backend + web frontend) with a 
 - Asset filter / search
 - Auto-detect framerate and resolution from imported video (via ffprobe)
 - Pre-build hints: a Before you build dialog lists what will package but is likely to be wrong on a cinema screen, with Build anyway or Go back. Turn it off from the dialog or in Settings ("Show hints before building"), and the hints still reach the job log
+- Post-build actions: a finished build offers Play (the new DCP in the embedded preview), Inspect (the Verify view, already pointed at the output and running) and Reveal (the output folder in the file manager), beside the progress bar. Starting another build clears the row
+- Per-stage timings in the job log: `[TIMING]` lines next to each stage's own log lines giving preflight, encode, audio, packaging and validation time, plus the total
 - Progress in title bar (visible in taskbar during builds)
 - Desktop notifications on build complete/fail
 - Conditional button enabling (Build disabled until ready)

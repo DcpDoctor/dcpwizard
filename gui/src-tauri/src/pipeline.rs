@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Default encode target in Mbit/s. Under DCI's 250 on purpose: rate allocation
@@ -1398,6 +1399,19 @@ fn log_to(log_file: &Arc<Mutex<Option<std::fs::File>>>, msg: &str) {
     }
 }
 
+const SECONDS_PER_MINUTE: u64 = 60;
+
+/// One `[TIMING]` line for the job log, sitting alongside the `[ENCODE]` and
+/// `[PACKAGE]` lines the same stage writes.
+fn format_stage_timing(stage: &str, duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    format!(
+        "[TIMING] {stage} took {}m{}s",
+        seconds / SECONDS_PER_MINUTE,
+        seconds % SECONDS_PER_MINUTE
+    )
+}
+
 fn parse_audio_input_order(
     value: Option<&str>,
 ) -> Result<dcpwizard_core::mxf_wrap::AudioInputOrder, String> {
@@ -1938,6 +1952,7 @@ fn build_dcp_config(
 }
 
 fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
+    let job_started = Instant::now();
     let queue = app.state::<JobQueue>();
     let cancel = queue.cancel.clone();
     let pause = queue.pause.clone();
@@ -1962,6 +1977,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     let (fps_num, fps_den) = frame_rate_of(&job.framerate);
     let encode_fps = postkit::encode::FrameRate::new(fps_num, fps_den);
+    let preflight_started = Instant::now();
 
     // reel boundaries before the encode: a source with no chapter marks should
     // fail now, not after an hour of J2K.
@@ -2010,6 +2026,11 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         log_to(&log_file, &format!("[HINT] {hint}"));
     }
 
+    log_to(
+        &log_file,
+        &format_stage_timing("preflight", preflight_started.elapsed()),
+    );
+
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
         fps: encode_fps,
@@ -2026,6 +2047,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let job_id = job.id;
     let app_ref = app.clone();
     let log_ref = log_file.clone();
+    let encode_started = Instant::now();
     let encode_result = if job.still_length_frames > 0 {
         encode_still(job, output, encode_fps, &resolved_picture, |msg| {
             log_to(&log_ref, msg)
@@ -2080,7 +2102,17 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         None
     };
 
+    log_to(
+        &log_file,
+        &format_stage_timing("encode", encode_started.elapsed()),
+    );
+
+    let audio_started = Instant::now();
     let audio_path = prepare_audio(job, output, |msg| log_to(&log_file, msg))?;
+    log_to(
+        &log_file,
+        &format_stage_timing("audio", audio_started.elapsed()),
+    );
 
     // trim before sign language, which is packed to cover the picture the
     // package actually carries
@@ -2122,6 +2154,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         99.0,
     );
     log_to(&log_file, "[PACKAGE] Creating DCP...");
+    let package_started = Instant::now();
 
     let config = build_dcp_config(
         job,
@@ -2152,6 +2185,10 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         ));
     }
     log_to(&log_file, "[PACKAGE] Done");
+    log_to(
+        &log_file,
+        &format_stage_timing("package", package_started.elapsed()),
+    );
 
     // Optional validation
     if job.validate {
@@ -2167,6 +2204,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             99.5,
         );
         log_to(&log_file, "[VALIDATE] Running validation...");
+        let validate_started = Instant::now();
 
         let result = dcpwizard_core::verify::verify_dcp(&job.output_dir);
 
@@ -2198,8 +2236,17 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             )
         };
         log_to(&log_file, &format!("[VALIDATE] {summary}"));
+        log_to(
+            &log_file,
+            &format_stage_timing("validate", validate_started.elapsed()),
+        );
         emit_progress(app, job.id, "validate", &summary, 0, 0, 0.0, 0.0, 100.0);
     }
+
+    log_to(
+        &log_file,
+        &format_stage_timing("total", job_started.elapsed()),
+    );
 
     log_to(
         &log_file,
@@ -2245,6 +2292,23 @@ mod tests {
     use super::*;
     use dcpwizard_core::mxf_wrap::AudioInputOrder;
     use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
+    use std::time::Duration;
+
+    #[test]
+    fn stage_timing_reads_as_minutes_and_seconds() {
+        assert_eq!(
+            format_stage_timing("encode", Duration::from_secs(192)),
+            "[TIMING] encode took 3m12s"
+        );
+        assert_eq!(
+            format_stage_timing("package", Duration::from_millis(1900)),
+            "[TIMING] package took 0m1s"
+        );
+        assert_eq!(
+            format_stage_timing("total", Duration::from_secs(3600)),
+            "[TIMING] total took 60m0s"
+        );
+    }
 
     fn test_job() -> JobConfig {
         JobConfig {
