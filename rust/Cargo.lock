@@ -706,12 +706,13 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 [[package]]
 name = "dcpdoctor-core"
 version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=55294f0#55294f0c10944740fb8314b3f8f25a8fe4f8cc5d"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=632919e#632919e4831920546f26728ce24ceb59c015bb7d"
 dependencies = [
  "asdcplib",
  "base64",
  "dcpdoctor-imf",
  "dcpdoctor-parse",
+ "language-tags",
  "postkit",
  "quick-xml 0.41.0",
  "regex-lite",
@@ -719,6 +720,7 @@ dependencies = [
  "serde_json",
  "sha1 0.10.6",
  "skrifa 0.45.0",
+ "tempfile",
  "thiserror 2.0.18",
  "time",
  "tracing",
@@ -729,7 +731,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-imf"
 version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=55294f0#55294f0c10944740fb8314b3f8f25a8fe4f8cc5d"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=632919e#632919e4831920546f26728ce24ceb59c015bb7d"
 dependencies = [
  "dcpdoctor-parse",
  "quick-xml 0.41.0",
@@ -739,7 +741,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-parse"
 version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=55294f0#55294f0c10944740fb8314b3f8f25a8fe4f8cc5d"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=632919e#632919e4831920546f26728ce24ceb59c015bb7d"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -1538,6 +1540,12 @@ dependencies = [
  "bitflags 2.11.1",
  "libc",
 ]
+
+[[package]]
+name = "language-tags"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "lazy_static"

@@ -56,6 +56,7 @@ pub fn verify_dcp_with_options(dcp_dir: &Path, options: &VerifyCliOptions) -> Ve
             check_hashes: !options.skip_hash_check,
             check_signatures: true,
             check_picture_details: !options.skip_picture_check,
+            scan_every_frame: false,
             strict_smpte: false,
             ov: None,
             kdm: None,
