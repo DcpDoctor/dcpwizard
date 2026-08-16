@@ -786,6 +786,8 @@ fn write_packaging(
     let cpl_config = crate::cpl::CplConfig {
         title: config.title.clone(),
         content_kind: config.content_type.as_cpl_kind().into(),
+        ratings: config.ratings.clone(),
+        content_version_label: config.content_versions.first().cloned(),
         reels: cpl_reels,
         standard: config.standard,
         main_sound,

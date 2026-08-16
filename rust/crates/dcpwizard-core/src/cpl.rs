@@ -7,6 +7,12 @@ pub struct CplConfig {
     pub title: String,
     pub content_kind: String,
     pub rating: String,
+    /// Certification ratings for the RatingList. Empty writes an empty list.
+    #[serde(default)]
+    pub ratings: Vec<crate::isdcf_name::Rating>,
+    /// LabelText of the ContentVersion element. None writes the title.
+    #[serde(default)]
+    pub content_version_label: Option<String>,
     pub reels: Vec<CplReel>,
     pub standard: crate::Standard,
     /// Packaged sound layout for the SMPTE CompositionMetadataAsset (ST 429-16).
@@ -253,7 +259,7 @@ pub fn active_area_from_cpl(cpl_xml: &str) -> Option<(u32, u32)> {
 
 /// Generate a Composition Playlist XML via the shared postkit writer.
 pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i32 {
-    use postkit::packaging::{self, DcpCpl, DcpCplReel};
+    use postkit::packaging::{self, DcpCpl, DcpCplReel, DcpRating};
 
     let namespace = match config.standard {
         crate::Standard::Smpte => packaging::ns::CPL_SMPTE,
@@ -294,8 +300,15 @@ pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i
         issue_date: time_now_iso(),
         // Bv2.1 8.1: present, and equal to the content title
         annotation_text: Some(config.title.clone()),
-        content_version_label: None,
-        ratings: Vec::new(),
+        content_version_label: config.content_version_label.clone(),
+        ratings: config
+            .ratings
+            .iter()
+            .map(|rating| DcpRating {
+                agency: rating.agency.clone(),
+                label: rating.label.clone(),
+            })
+            .collect(),
         reels,
     };
 
@@ -936,6 +949,58 @@ mod tests {
         assert!(xml.contains("<Id>urn:uuid:expected</Id>"));
         assert!(xml.contains("<ContentTitleText>Interop Test</ContentTitleText>"));
         assert!(xml.contains("PROTO-ASDCP-CPL-20040511"));
+    }
+
+    #[test]
+    fn ratings_and_the_content_version_label_reach_the_xml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let config = CplConfig {
+            title: "Rated".into(),
+            content_kind: "feature".into(),
+            ratings: vec![
+                crate::isdcf_name::Rating {
+                    agency: "http://www.mpaa.org/2003-ratings".into(),
+                    label: "PG-13".into(),
+                },
+                crate::isdcf_name::Rating {
+                    agency: "http://www.bbfc.co.uk/BBFCRatings".into(),
+                    label: "15".into(),
+                },
+            ],
+            content_version_label: Some("Final Cut".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(xml.contains("<LabelText>Final Cut</LabelText>"), "{xml}");
+        assert!(
+            xml.contains("<Agency>http://www.mpaa.org/2003-ratings</Agency>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<Label>PG-13</Label>"), "{xml}");
+        assert!(
+            xml.find("<Agency>http://www.mpaa.org/2003-ratings</Agency>")
+                < xml.find("<Agency>http://www.bbfc.co.uk/BBFCRatings</Agency>"),
+            "ratings keep the order they were given: {xml}"
+        );
+    }
+
+    #[test]
+    fn no_content_version_label_writes_the_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let config = CplConfig {
+            title: "Unlabelled".into(),
+            content_kind: "feature".into(),
+            ..Default::default()
+        };
+
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(xml.contains("<LabelText>Unlabelled</LabelText>"), "{xml}");
+        assert!(xml.contains("<RatingList/>"), "{xml}");
     }
 
     fn stereo_reel() -> CplReel {

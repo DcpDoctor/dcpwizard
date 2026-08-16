@@ -89,6 +89,16 @@ pub struct DcpConfig {
     /// config's soundfield layout (0 = SLVS-only, no leading soundfield).
     #[serde(default)]
     pub sign_language_main_channels: Option<u32>,
+    /// RFC 5646 language the main soundtrack is spoken in. Names the audio in an
+    /// ISDCF content title.
+    #[serde(default)]
+    pub audio_language: Option<String>,
+    /// Certification ratings, written into the CPL's RatingList.
+    #[serde(default)]
+    pub ratings: Vec<crate::isdcf_name::Rating>,
+    /// Content versions. The first is the CPL's ContentVersion LabelText.
+    #[serde(default)]
+    pub content_versions: Vec<String>,
     /// ST 429-16 composition identity, written into the CompositionMetadataAsset.
     #[serde(default)]
     pub release_territory: Option<String>,
@@ -1021,6 +1031,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let cpl_config = crate::cpl::CplConfig {
         title: config.title.clone(),
         content_kind: config.content_type.as_cpl_kind().into(),
+        ratings: config.ratings.clone(),
+        content_version_label: config.content_versions.first().cloned(),
         reels: vec![reel],
         standard: config.standard,
         main_sound,
