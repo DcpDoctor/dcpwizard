@@ -40,6 +40,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Edit** CPL metadata (title/annotation/content-kind/issuer) without re-wrapping essence via `edit --input`
 - **Decrypt** an encrypted DCP to cleartext via `decrypt --input --output` with `--kdm --recipient-key` or `--keys`
 - **Sign-language video** track via `create --sign-language-video <file> --sign-language-lang <rfc5646>` (ISDCF Doc 13, SLVS on sound channel 15)
+- **ISDCF content titles** via `create --isdcf-name`: the title is rebuilt to the ISDCF naming convention from what the package actually carries (content type, container aspect, audio and text languages, channel ladder, territory and rating, resolution, studio, date, facility, standard). `--audio-lang`, `--rating AGENCY=LABEL` (repeatable), `--content-version` (repeatable), `--studio`, `--territory-type`, `--isdcf-date`, `--temp-version`, `--pre-release`, `--red-band`, `--two-d-version-of-three-d` and `--version-file` feed it, and the metadata among them lands in the CPL with or without the naming flag
+- **Ratings and content version in the CPL**: `--rating` fills the `RatingList` and the first `--content-version` is the `ContentVersion` LabelText
 - **Bv2.1 CompositionMetadataAsset** (ST 429-16) in the first reel of SMPTE CPLs, with `MainSoundConfiguration` derived from the packaged channel count
 - **CPL markers** (ST 429-7 `MainMarkers`) in every created composition: FFOC/LFOC by default, or place any of the ten defined markers with `create --marker LABEL=timecode` (repeatable, frame number or HH:MM:SS:FF; single-reel only)
 - **Re-ingest packaging** via `ingest-package <dir>`: rebuild ASSETMAP and PKL to cover every asset file present (for exported OV/VF folders whose ASSETMAP/PKL omit hardlinked assets), no re-wrap
@@ -303,6 +305,14 @@ dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./
 
 # Force the source decode range (corrects wrong/absent range flags)
 dcpwizard create --title "My Film" --video movie.mov --output ./dcp --input-range full
+
+# Name the DCP by the ISDCF convention. --title is the human title the content
+# title is built from. The rating and the content version also land in the CPL.
+# This one names the package
+#   MyFilm_FTR-1_F_EN-XX_20_2K_ABC_20260816_SMPTE_OV
+dcpwizard create --title "My Film" --video movie.mov --audio stereo.wav --output ./dcp \
+    --isdcf-name --content-type FTR --audio-lang en --studio ABC \
+    --rating "http://www.mpaa.org/2003-ratings=PG-13" --content-version "Final Cut"
 
 # Sign-language video track (ISDCF Doc 13, carried on sound channel 15)
 dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./dcp \

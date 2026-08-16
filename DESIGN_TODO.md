@@ -8,6 +8,22 @@ user-facing surface is here.
 
 ## Open
 
+- ISDCF naming, two open ends. The title builder takes free-text studio codes and
+  territories, where it could pull the current ISDCF registry instead of naming
+  from whatever the user typed. And the GUI builds the name at submit time, before
+  any frame is encoded, so a package whose picture resolution is Auto is named from
+  the flat fallback aspect rather than the raster the encoder lands on. The CLI
+  names after the encode and gets it right. CORE isdcf_title.rs, GUI pipeline.rs.
+- The sound MXF declares the wrong spoken language. Every PCM wrap comes out with
+  `RFC5646SpokenLanguage` = `en-US` on the soundfield group and every channel,
+  whatever `DcpConfig::audio_language` says, so a French package claims English
+  audio. asdcplib's MCA config parser takes the language as a second argument to
+  `DecodeString` (defaulted to `en-US`) and refuses the per-channel `TOKEN:lang`
+  form for anything but SLVS, and postkit's `asdcp_pcm_writer_open_write_mca` shim
+  passes no language at all. Fixing it is a language parameter on that shim and on
+  `MxfWrapOptions`, then a postkit pin bump. Nothing in this repo can reach it.
+  Verified by reading the labels back with `pcm::MxfReader::mca_label_subdescriptors`
+  (see the assertion in CORE tests/isdcf_naming.rs).
 - Cross-platform embedded preview: all three hosts are implemented in guikit
   (linux GtkGLArea verified live, macos NSOpenGLView layered over the WKWebView,
   windows WS_CHILD window with wgl over the WebView2 child), pinned here and in
@@ -132,9 +148,6 @@ user-facing surface is here.
   rasteriser was built to enable (they cannot work through ffmpeg's `subtitles`
   filter, which styles from the subtitle file rather than from flags), so this is the
   remaining half of the burn-in bullet. PK subtitle_raster.rs is where they land.
-  Knock-on for whatever lands ISDCF naming: the name spells a burnt-in subtitle
-  language in lower case where an open one is upper case, so it needs to know which
-  it is (a burnt package registers no timed-text track, which is the signal).
   Separately, cosmic-text's bidi handling could replace the hand-rolled
   `--subtitle-rtl` reshaping.
 - The standalone `burnin` command is now redundant for DCP work. `create
@@ -221,9 +234,6 @@ should also land there and are noted in its DESIGN_TODO.
 - Unverified parity claim: their "Force Wild Track Format" toggle conforms any
   audio to a 16-channel container with silent fill and no upmix. Check whether we
   can pad to 16ch without upmixing before claiming we match. DCP-only.
-- When ISDCF naming lands, copy their live-registry idea: the title builder pulls
-  the current ISDCF registry (studio codes, territories) instead of vendoring a
-  snapshot.
 
 ## Done 2026-08-12
 
