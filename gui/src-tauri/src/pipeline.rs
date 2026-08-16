@@ -309,6 +309,9 @@ struct JobConfig {
     // one interleaved WAV, replacing audio_path
     audio_channel_dir: Option<String>,
     audio_input_order: dcpwizard_core::mxf_wrap::AudioInputOrder,
+    // how many channels the packaged sound track is filled to. None widens 5.1
+    // to 16 and packages every other source at its own width
+    audio_channels: Option<u32>,
     // sign-language video (ISDCF Doc 13) packed onto sound channel 15
     sign_language_video: Option<String>,
     sign_language_tag: Option<String>,
@@ -492,6 +495,7 @@ pub async fn submit_job(
     true_peak_ceiling: Option<f64>,
     audio_channel_dir: Option<String>,
     audio_input_order: Option<String>,
+    audio_channels: Option<u32>,
     audio_map: Option<String>,
     crop_left: Option<u32>,
     crop_right: Option<u32>,
@@ -867,6 +871,7 @@ pub async fn submit_job(
         true_peak_ceiling,
         audio_channel_dir: audio_channel_dir.filter(|s| !s.is_empty()),
         audio_input_order,
+        audio_channels,
         audio_map,
         picture,
         sign_language_video,
@@ -977,6 +982,7 @@ fn job_plan(job: &JobConfig) -> dcpwizard_core::preflight::CreatePlan {
             .map(PathBuf::from),
         audio_map: job.audio_map.clone(),
         upmix: job.upmix.is_some(),
+        audio_channels: job.audio_channels,
         audio_language: job.naming.audio_language.clone(),
         subtitle: job.subtitle.as_ref().map(PathBuf::from),
         ccap: job.ccap.as_ref().map(PathBuf::from),
@@ -1922,6 +1928,7 @@ fn build_dcp_config(
         j2k_dir: Some(j2k_dir),
         audio_path,
         audio_input_order: job.audio_input_order,
+        audio_channels: job.audio_channels,
         atmos_path: job.atmos.as_ref().map(PathBuf::from),
         subtitle_path: job.subtitle.as_ref().map(PathBuf::from),
         subtitle_language: job.subtitle_language.clone(),
@@ -2347,6 +2354,7 @@ mod tests {
             true_peak_ceiling: None,
             audio_channel_dir: None,
             audio_input_order: AudioInputOrder::Canonical51,
+            audio_channels: None,
             sign_language_video: None,
             sign_language_tag: None,
             pad_head: None,

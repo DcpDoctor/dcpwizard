@@ -21,10 +21,6 @@ const LOUD_TRUE_PEAK_DBTP: f64 = -3.0;
 const FEWEST_PACKAGED_CHANNELS: u32 = 6;
 /// The channel counts a distributor expects a DCP sound track to carry.
 const EXPECTED_PACKAGED_CHANNELS: [u32; 2] = [8, 16];
-/// A 5.1 WAV is expanded to the 16-channel DCP layout at wrap time, so that is
-/// what a 5.1 source is packaged with.
-const CHANNELS_5_1: u32 = 6;
-const PACKAGED_5_1_CHANNELS: u32 = 16;
 
 /// The two container ratios every projector masks to.
 const FLAT_RATIO: f64 = 1.85;
@@ -168,7 +164,9 @@ fn sound_channel_hints(facts: &HintFacts) -> Vec<Hint> {
             text: format!(
                 "The sound track is packaged with {channels} channels. Fewer than \
                  {FEWEST_PACKAGED_CHANNELS} can trouble a projector, and the channels the \
-                 content does not fill cost only silence."
+                 content does not fill cost only silence. Pass --audio-channels \
+                 {FEWEST_PACKAGED_CHANNELS} (or {}) to fill the rest with silence.",
+                EXPECTED_PACKAGED_CHANNELS[1]
             ),
         });
     }
@@ -587,21 +585,17 @@ fn probe_hint_facts(plan: &CreatePlan) -> HintFacts {
 }
 
 /// How many channels the sound track lands with: what the map or the upmix
-/// leaves, widened by the wrap's own 5.1 padding.
+/// leaves, filled to the count the job asked for, or widened by the wrap's own
+/// 5.1 padding when it asked for none.
 fn packaged_channels(plan: &CreatePlan) -> Option<u32> {
-    let wav = plan.packaged_wav()?;
-    let source_channels = u32::from(crate::preflight::read_wav_spec(wav).ok()?.channels);
-    let channels = match (&plan.audio_map, plan.upmix) {
-        (Some(spec), _) => crate::audio_map::parse_audio_map(spec, source_channels as usize)
-            .ok()?
-            .output_channels() as u32,
-        (None, true) => CHANNELS_5_1,
-        (None, false) => source_channels,
-    };
-    Some(if channels == CHANNELS_5_1 {
-        PACKAGED_5_1_CHANNELS
-    } else {
-        channels
+    let channels = crate::preflight::content_channels(plan)?;
+    Some(match plan.audio_channels {
+        Some(count) => count,
+        // the wrap widens a 5.1 source to the 16-channel DCP layout on its own
+        None if channels == crate::mxf_wrap::CANONICAL_51_CHANNELS => {
+            crate::mxf_wrap::DEFAULT_PACKAGED_51_CHANNELS
+        }
+        None => channels,
     })
 }
 
@@ -720,6 +714,12 @@ mod tests {
             ..facts()
         };
         assert!(mentions(&stereo, "Fewer than 6"), "{:?}", texts(&stereo));
+        // the hint names the flag that fixes it
+        assert!(
+            mentions(&stereo, "--audio-channels 6 (or 16)"),
+            "{:?}",
+            texts(&stereo)
+        );
         assert!(mentions(&stereo, "not 8 or 16"), "{:?}", texts(&stereo));
 
         let six = HintFacts {

@@ -544,6 +544,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             if let Ok(ch) = crate::mxf_wrap::wav_channels(&prepared)
                 && let Some(configuration) = crate::cpl::main_sound_configuration(
                     ch as u32,
+                    ch as u32,
                     config.hi_channel,
                     config.vi_channel,
                 )

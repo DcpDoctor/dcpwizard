@@ -47,6 +47,9 @@ pub struct CreatePlan {
     pub audio_map: Option<String>,
     /// Whether the stereo-to-5.1 upmix is in use.
     pub upmix: bool,
+    /// How many channels the packaged sound track is filled to. None leaves the
+    /// wrap's own rule, which widens 5.1 to 16 and touches nothing else.
+    pub audio_channels: Option<u32>,
     pub audio_language: Option<String>,
     pub subtitle: Option<PathBuf>,
     pub ccap: Option<PathBuf>,
@@ -88,6 +91,7 @@ impl Default for CreatePlan {
             audio: None,
             audio_map: None,
             upmix: false,
+            audio_channels: None,
             audio_language: None,
             subtitle: None,
             ccap: None,
@@ -149,6 +153,7 @@ pub fn check_before_encode(plan: &CreatePlan) -> Result<(), String> {
     }
     check_reel_splitting(plan)?;
     check_audio_map(plan)?;
+    check_audio_channels(plan)?;
     check_active_area(plan)?;
     check_audio_frame_alignment(plan)?;
     check_atmos(plan)?;
@@ -221,6 +226,35 @@ fn check_audio_map(plan: &CreatePlan) -> Result<(), String> {
         return Ok(());
     };
     crate::audio_map::parse_audio_map(spec, crate::audio_map::probe_channel_count(wav)?).map(|_| ())
+}
+
+/// How many channels the content fills once the map or the upmix has placed
+/// them, before any silent fill. None when there is no WAV to read yet.
+pub(crate) fn content_channels(plan: &CreatePlan) -> Option<u32> {
+    let wav = plan.packaged_wav()?;
+    let source_channels = u32::from(read_wav_spec(wav).ok()?.channels);
+    match (&plan.audio_map, plan.upmix) {
+        (Some(spec), _) => Some(
+            crate::audio_map::parse_audio_map(spec, source_channels as usize)
+                .ok()?
+                .output_channels() as u32,
+        ),
+        (None, true) => Some(crate::mxf_wrap::CANONICAL_51_CHANNELS),
+        (None, false) => Some(source_channels),
+    }
+}
+
+/// Filling adds silent channels, so a source wider than the count asked for has
+/// nowhere to go. The wrap refuses it too, and this says so before the encode.
+fn check_audio_channels(plan: &CreatePlan) -> Result<(), String> {
+    let Some(packaged) = plan.audio_channels else {
+        return Ok(());
+    };
+    crate::mxf_wrap::check_packaged_channel_count(packaged)?;
+    let Some(content) = content_channels(plan) else {
+        return Ok(());
+    };
+    crate::mxf_wrap::check_source_fits_packaged_channels(content, packaged)
 }
 
 /// The active area a container declares has to fit inside the frames the encoder
@@ -422,6 +456,45 @@ mod tests {
 
         plan.geometry.container = Some((1920, 1080));
         assert_eq!(check_before_encode(&plan), Ok(()));
+    }
+
+    /// Filling only adds silence, so a source the packaged count cannot hold is
+    /// refused at plan time, not an encode later.
+    #[test]
+    fn a_source_wider_than_the_packaged_channel_count_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let codestreams = dir.path().join("j2k");
+        write_codestreams(&codestreams, 1, 2048, 1080);
+        let wav = dir.path().join("sound.wav");
+        write_wav(&wav, 8, 48_000);
+
+        let mut plan = plan_with_picture(codestreams);
+        plan.audio = Some(wav);
+        plan.audio_channels = Some(6);
+        let error = check_before_encode(&plan).unwrap_err();
+        assert!(error.contains('8') && error.contains('6'), "{error}");
+        assert!(error.contains("--audio-map"), "{error}");
+
+        plan.audio_channels = Some(16);
+        assert_eq!(check_before_encode(&plan), Ok(()));
+    }
+
+    /// The upmix widens the content to 5.1 before the fill, so the count the
+    /// check measures is what the upmix leaves, not what the file carries.
+    #[test]
+    fn the_upmix_widens_the_content_the_packaged_count_is_measured_against() {
+        let dir = tempfile::tempdir().unwrap();
+        let codestreams = dir.path().join("j2k");
+        write_codestreams(&codestreams, 1, 2048, 1080);
+        let wav = dir.path().join("sound.wav");
+        write_wav(&wav, 2, 48_000);
+
+        let mut plan = plan_with_picture(codestreams);
+        plan.audio = Some(wav);
+        plan.upmix = true;
+        assert_eq!(content_channels(&plan), Some(6));
+        plan.audio_channels = Some(2);
+        assert!(check_before_encode(&plan).is_err());
     }
 
     #[test]

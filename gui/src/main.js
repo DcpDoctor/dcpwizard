@@ -1093,6 +1093,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       audioChannelDir: document.getElementById("prop-audio-channel-dir")?.value || null,
       audioMap: audioMapSpec(),
       audioInputOrder: document.getElementById("prop-audio-input-order")?.value || "dcp",
+      audioChannels: parseInt(document.getElementById("prop-audio-channels")?.value) || null,
       signLanguageVideo: document.getElementById("prop-sign-language-video")?.value || null,
       signLanguageTag: document.getElementById("prop-sign-language-tag")?.value || null,
       padHead: document.getElementById("prop-pad-head")?.value || null,

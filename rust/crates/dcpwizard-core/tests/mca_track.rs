@@ -35,7 +35,7 @@ fn write_wav(path: &std::path::Path, channels: u16) {
 fn six_channel_wav_wraps_with_mca_labels() {
     // the auto-derived config for 6 channels is 5.1
     assert_eq!(
-        build_mca_config(6, None, None).as_deref(),
+        build_mca_config(6, 6, None, None).as_deref(),
         Some("51(L,R,C,LFE,Ls,Rs)")
     );
 

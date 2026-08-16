@@ -89,6 +89,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Loudness measurement**, EBU R128 / ATSC A/85
 - **Loudness normalization** to a target via `create --loudness-target leqm=<db>|lufs=<v>` (with `--true-peak-ceiling`)
 - **Channel mapping matrix** via `create --audio-map <IN:OUT[@GAIN],...>`: any source channel to any DCP lane at any gain in dB, summing where several land on one lane. OUT is a lane name (L, R, C, LFE, Ls, Rs, Lc, Rc, BsL, BsR, HI, VI) or a 1-based number, and the track is widened to the smallest DCP sound layout that holds every named lane
+- **Packaged channel count** via `create --audio-channels 2|6|8|16`: the sound track is filled with silent channels up to the count, so a stereo source ships in a 16-channel container without an upmix. Without the flag a 5.1 source is widened to 16 and everything else is packaged at its own width. A source wider than the count is refused, with `--audio-map` to fold channels instead
 - **Stereo→5.1 upmix** at create via `create --upmix a|b`
 - **Audio delay** via `create --audio-delay <ms>` (positive later, negative earlier), keeping the running time
 - **Filename channel auto-routing**: point `create --audio` at a directory of mono `name_L.wav`/`_R`/`_C`/`_Lfe`/`_Ls`/`_Rs`… files

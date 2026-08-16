@@ -29,6 +29,11 @@ pub struct DcpConfig {
     /// Declared channel order for a six-channel input WAV. DCPwizard never
     /// guesses this order.
     pub audio_input_order: crate::mxf_wrap::AudioInputOrder,
+    /// How many channels the packaged sound track carries, filled with silence
+    /// past what the content holds. None widens a 5.1 source to 16 and packages
+    /// every other source at its own width.
+    #[serde(default)]
+    pub audio_channels: Option<u32>,
     /// SRT subtitle file to convert, or supplied SMPTE timed-text XML to wrap as
     /// a subtitle track.
     pub subtitle_path: Option<PathBuf>,
@@ -440,7 +445,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             let output = config
                 .output_dir
                 .join(format!(".dcpwizard_audio_{}.wav", uuid::Uuid::new_v4()));
-            match crate::mxf_wrap::prepare_51_audio(path, &output, config.audio_input_order) {
+            match crate::mxf_wrap::prepare_packaged_channels(
+                path,
+                &output,
+                config.audio_input_order,
+                config.audio_channels,
+            ) {
                 Ok(true) => Some(output),
                 Ok(false) => None,
                 Err(e) => {
@@ -673,11 +683,16 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else {
             None
         };
-        // derive ST 429-12 MCA labels from the probed channel count plus any
-        // HI/VI accessibility channel flags
-        let channels = match crate::mxf_wrap::wav_channels(audio_path) {
-            Ok(ch) => ch as u32,
-            Err(e) => {
+        // labels follow the content, counts follow the container: the fill added
+        // silent channels the soundfield must not claim, so the source is probed
+        // for the layout and the prepared file for the width
+        let content_source = config.audio_path.as_deref().unwrap_or(audio_path.as_path());
+        let (content_channels, packaged_channels) = match (
+            crate::mxf_wrap::wav_channels(content_source),
+            crate::mxf_wrap::wav_channels(audio_path),
+        ) {
+            (Ok(content), Ok(packaged)) => (content as u32, packaged as u32),
+            (Err(e), _) | (_, Err(e)) => {
                 tracing::error!("{e}");
                 return -1;
             }
@@ -687,24 +702,33 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         // the layout from the channel count plus any HI/VI channels.
         let mca_labels = if let Some(lang) = config.sign_language_lang.as_ref() {
             let main_ch = config.sign_language_main_channels.unwrap_or(0);
-            let main = crate::mxf_wrap::build_mca_config(main_ch, None, None).unwrap_or_default();
+            let main =
+                crate::mxf_wrap::build_mca_config(main_ch, main_ch, None, None).unwrap_or_default();
             Some(crate::sign_language::slvs_mca_config(
                 &main,
                 main_ch as usize,
                 lang,
             ))
         } else {
-            crate::mxf_wrap::build_mca_config(channels, config.hi_channel, config.vi_channel)
+            crate::mxf_wrap::build_mca_config(
+                content_channels,
+                packaged_channels,
+                config.hi_channel,
+                config.vi_channel,
+            )
         };
         let mca_config = mca_labels.map(|labels| postkit::mxf_wrap::McaConfig {
             labels,
             spoken_language: config.audio_language.clone(),
         });
-        // MainSoundConfiguration for the CPL metadata asset, from the same channel
-        // count as the MCA labels (silent fill channels become '-').
-        if let Some(configuration) =
-            crate::cpl::main_sound_configuration(channels, config.hi_channel, config.vi_channel)
-        {
+        // MainSoundConfiguration for the CPL metadata asset, from the same counts
+        // as the MCA labels (silent fill channels become '-').
+        if let Some(configuration) = crate::cpl::main_sound_configuration(
+            content_channels,
+            packaged_channels,
+            config.hi_channel,
+            config.vi_channel,
+        ) {
             let sample_rate = crate::mxf_wrap::wav_sample_rate(audio_path).unwrap_or(48000);
             main_sound = Some(crate::cpl::MainSound {
                 configuration,

@@ -509,12 +509,16 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                     return -1;
                 }
             };
-            let mca_config =
-                crate::mxf_wrap::build_mca_config(channels, config.hi_channel, config.vi_channel)
-                    .map(|labels| postkit::mxf_wrap::McaConfig {
-                        labels,
-                        spoken_language: config.audio_language.clone(),
-                    });
+            let mca_config = crate::mxf_wrap::build_mca_config(
+                channels,
+                channels,
+                config.hi_channel,
+                config.vi_channel,
+            )
+            .map(|labels| postkit::mxf_wrap::McaConfig {
+                labels,
+                spoken_language: config.audio_language.clone(),
+            });
             let wrapped = crate::mxf_wrap::wrap_mxf_files(
                 vec![wav_tmp.clone()],
                 &sound_path,
@@ -704,7 +708,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     let main_sound = wav.as_ref().and_then(|(path, info)| {
         let ch = crate::mxf_wrap::wav_channels(path).ok()? as u32;
         let configuration =
-            crate::cpl::main_sound_configuration(ch, config.hi_channel, config.vi_channel)?;
+            crate::cpl::main_sound_configuration(ch, ch, config.hi_channel, config.vi_channel)?;
         Some(crate::cpl::MainSound {
             configuration,
             sample_rate: info.sample_rate,

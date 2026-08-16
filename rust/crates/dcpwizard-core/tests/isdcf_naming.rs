@@ -189,3 +189,67 @@ fn a_named_dcp_carries_its_isdcf_title_ratings_and_content_version() {
         "every MCA label carries the audio language, got {languages:?}"
     );
 }
+
+/// Filling the packaged track with silence does not change what the content is,
+/// so a stereo source asked for 16 channels is still named 20. The CLI reads the
+/// count off `audio_path`, which is the source, because the fill happens at wrap
+/// time.
+#[test]
+fn a_stereo_source_filled_to_sixteen_channels_is_still_named_20() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let audio = dir.path().join("stereo.wav");
+    if !make_stereo_wav(&audio) {
+        eprintln!("skipping: ffmpeg could not synthesize the test sound");
+        return;
+    }
+    let out = dir.path().join("dcp");
+
+    let mut config = DcpConfig {
+        title: "My Film".into(),
+        standard: dcpwizard_core::Standard::Smpte,
+        resolution: dcpwizard_core::Resolution::TwoK,
+        content_type: dcpwizard_core::ContentType::Test,
+        frame_rate_num: FPS,
+        frame_rate_den: 1,
+        container_width: WIDTH,
+        container_height: HEIGHT,
+        output_dir: out.clone(),
+        j2k_dir: Some(make_frames(&dir.path().join("frames"))),
+        audio_path: Some(audio.clone()),
+        audio_channels: Some(16),
+        audio_language: Some("en".into()),
+        ..Default::default()
+    };
+
+    let channels = dcpwizard_core::mxf_wrap::wav_channels(&audio).unwrap();
+    assert_eq!(channels, 2, "the source is what the name is read from");
+    let sound = soundtrack_summary(channels as usize, None, None);
+    let options = IsdcfNamingOptions {
+        date: Some(DATE),
+        ..Default::default()
+    };
+    let name = isdcf_title(&config, &options, &sound, false);
+    assert!(name.contains("_20_"), "stereo content is named 20: {name}");
+    config.title = name.clone();
+
+    assert_eq!(create_dcp(&config), 0);
+
+    let cpl = read_cpl(&out);
+    assert!(
+        cpl.contains(&format!("<ContentTitleText>{name}</ContentTitleText>")),
+        "{cpl}"
+    );
+    // the container is 16 channels wide, and the 14 the content does not fill
+    // are silent, so they carry no soundfield label
+    assert!(
+        cpl.contains(
+            "<meta:MainSoundConfiguration>20/L,R,-,-,-,-,-,-,-,-,-,-,-,-,-,-\
+             </meta:MainSoundConfiguration>"
+        ),
+        "{cpl}"
+    );
+}

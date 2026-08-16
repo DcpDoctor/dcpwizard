@@ -122,13 +122,55 @@ pub fn wav_sample_rate(path: &std::path::Path) -> Result<u32, String> {
     wav_fmt(path).map(|(_, sr)| sr)
 }
 
-/// Expand a six-channel WAV to DCP's 16-channel PCM layout. The first six
-/// channels are canonical DCP 5.1 and channels 7 through 16 are silent.
-/// Returns false when the source is not 5.1 and was left untouched.
-pub fn prepare_51_audio(
+/// The sound layouts a DCP track is packaged with. Nothing in DCP carries a
+/// track of any other width.
+pub const PACKAGED_CHANNEL_COUNTS: [u32; 4] = [2, 6, 8, 16];
+
+/// A canonical DCP 5.1 track: L, R, C, LFE, Ls, Rs.
+pub const CANONICAL_51_CHANNELS: u32 = 6;
+/// What a 5.1 source is packaged with when nothing asks for a count.
+pub const DEFAULT_PACKAGED_51_CHANNELS: u32 = 16;
+
+/// Refuse a packaged channel count that is not a DCP sound layout.
+pub fn check_packaged_channel_count(count: u32) -> Result<(), String> {
+    if PACKAGED_CHANNEL_COUNTS.contains(&count) {
+        return Ok(());
+    }
+    Err(format!(
+        "{count} is not a DCP sound layout: package {}, {}, {} or {} channels",
+        PACKAGED_CHANNEL_COUNTS[0],
+        PACKAGED_CHANNEL_COUNTS[1],
+        PACKAGED_CHANNEL_COUNTS[2],
+        PACKAGED_CHANNEL_COUNTS[3]
+    ))
+}
+
+/// Refuse a source carrying more channels than the packaged track has room for.
+/// Filling adds silent channels, so it can never narrow a track.
+pub fn check_source_fits_packaged_channels(
+    source_channels: u32,
+    packaged_channels: u32,
+) -> Result<(), String> {
+    if source_channels <= packaged_channels {
+        return Ok(());
+    }
+    Err(format!(
+        "the sound carries {source_channels} channels, more than the {packaged_channels} \
+         asked for: fold them onto {packaged_channels} lanes with --audio-map, or package \
+         {source_channels} channels or more"
+    ))
+}
+
+/// Lay a WAV out the way the packaged sound track carries it: a six-channel
+/// source is reordered to canonical DCP 5.1, then silent channels fill the track
+/// up to `packaged_channels`. None keeps the wrap's own rule, where 5.1 is
+/// widened to 16 and every other source is left as it is. Returns false when the
+/// source was left untouched and no file was written.
+pub fn prepare_packaged_channels(
     input: &Path,
     output: &Path,
     input_order: AudioInputOrder,
+    packaged_channels: Option<u32>,
 ) -> Result<bool, String> {
     let data = std::fs::read(input).map_err(|e| format!("cannot read {}: {e}", input.display()))?;
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
@@ -158,10 +200,16 @@ pub fn prepare_51_audio(
         return Err(format!("no data chunk found in {}", input.display()));
     };
     let format = u16::from_le_bytes(fmt[0..2].try_into().unwrap());
-    let channels = u16::from_le_bytes(fmt[2..4].try_into().unwrap());
-    if channels != 6 {
-        return Ok(false);
-    }
+    let channels = u32::from(u16::from_le_bytes(fmt[2..4].try_into().unwrap()));
+    let target_channels = match packaged_channels {
+        Some(count) => {
+            check_packaged_channel_count(count)?;
+            check_source_fits_packaged_channels(channels, count)?;
+            count
+        }
+        None if channels == CANONICAL_51_CHANNELS => DEFAULT_PACKAGED_51_CHANNELS,
+        None => return Ok(false),
+    };
     // ffmpeg writes >2ch pcm as WAVE_FORMAT_EXTENSIBLE (0xFFFE); the real
     // format code is the first two bytes of the SubFormat guid
     let is_pcm = format == 1
@@ -177,23 +225,28 @@ pub fn prepare_51_audio(
         return Err(format!("{} has unsupported PCM bit depth", input.display()));
     }
     let sample_bytes = (bits / 8) as usize;
-    let source_frame_bytes = sample_bytes * 6;
+    let source_frame_bytes = sample_bytes * channels as usize;
     if payload.len() % source_frame_bytes != 0 {
         return Err(format!("{} has incomplete audio frames", input.display()));
     }
 
-    let order = match input_order {
-        AudioInputOrder::Canonical51 => [0, 1, 2, 3, 4, 5],
-        AudioInputOrder::LrcLsRsLfe => [0, 1, 2, 5, 3, 4],
+    let order: Vec<usize> = if channels == CANONICAL_51_CHANNELS {
+        match input_order {
+            AudioInputOrder::Canonical51 => vec![0, 1, 2, 3, 4, 5],
+            AudioInputOrder::LrcLsRsLfe => vec![0, 1, 2, 5, 3, 4],
+        }
+    } else {
+        (0..channels as usize).collect()
     };
-    let output_frame_bytes = sample_bytes * 16;
+    let output_frame_bytes = sample_bytes * target_channels as usize;
+    let silent_bytes = output_frame_bytes - source_frame_bytes;
     let mut wav = Vec::with_capacity(44 + payload.len() / source_frame_bytes * output_frame_bytes);
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&0u32.to_le_bytes());
     wav.extend_from_slice(b"WAVEfmt ");
     wav.extend_from_slice(&16u32.to_le_bytes());
     wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(&(target_channels as u16).to_le_bytes());
     wav.extend_from_slice(&sample_rate.to_le_bytes());
     wav.extend_from_slice(&(sample_rate * output_frame_bytes as u32).to_le_bytes());
     wav.extend_from_slice(&(output_frame_bytes as u16).to_le_bytes());
@@ -201,11 +254,11 @@ pub fn prepare_51_audio(
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&0u32.to_le_bytes());
     for frame in payload.chunks_exact(source_frame_bytes) {
-        for channel in order {
+        for channel in &order {
             let start = channel * sample_bytes;
             wav.extend_from_slice(&frame[start..start + sample_bytes]);
         }
-        wav.extend(std::iter::repeat_n(0, sample_bytes * 10));
+        wav.extend(std::iter::repeat_n(0, silent_bytes));
     }
     let data_size = (wav.len() - 44) as u32;
     let riff_size = wav.len() as u32 - 8;
@@ -215,21 +268,26 @@ pub fn prepare_51_audio(
     Ok(true)
 }
 
-/// Build a ST 429-12 MCA config for a sound wrap from the channel count plus
-/// optional accessibility (HI/VI) channel indices. The main layout is 2.0/5.1/
-/// 7.1 by channel count; HI and VI-N are labelled as standalone channels at the
-/// given indices. Returns None when the layout has no asdcplib DCP label.
+/// Build a ST 429-12 MCA config for a sound wrap. The layout comes from the
+/// channels the content fills, the label count from the channels the track is
+/// packaged with, so the silent fill channels get '-' placeholders instead of
+/// claiming a soundfield they carry nothing of. HI and VI-N are labelled as
+/// standalone channels at the given indices. Returns None when the layout has no
+/// asdcplib DCP label.
 pub fn build_mca_config(
-    channel_count: u32,
+    content_channels: u32,
+    packaged_channels: u32,
     hi_channel: Option<u32>,
     vi_channel: Option<u32>,
 ) -> Option<String> {
     use postkit::mca::{McaLabel, McaTagSymbol};
 
     let extra = hi_channel.is_some() as u32 + vi_channel.is_some() as u32;
-    let main_count = channel_count.saturating_sub(extra);
+    let main_count = content_channels.saturating_sub(extra);
     // main layout by channel count; 8 is 7.1 here (postkit's detect_soundfield
     // treats 8 as 5.1+HI+VI, but accessibility tracks are opt-in via the flags).
+    // 16 is 5.1 because no content is 16 channels wide: a caller that knows only
+    // the packaged count is looking at the 5.1 track this wrap has always filled.
     let mut sf = match main_count {
         2 => postkit::mca::soundfield_stereo(),
         6 | 16 => postkit::mca::soundfield_51(),
@@ -254,7 +312,7 @@ pub fn build_mca_config(
     let mut config = postkit::mca::soundfield_to_mca_config(&sf)?;
     // asdcplib requires a label per physical channel; the silent fill channels
     // after the labeled ones get '-' placeholders
-    for _ in (sf.channels.len() as u32)..channel_count {
+    for _ in (sf.channels.len() as u32)..packaged_channels {
         config.push_str(",-");
     }
     Some(config)
@@ -318,12 +376,15 @@ pub fn wrap_mxf_files(
                 return None;
             }
             if mca_config.is_none() {
-                mca_config = build_mca_config(channels as u32, None, None).map(|labels| {
-                    postkit::mxf_wrap::McaConfig {
-                        labels,
-                        spoken_language: None,
-                    }
-                });
+                // nothing here knows what the content was, so the layout is read
+                // from the packaged count
+                mca_config =
+                    build_mca_config(channels as u32, channels as u32, None, None).map(|labels| {
+                        postkit::mxf_wrap::McaConfig {
+                            labels,
+                            spoken_language: None,
+                        }
+                    });
             }
         }
     }
@@ -627,19 +688,33 @@ mod tests {
 
     #[test]
     fn mca_config_by_channel_count() {
-        assert_eq!(build_mca_config(2, None, None).as_deref(), Some("L,R"));
+        assert_eq!(build_mca_config(2, 2, None, None).as_deref(), Some("L,R"));
         assert_eq!(
-            build_mca_config(6, None, None).as_deref(),
+            build_mca_config(6, 6, None, None).as_deref(),
             Some("51(L,R,C,LFE,Ls,Rs)")
         );
         assert_eq!(
-            build_mca_config(8, None, None).as_deref(),
+            build_mca_config(8, 8, None, None).as_deref(),
             Some("71(L,R,C,LFE,Ls,Rs,Lrs,Rrs)")
         );
         // 5.1 plus HI/VI accessibility channels at indices 6 and 7
         assert_eq!(
-            build_mca_config(8, Some(6), Some(7)).as_deref(),
+            build_mca_config(8, 8, Some(6), Some(7)).as_deref(),
             Some("51(L,R,C,LFE,Ls,Rs),HI,VIN")
+        );
+    }
+
+    /// Stereo filled to a wide track keeps the stereo labels: the fill channels
+    /// carry silence, not a 5.1 mix.
+    #[test]
+    fn filled_channels_are_placeholders_not_soundfield_labels() {
+        assert_eq!(
+            build_mca_config(2, 16, None, None).as_deref(),
+            Some("L,R,-,-,-,-,-,-,-,-,-,-,-,-,-,-")
+        );
+        assert_eq!(
+            build_mca_config(6, 8, None, None).as_deref(),
+            Some("51(L,R,C,LFE,Ls,Rs),-,-")
         );
     }
 
@@ -675,7 +750,9 @@ mod tests {
         }
         std::fs::write(&input, wav).unwrap();
 
-        assert!(prepare_51_audio(&input, &output, AudioInputOrder::Canonical51).unwrap());
+        assert!(
+            prepare_packaged_channels(&input, &output, AudioInputOrder::Canonical51, None).unwrap()
+        );
         assert_eq!(wav_channels(&output).unwrap(), 16);
     }
 
@@ -702,12 +779,127 @@ mod tests {
         }
         std::fs::write(&input, wav).unwrap();
 
-        assert!(prepare_51_audio(&input, &output, AudioInputOrder::Canonical51).unwrap());
+        assert!(
+            prepare_packaged_channels(&input, &output, AudioInputOrder::Canonical51, None).unwrap()
+        );
         assert_eq!(wav_channels(&output).unwrap(), 16);
         assert_eq!(
-            build_mca_config(16, None, None).as_deref(),
+            build_mca_config(6, 16, None, None).as_deref(),
             Some("51(L,R,C,LFE,Ls,Rs),-,-,-,-,-,-,-,-,-,-")
         );
+    }
+
+    /// A WAV with `channels` interleaved 8-bit samples, one sample per channel
+    /// per frame, counting up so a reorder or a fill is visible byte by byte.
+    fn write_counting_wav(path: &std::path::Path, channels: u16, frames: usize) {
+        let block_align = channels;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&48_000u32.to_le_bytes());
+        wav.extend_from_slice(&(48_000 * block_align as u32).to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        let payload: Vec<u8> = (1..=(channels as usize * frames) as u8).collect();
+        wav.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&payload);
+        let riff_size = wav.len() as u32 - 8;
+        wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        std::fs::write(path, wav).unwrap();
+    }
+
+    /// Stereo filled to a wider track keeps its samples where they were and pays
+    /// only silence for the rest.
+    #[test]
+    fn fills_stereo_to_the_requested_channel_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("stereo.wav");
+        write_counting_wav(&input, 2, 2);
+
+        for (target, expected_frame) in [
+            (6u32, vec![1u8, 2, 0, 0, 0, 0]),
+            (16, vec![1u8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ] {
+            let output = dir.path().join(format!("filled_{target}.wav"));
+            assert!(
+                prepare_packaged_channels(
+                    &input,
+                    &output,
+                    AudioInputOrder::Canonical51,
+                    Some(target)
+                )
+                .unwrap()
+            );
+            assert_eq!(wav_channels(&output).unwrap(), target as u16);
+            let written = std::fs::read(&output).unwrap();
+            let width = target as usize;
+            assert_eq!(&written[44..44 + width], expected_frame.as_slice());
+            // the second frame's source samples land bit-exact too
+            assert_eq!(&written[44 + width..44 + width + 2], &[3, 4]);
+        }
+    }
+
+    #[test]
+    fn fills_51_to_eight_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("five_one.wav");
+        let output = dir.path().join("eight.wav");
+        write_counting_wav(&input, 6, 2);
+
+        assert!(
+            prepare_packaged_channels(&input, &output, AudioInputOrder::Canonical51, Some(8))
+                .unwrap()
+        );
+        assert_eq!(wav_channels(&output).unwrap(), 8);
+        let written = std::fs::read(&output).unwrap();
+        assert_eq!(&written[44..52], &[1, 2, 3, 4, 5, 6, 0, 0]);
+    }
+
+    /// Asking for the count the source already has leaves the track that wide.
+    #[test]
+    fn an_explicit_six_keeps_a_51_source_at_six_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("five_one.wav");
+        let output = dir.path().join("six.wav");
+        write_counting_wav(&input, 6, 2);
+
+        assert!(
+            prepare_packaged_channels(&input, &output, AudioInputOrder::Canonical51, Some(6))
+                .unwrap()
+        );
+        assert_eq!(wav_channels(&output).unwrap(), 6);
+        assert_eq!(
+            &std::fs::read(&output).unwrap()[44..50],
+            &[1, 2, 3, 4, 5, 6]
+        );
+    }
+
+    /// Filling only adds silence, so a source wider than the count asked for is
+    /// refused rather than narrowed.
+    #[test]
+    fn refuses_a_source_wider_than_the_packaged_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("seven_one.wav");
+        let output = dir.path().join("six.wav");
+        write_counting_wav(&input, 8, 2);
+
+        let error =
+            prepare_packaged_channels(&input, &output, AudioInputOrder::Canonical51, Some(6))
+                .unwrap_err();
+        assert!(error.contains('8') && error.contains('6'), "{error}");
+        assert!(error.contains("--audio-map"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn refuses_a_packaged_count_that_is_not_a_dcp_layout() {
+        let error = check_packaged_channel_count(4).unwrap_err();
+        assert!(error.contains('4'), "{error}");
     }
 
     #[test]
@@ -731,7 +923,7 @@ mod tests {
         wav.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
         std::fs::write(&input, wav).unwrap();
 
-        prepare_51_audio(&input, &output, AudioInputOrder::LrcLsRsLfe).unwrap();
+        prepare_packaged_channels(&input, &output, AudioInputOrder::LrcLsRsLfe, None).unwrap();
         let wav = std::fs::read(output).unwrap();
         assert_eq!(&wav[44..50], &[1, 2, 3, 6, 4, 5]);
         assert!(wav[50..60].iter().all(|sample| *sample == 0));

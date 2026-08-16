@@ -157,6 +157,15 @@ fn parse_isdcf_date(spec: &str) -> Result<dcpwizard_core::isdcf_name::IsdcfDate,
     Ok(dcpwizard_core::isdcf_name::IsdcfDate { year, month, day })
 }
 
+/// clap value parser for `--audio-channels`: a DCP sound layout, as a count.
+fn parse_packaged_channels(value: &str) -> Result<u32, String> {
+    let count: u32 = value
+        .parse()
+        .map_err(|_| format!("'{value}' is not a channel count"))?;
+    dcpwizard_core::mxf_wrap::check_packaged_channel_count(count)?;
+    Ok(count)
+}
+
 /// Replace the title with the ISDCF content title, when asked for. The channel
 /// count comes from the packaged WAV, so this runs after the audio is prepared.
 fn apply_isdcf_name(
@@ -207,6 +216,11 @@ struct CreateAudioQol {
     /// a (band-split) or b (passthrough + delayed surrounds).
     #[arg(long, value_parser = ["a", "b"])]
     upmix: Option<String>,
+    /// Fill the packaged sound track with silent channels up to this count
+    /// (2, 6, 8 or 16). Without it a 5.1 source is widened to 16 and every
+    /// other source is packaged at its own width.
+    #[arg(long, value_parser = parse_packaged_channels)]
+    audio_channels: Option<u32>,
     /// Route the --audio channels to DCP lanes: comma-separated IN:OUT or
     /// IN:OUT@GAIN, where IN is a 1-based source channel, OUT a lane name
     /// (L, R, C, LFE, Ls, Rs, Lc, Rc, BsL, BsR, HI, VI) or number, and GAIN is
@@ -3259,6 +3273,7 @@ fn run() {
                 loudness_target,
                 true_peak_ceiling,
                 upmix,
+                audio_channels,
                 audio_map,
                 audio_gain,
                 audio_delay,
@@ -3691,6 +3706,7 @@ fn run() {
                 audio: audio.as_deref().map(PathBuf::from),
                 audio_map: audio_map.clone(),
                 upmix: upmix.is_some(),
+                audio_channels,
                 audio_language: naming.audio_language.clone(),
                 subtitle: subtitle.as_deref().map(PathBuf::from),
                 ccap: ccap.as_deref().map(PathBuf::from),
@@ -4244,6 +4260,7 @@ fn run() {
                     j2k_dir: Some(packaged_j2k_dir.clone()),
                     audio_path: audio_path.clone(),
                     audio_input_order,
+                    audio_channels,
                     subtitle_path: subtitle.clone().map(PathBuf::from),
                     subtitle_language: subtitle_language.clone(),
                     subtitle_opts: subtitle_opts.clone(),
@@ -4463,6 +4480,7 @@ fn run() {
                     j2k_dir: Some(packaged_j2k_dir),
                     audio_path,
                     audio_input_order,
+                    audio_channels,
                     subtitle_path: subtitle.map(PathBuf::from),
                     subtitle_language,
                     subtitle_opts,

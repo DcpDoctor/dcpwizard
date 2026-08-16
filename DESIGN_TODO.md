@@ -250,9 +250,6 @@ should also land there and are noted in its DESIGN_TODO.
   overlaps the encode is untouched here. imfwizard too.
 - Player HUD counters for buffer depth and dropped frames next to frame and fps.
   imfwizard too.
-- Unverified parity claim: their "Force Wild Track Format" toggle conforms any
-  audio to a 16-channel container with silent fill and no upmix. Check whether we
-  can pad to 16ch without upmixing before claiming we match. DCP-only.
 
 ## Done 2026-08-12
 

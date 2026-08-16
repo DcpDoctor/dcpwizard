@@ -430,26 +430,28 @@ const NS_CPL_META: &str = "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metad
 const UNM49_SCOPE: &str =
     "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metadata#scope/release-territory/UNM49";
 
-/// Build the ST 429-16 MainSoundConfiguration from the packaged sound MXF channel
-/// count plus optional HI/VI accessibility channels. Channels past the labeled
-/// soundfield are silent fill, written as '-'. Returns None for a layout with no
-/// canonical DCP label. `channel_count` is the wrapped MXF channel count (a 5.1
-/// source is padded to 16, so its config carries ten '-' placeholders).
+/// Build the ST 429-16 MainSoundConfiguration. The group comes from the channels
+/// the content fills, the slot count from the channels the track is packaged
+/// with, so the silent fill channels are written '-' rather than counted into
+/// the group. Returns None for a layout with no canonical DCP label.
 pub fn main_sound_configuration(
-    channel_count: u32,
+    content_channels: u32,
+    packaged_channels: u32,
     hi_channel: Option<u32>,
     vi_channel: Option<u32>,
 ) -> Option<String> {
     let extra = hi_channel.is_some() as u32 + vi_channel.is_some() as u32;
-    let main_count = channel_count.saturating_sub(extra);
-    // canonical DCP channel order per ISDCF / SMPTE RDD 52
+    let main_count = content_channels.saturating_sub(extra);
+    // canonical DCP channel order per ISDCF / SMPTE RDD 52. 16 is 5.1 because no
+    // content is 16 channels wide: a caller that knows only the packaged count is
+    // looking at the 5.1 track the wrap has always filled.
     let (group, labels): (&str, &[&str]) = match main_count {
         2 => ("20", &["L", "R"]),
         6 | 16 => ("51", &["L", "R", "C", "LFE", "Ls", "Rs"]),
         8 => ("71", &["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs"]),
         _ => return None,
     };
-    let mut slots = vec!["-"; channel_count as usize];
+    let mut slots = vec!["-"; packaged_channels as usize];
     for (i, l) in labels.iter().enumerate() {
         if let Some(slot) = slots.get_mut(i) {
             *slot = l;
@@ -833,26 +835,44 @@ mod tests {
     #[test]
     fn main_sound_configuration_by_channel_count() {
         assert_eq!(
-            main_sound_configuration(2, None, None).as_deref(),
+            main_sound_configuration(2, 2, None, None).as_deref(),
             Some("20/L,R")
         );
         assert_eq!(
-            main_sound_configuration(6, None, None).as_deref(),
+            main_sound_configuration(6, 6, None, None).as_deref(),
             Some("51/L,R,C,LFE,Ls,Rs")
         );
         assert_eq!(
-            main_sound_configuration(8, None, None).as_deref(),
+            main_sound_configuration(8, 8, None, None).as_deref(),
             Some("71/L,R,C,LFE,Lss,Rss,Lrs,Rrs")
         );
         // a 5.1 source padded to a 16-channel MXF carries ten '-' fills
         assert_eq!(
-            main_sound_configuration(16, None, None).as_deref(),
+            main_sound_configuration(6, 16, None, None).as_deref(),
             Some("51/L,R,C,LFE,Ls,Rs,-,-,-,-,-,-,-,-,-,-")
         );
         // HI/VI take their own channel slots after the main layout
         assert_eq!(
-            main_sound_configuration(8, Some(6), Some(7)).as_deref(),
+            main_sound_configuration(8, 8, Some(6), Some(7)).as_deref(),
             Some("51/L,R,C,LFE,Ls,Rs,HI,VIN")
+        );
+    }
+
+    /// Stereo filled to a wide track keeps the stereo group: the fill channels
+    /// carry silence, not a 5.1 mix.
+    #[test]
+    fn filled_channels_do_not_join_the_soundfield_group() {
+        assert_eq!(
+            main_sound_configuration(2, 16, None, None).as_deref(),
+            Some("20/L,R,-,-,-,-,-,-,-,-,-,-,-,-,-,-")
+        );
+        assert_eq!(
+            main_sound_configuration(2, 6, None, None).as_deref(),
+            Some("20/L,R,-,-,-,-")
+        );
+        assert_eq!(
+            main_sound_configuration(6, 8, None, None).as_deref(),
+            Some("51/L,R,C,LFE,Ls,Rs,-,-")
         );
     }
 

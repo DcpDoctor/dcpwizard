@@ -656,8 +656,12 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             .or_else(|| base_audio.as_ref().map(|(p, _)| p))
             .and_then(|path| {
                 let ch = crate::mxf_wrap::wav_channels(path).ok()? as u32;
-                let configuration =
-                    crate::cpl::main_sound_configuration(ch, config.hi_channel, config.vi_channel)?;
+                let configuration = crate::cpl::main_sound_configuration(
+                    ch,
+                    ch,
+                    config.hi_channel,
+                    config.vi_channel,
+                )?;
                 let sample_rate = crate::mxf_wrap::wav_sample_rate(path).unwrap_or(48000);
                 Some(crate::cpl::MainSound {
                     configuration,
@@ -931,8 +935,8 @@ pub(crate) fn wrap_subtitle_xml(
     })
 }
 
-/// Prepare an audio source to canonical DCP 5.1 layout when it is 5.1, else use
-/// it as-is. A converted temp file is tracked in `temps` for cleanup.
+/// Lay an audio source out the way the packaged track carries it, else use it
+/// as-is. A converted temp file is tracked in `temps` for cleanup.
 pub(crate) fn prepare_audio(
     config: &DcpConfig,
     path: &Path,
@@ -941,7 +945,12 @@ pub(crate) fn prepare_audio(
     let out = config
         .output_dir
         .join(format!(".dcpwizard_vaudio_{}.wav", uuid::Uuid::new_v4()));
-    match crate::mxf_wrap::prepare_51_audio(path, &out, config.audio_input_order) {
+    match crate::mxf_wrap::prepare_packaged_channels(
+        path,
+        &out,
+        config.audio_input_order,
+        config.audio_channels,
+    ) {
         Ok(true) => {
             temps.push(out.clone());
             Ok(out)
