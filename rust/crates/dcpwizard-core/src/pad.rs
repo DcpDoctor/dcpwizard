@@ -170,6 +170,19 @@ pub fn generate_black_frame(width: u32, height: u32, fps: u32, out: &Path) -> Re
     generate_solid_frame(width, height, fps, [0, 0, 0], out)
 }
 
+/// Sound is padded and sliced at frame edges, which only lands on whole samples
+/// when the sample rate divides by the frame rate. `preflight` applies the same
+/// rule to the source WAV before the encode.
+pub fn check_frame_aligned_sample_rate(sample_rate: u32, fps: u32) -> Result<(), String> {
+    if fps > 0 && sample_rate.is_multiple_of(fps) {
+        return Ok(());
+    }
+    Err(format!(
+        "audio {sample_rate} Hz is not an integer number of samples per {fps} fps frame; \
+         cannot pad or slice sample-accurately"
+    ))
+}
+
 /// Write `src` padded with `head_samples` of silence before and `tail_samples`
 /// after the PCM payload, sample-accurate at the given block alignment. Reuses
 /// [`crate::reel::parse_wav`] so the byte arithmetic matches reel slicing.

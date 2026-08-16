@@ -57,7 +57,7 @@ pub struct MxfWrapConfig {
 }
 
 /// Collect sorted files from a directory, or treat a single file as one-element list.
-fn collect_inputs(path: &std::path::Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn collect_inputs(path: &std::path::Path) -> Result<Vec<PathBuf>, String> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
     }

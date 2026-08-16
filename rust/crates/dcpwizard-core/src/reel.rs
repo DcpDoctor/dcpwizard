@@ -356,11 +356,8 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     let wav = match audio {
         Some(path) => match parse_wav(path) {
             Ok(w) => {
-                if w.sample_rate % fps != 0 {
-                    tracing::error!(
-                        "audio {} Hz is not an integer number of samples per {fps} fps frame",
-                        w.sample_rate
-                    );
+                if let Err(e) = crate::pad::check_frame_aligned_sample_rate(w.sample_rate, fps) {
+                    tracing::error!("{e}");
                     return -1;
                 }
                 Some((path, w))

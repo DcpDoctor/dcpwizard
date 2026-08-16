@@ -348,6 +348,16 @@ pub fn prepare_subtitle_burn(
         .map_err(|e| format!("cannot burn {}: {e}", input.display()))
 }
 
+/// Read a timed-text input the way the wrap will, so a file the packager cannot
+/// use is refused before the encode instead of after it. Supplied SMPTE DCST is
+/// wrapped unchanged, so detecting the kind is all the reading it gets.
+pub fn check_timed_text_readable(path: &Path, fps: u32) -> Result<(), String> {
+    if detect_subtitle_kind(path)? == SubtitleInputKind::SmpteDcstPassthrough {
+        return Ok(());
+    }
+    load_styled_cues(path, fps).map(|_| ())
+}
+
 /// Refuse a `--burn-subtitle` the encode cannot honour, before anything is
 /// encoded.
 ///

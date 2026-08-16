@@ -454,19 +454,16 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // multi-reel path is opt-in; the single-reel path below is unchanged
     if config.reel_length_minutes > 0 || !config.reel_split_frames.is_empty() {
-        if stereoscopic || config.atmos_path.is_some() {
-            tracing::error!("stereoscopic 3D and Atmos are not supported with reel splitting");
-            return -1;
-        }
-        if config.hdr_dci {
-            tracing::error!("--hdr-dci is not supported with reel splitting");
-            return -1;
-        }
-        if !config.markers.is_empty() {
-            tracing::error!(
-                "--marker is not supported with reel splitting: a marker offset is relative to \
-                 its own reel. A split composition gets the default FFOC/LFOC pair"
-            );
+        if let Err(e) =
+            crate::preflight::check_reel_split_support(&crate::preflight::ReelSplitContent {
+                splitting: true,
+                stereo_3d: stereoscopic,
+                atmos: config.atmos_path.is_some(),
+                hdr_dci: config.hdr_dci,
+                markers: !config.markers.is_empty(),
+            })
+        {
+            tracing::error!("{e}");
             return -1;
         }
         let mut reel_config = config.clone();
@@ -719,10 +716,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         let mut padded_audio: Option<PathBuf> = None;
         let wrap_source = if padding {
             let sample_rate = crate::mxf_wrap::wav_sample_rate(audio_path).unwrap_or(48000);
-            if !sample_rate.is_multiple_of(fps) {
-                tracing::error!(
-                    "audio {sample_rate} Hz is not an integer number of samples per {fps} fps frame; cannot pad sample-accurately"
-                );
+            if let Err(e) = crate::pad::check_frame_aligned_sample_rate(sample_rate, fps) {
+                tracing::error!("{e}");
                 return -1;
             }
             let spf = (sample_rate / fps) as u64;
@@ -895,8 +890,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let mut aux_data: Option<crate::cpl::AuxData> = None;
 
     if let Some(ref atmos_path) = config.atmos_path {
-        if !atmos_path.exists() {
-            tracing::error!("Atmos input not found: {}", atmos_path.display());
+        if let Err(e) = crate::preflight::check_atmos_path(atmos_path) {
+            tracing::error!("{e}");
             return -1;
         }
         // aux data carries the essence unencrypted; the synthetic id keeps
@@ -914,14 +909,9 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             tracing::error!("Failed to wrap Atmos MXF");
             return -1;
         };
-        // one input file = one frame; a track shorter than the picture would
-        // produce a broken DCP, so refuse instead of writing it
-        if track.duration != picture_duration {
-            tracing::error!(
-                "Atmos track is {} frames but the picture is {picture_duration}; \
-                 pass a directory with one Atmos frame file per picture frame",
-                track.duration
-            );
+        if let Err(e) = crate::preflight::check_atmos_frame_count(track.duration, picture_duration)
+        {
+            tracing::error!("{e}");
             return -1;
         }
         aux_data = Some(crate::cpl::AuxData {

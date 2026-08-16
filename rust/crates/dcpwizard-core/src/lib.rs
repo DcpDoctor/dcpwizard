@@ -53,6 +53,7 @@ pub mod otioz_import;
 pub mod package_signature;
 pub mod pad;
 pub mod pkl;
+pub mod preflight;
 pub mod preview;
 pub mod probe;
 pub mod profiles;

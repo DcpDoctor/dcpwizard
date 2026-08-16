@@ -224,20 +224,33 @@ pub fn picture_geometry(
     } else {
         (stored_width, stored_height)
     };
-    if active_width > stored_width || active_height > stored_height {
-        return Err(format!(
-            "container {active_width}x{active_height} is larger than the \
-             {stored_width}x{stored_height} picture the encoder produced: the CPL would \
-             declare an active area the essence does not have. Encode at the container \
-             size, or pick a container that fits inside the frames"
-        ));
-    }
+    check_active_area_fits(stored_width, stored_height, active_width, active_height)?;
     Ok(PictureGeometry {
         stored_width,
         stored_height,
         active_width,
         active_height,
     })
+}
+
+/// ST 429-16 and libdcp's INVALID_MAIN_PICTURE_ACTIVE_AREA both require the
+/// active area to fit inside the coded raster. The plan knows the raster before
+/// the encode, so `preflight` applies this rule there as well as here.
+pub fn check_active_area_fits(
+    stored_width: u32,
+    stored_height: u32,
+    active_width: u32,
+    active_height: u32,
+) -> Result<(), String> {
+    if active_width <= stored_width && active_height <= stored_height {
+        return Ok(());
+    }
+    Err(format!(
+        "container {active_width}x{active_height} is larger than the \
+         {stored_width}x{stored_height} picture the encoder produced: the CPL would \
+         declare an active area the essence does not have. Encode at the container \
+         size, or pick a container that fits inside the frames"
+    ))
 }
 
 /// The active area a CPL declares, when it carries a CompositionMetadataAsset.
