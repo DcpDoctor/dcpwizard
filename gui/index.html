@@ -14,6 +14,19 @@
     </div>
   </div>
 
+  <div id="hints-dialog" class="hints-dialog" hidden>
+    <div class="hints-panel">
+      <h2>Before you build</h2>
+      <p class="hints-lead">These will build, but they are worth a look first.</p>
+      <ul id="hints-list" class="hints-list"></ul>
+      <label class="hints-silence"><input type="checkbox" id="hints-silence"> Don't show hints again</label>
+      <div class="hints-actions">
+        <button type="button" id="hints-back" class="btn-secondary">Go back</button>
+        <button type="button" id="hints-build" class="btn-primary">Build anyway</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Context menu -->
   <div id="context-menu" class="context-menu" hidden>
     <button data-action="preview">▶ Preview</button>
@@ -1201,6 +1214,9 @@
                 </div>
                 <div class="prop-field">
                   <label><input type="checkbox" id="set-isdcf-naming"> Name DCPs by the ISDCF convention</label>
+                </div>
+                <div class="prop-field">
+                  <label><input type="checkbox" id="set-show-hints" checked> Show hints before building</label>
                 </div>
               </fieldset>
               <div class="form-actions">

@@ -113,7 +113,7 @@ refreshButtonTooltips();
 
 // === Preferences (localStorage) ===
 const PREFS_KEY = "dcpwizard-preferences";
-const PREFS_VERSION = 5;
+const PREFS_VERSION = 6;
 
 // clear of DCI's 250 on purpose: at 250 exactly, rate allocation overshoot is a
 // peak bitrate failure, and validators warn from 230 up
@@ -125,7 +125,7 @@ const PREF_DEFAULTS = {
   encrypt: false, stereo3d: false, validate: true,
   creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: -1,
   signingCert: "", signingKey: "", outputDir: "", isdcfNaming: false,
-  channels: "5.1",
+  channels: "5.1", showHintsBeforeBuild: true,
 };
 
 function getPrefs() {
@@ -168,6 +168,40 @@ function loadSettings() {
   }
   const naming = document.getElementById("set-isdcf-naming");
   if (naming) naming.checked = prefs.isdcfNaming;
+  const showHints = document.getElementById("set-show-hints");
+  if (showHints) showHints.checked = prefs.showHintsBeforeBuild;
+}
+
+// Advisory findings the pre-build check made. Returns true to build anyway.
+function showHintsDialog(hints) {
+  const dialog = document.getElementById("hints-dialog");
+  const list = document.getElementById("hints-list");
+  const silence = document.getElementById("hints-silence");
+  if (!dialog || !list) return Promise.resolve(true);
+
+  list.innerHTML = "";
+  for (const hint of hints) {
+    const item = document.createElement("li");
+    item.textContent = hint;
+    list.appendChild(item);
+  }
+  silence.checked = false;
+  dialog.hidden = false;
+
+  return new Promise((resolve) => {
+    const close = (build) => {
+      dialog.hidden = true;
+      if (silence.checked) savePrefs({ ...getPrefs(), showHintsBeforeBuild: false });
+      loadSettings();
+      document.getElementById("hints-build").removeEventListener("click", onBuild);
+      document.getElementById("hints-back").removeEventListener("click", onBack);
+      resolve(build);
+    };
+    const onBuild = () => close(true);
+    const onBack = () => close(false);
+    document.getElementById("hints-build").addEventListener("click", onBuild);
+    document.getElementById("hints-back").addEventListener("click", onBack);
+  });
 }
 
 document.getElementById("settings-form")?.addEventListener("submit", (e) => {
@@ -183,6 +217,7 @@ document.getElementById("settings-form")?.addEventListener("submit", (e) => {
     signingKey: document.getElementById("set-signing-key")?.value,
     outputDir: document.getElementById("set-output-dir")?.value,
     isdcfNaming: document.getElementById("set-isdcf-naming")?.checked || false,
+    showHintsBeforeBuild: !!document.getElementById("set-show-hints")?.checked,
   };
   savePrefs(prefs);
   refreshIsdcfPreview();
@@ -1015,7 +1050,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
 
   try {
     beginBuild();
-    currentJobId = await invoke("submit_job", {
+    const submit = (hintsAccepted) => invoke("submit_job", {
+      hintsAccepted,
       videoPath: video,
       title,
       outputDir: output,
@@ -1085,6 +1121,19 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       facility: getPrefs().facility || null,
       naming: namingMetadata(),
     });
+    let result = await submit(!getPrefs().showHintsBeforeBuild);
+    if (result.jobId === null) {
+      if (!await showHintsDialog(result.hints)) {
+        progressSection.style.display = "none";
+        setStatus("Build cancelled");
+        endBuild();
+        unlisten();
+        unlistenVal();
+        return;
+      }
+      result = await submit(true);
+    }
+    currentJobId = result.jobId;
     setStatus("Building DCP...");
   } catch (e) {
     stageEl.textContent = "Failed";

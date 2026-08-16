@@ -86,3 +86,66 @@
   flex: 0 0 auto;
   margin-bottom: 4px;
 }
+
+/* Advisory findings shown before a build starts */
+.hints-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.hints-dialog[hidden] {
+  display: none;
+}
+
+.hints-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.hints-panel h2 {
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.hints-lead {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.hints-list {
+  list-style: disc;
+  padding-left: 18px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hints-list li + li {
+  margin-top: 6px;
+}
+
+.hints-silence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.hints-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

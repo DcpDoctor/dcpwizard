@@ -347,6 +347,12 @@ struct JobConfig {
     facility: Option<String>,
     // naming and metadata from the panel's fieldset
     naming: NamingMetadata,
+    /// What ffprobe read from the source. The probe counts frames by decoding,
+    /// so the check runs one and the build reads it back rather than paying twice.
+    source: Option<postkit::probe::VideoInfo>,
+    /// What the pre-build check found, carried through so the job log lists it
+    /// without measuring the source a second time.
+    hints: Vec<String>,
 }
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
@@ -429,6 +435,15 @@ fn parsed_colour(
     }
 }
 
+/// What a submitted build came back with: the queued job, or the hints that
+/// have to be shown before one is queued.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitResult {
+    pub job_id: Option<u64>,
+    pub hints: Vec<String>,
+}
+
 // ─── Tauri commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -505,7 +520,8 @@ pub async fn submit_job(
     allow_generic_hdr_tonemap: Option<bool>,
     facility: Option<String>,
     naming: Option<NamingMetadata>,
-) -> Result<u64, String> {
+    hints_accepted: Option<bool>,
+) -> Result<SubmitResult, String> {
     let queue = app.state::<JobQueue>();
     let id = queue.next_id.fetch_add(1, Ordering::Relaxed);
 
@@ -868,6 +884,27 @@ pub async fn submit_job(
         allow_generic_hdr_tonemap,
         facility,
         naming,
+        source: probe_job_source(&video, still_input),
+        hints: Vec::new(),
+    };
+
+    let plan = job_plan(&job);
+    dcpwizard_core::preflight::check_before_encode(&plan)?;
+    let hints: Vec<String> = dcpwizard_core::hints::gather_hints(&plan)
+        .into_iter()
+        .map(|hint| hint.text)
+        .collect();
+    // the pref lives in the panel, which says it has taken the hints by sending
+    // hintsAccepted rather than by naming the pref here
+    if !hints.is_empty() && hints_accepted != Some(true) {
+        return Ok(SubmitResult {
+            job_id: None,
+            hints,
+        });
+    }
+    let job = JobConfig {
+        hints: hints.clone(),
+        ..job
     };
 
     {
@@ -882,7 +919,80 @@ pub async fn submit_job(
         });
     }
 
-    Ok(id)
+    Ok(SubmitResult {
+        job_id: Some(id),
+        hints,
+    })
+}
+
+/// Read the source once for the pre-build check. A codestream directory has
+/// nothing for ffprobe to read, so it is not offered one.
+fn probe_job_source(
+    video: &std::path::Path,
+    still_input: bool,
+) -> Option<postkit::probe::VideoInfo> {
+    let codestreams =
+        postkit::encode::detect_input_type(video) == postkit::encode::InputType::J2kSequence;
+    (still_input || !codestreams)
+        .then(|| dcpwizard_core::probe::probe_video(video))
+        .flatten()
+}
+
+/// One description of the job for the checks and the hints, from the same
+/// values the build itself runs on.
+fn job_plan(job: &JobConfig) -> dcpwizard_core::preflight::CreatePlan {
+    let (fps, _) = frame_rate_of(&job.framerate);
+    let pad_frames = |spec: &Option<String>| -> u64 {
+        spec.as_deref()
+            .and_then(|spec| dcpwizard_core::pad::parse_pad_frames(spec, fps).ok())
+            .unwrap_or(0)
+    };
+    let codestreams = postkit::encode::detect_input_type(&job.video_path)
+        == postkit::encode::InputType::J2kSequence;
+    dcpwizard_core::preflight::CreatePlan {
+        picture: job.video_path.clone(),
+        picture_kind: match (job.still_length_frames > 0, codestreams) {
+            (true, _) => dcpwizard_core::preflight::PictureKind::Still,
+            (_, true) => dcpwizard_core::preflight::PictureKind::Codestreams,
+            _ => dcpwizard_core::preflight::PictureKind::Video,
+        },
+        source: job.source.clone(),
+        still_frames: job.still_length_frames,
+        fps,
+        picture_options: job.picture.clone(),
+        geometry: job_geometry(job),
+        trim_start_frames: job.trim_start_frames,
+        trim_end_frames: job.trim_end_frames,
+        pad_head_frames: pad_frames(&job.pad_head),
+        pad_tail_frames: pad_frames(&job.pad_tail),
+        audio: job
+            .audio_path
+            .as_ref()
+            .or(job.audio_channel_dir.as_ref())
+            .map(PathBuf::from),
+        audio_map: job.audio_map.clone(),
+        upmix: job.upmix.is_some(),
+        audio_language: job.naming.audio_language.clone(),
+        subtitle: job.subtitle.as_ref().map(PathBuf::from),
+        ccap: job.ccap.as_ref().map(PathBuf::from),
+        burn_subtitle: job.burn_subtitle.as_ref().map(PathBuf::from),
+        burn_subtitle_font: job.burn_subtitle_font.as_ref().map(PathBuf::from),
+        burn_style: job.burn_style.clone(),
+        source_colourspace: job.source_colourspace,
+        frames_already_xyz: !job.source_colour.applies_xyz_transform(),
+        atmos: job.atmos.as_ref().map(PathBuf::from),
+        // the panel places no markers, so a composition gets the default pair
+        markers: Vec::new(),
+        standard: standard_of(&job.standard),
+        content_type: content_type_of(&job.content_kind),
+        encrypt: job.encrypt,
+        hdr_dci: job.hdr_dci,
+        video_bit_rate_mbps: job.bandwidth,
+        right_eye: job.right_eye.as_ref().map(PathBuf::from),
+        four_k: job.resolution.contains("4k"),
+        reel_length_minutes: job.reel_length_minutes,
+        reel_split_frames: job.reel_split_frames.clone(),
+    }
 }
 
 // ─── Delivery profiles ─────────────────────────────────────────────────────
@@ -1865,7 +1975,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     // Map the target bandwidth (Mbps) to a J2K compression ratio. Only honoured
     // for video input; image/J2K sequences fall back to the encoder default. A 3D
     // job encodes both eyes with this ratio, so the halving is part of it.
-    let compression_ratio = dcpwizard_core::probe::probe_video(&job.video_path)
+    let compression_ratio = job
+        .source
+        .as_ref()
         .map(|info| {
             dcpwizard_core::encode::video_compression_ratio(
                 info.width,
@@ -1893,6 +2005,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         &log_file,
         &format!("[ENCODE] Picture: {}", resolved_picture.plan.describe()),
     );
+    for hint in &job.hints {
+        log_to(&log_file, &format!("[HINT] {hint}"));
+    }
 
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
@@ -2183,6 +2298,8 @@ mod tests {
             allow_generic_hdr_tonemap: false,
             facility: None,
             naming: NamingMetadata::default(),
+            source: None,
+            hints: Vec::new(),
         }
     }
 
