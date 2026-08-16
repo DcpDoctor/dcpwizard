@@ -107,6 +107,8 @@ smoke "create subtitle placement" create --title x --video "$C" --output "$C" --
                             --subtitle-halign left --subtitle-valign top --subtitle-vposition 10 \
                             --subtitle-zposition 2.0 --subtitle-rtl on --subtitle-wrap 42 \
                             --subtitle-font "$C" --subtitle-no-subset
+smoke "create burn-subtitle" create --title x --video "$C" --output "$C" \
+                            --burn-subtitle "$C" --burn-subtitle-font "$C"
 smoke "subtitle-edit list"  subtitle-edit -i "$C" --list
 smoke "subtitle-edit shift" subtitle-edit -i "$C" -o "$C" --shift-ms 500 --index 1 --text hi \
                             --set-start-ms 0 --set-end-ms 1000 --fps 25
@@ -214,6 +216,28 @@ refuse "create --source-colourspace p3 on J2K input" "already encoded" \
 # --still-length only means something for a single-image --video
 refuse "create --still-length without a still" "carries its own length" \
        create --title x --video "$C" --output "$C" --still-length 5s
+# --burn-subtitle draws display-RGB text onto decoded frames, so it is refused
+# wherever the encoder gets X'Y'Z' already, or nothing to draw on.
+BURN="$TMP/cues.srt"
+printf '1\n00:00:00,000 --> 00:00:02,000\nhello\n\n' > "$BURN"
+VID="$TMP/clip.mov"
+: > "$VID"
+refuse "create --burn-subtitle with xyz source" "X'Y'Z' already" \
+       create --title x --video "$VID" --output "$C" \
+       --burn-subtitle "$BURN" --source-colourspace xyz
+refuse "create --burn-subtitle with --hdr-already-pq" "X'Y'Z' already" \
+       create --title x --video "$VID" --output "$C" \
+       --burn-subtitle "$BURN" --hdr-dci --hdr-already-pq
+refuse "create --burn-subtitle with an HDR LUT" "X'Y'Z' already" \
+       create --title x --video "$VID" --output "$C" \
+       --burn-subtitle "$BURN" --hdr-dci --hdr-to-dci-lut "$C"
+refuse "create --burn-subtitle on a J2K directory" "already compressed" \
+       create --title x --video "$TMP" --output "$C" --burn-subtitle "$BURN"
+# a burnt-in subtitle is part of the picture, so it must not also become a
+# timed-text track from the same file
+refuse "create --burn-subtitle same file as --subtitle" "pick one" \
+       create --title x --video "$VID" --output "$C" \
+       --burn-subtitle "$BURN" --subtitle "$BURN"
 # a device-listing formulation has no device list to name on a batch
 refuse "kdm-batch --formulation dci-specific" "spans cinemas" \
        kdm-batch --cpl-id "$UUID" --content-title x --cert "$C" \

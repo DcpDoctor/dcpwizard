@@ -84,7 +84,10 @@ fn encode_solid(rgb16: [u16; 3], route: XyzRoute, dir: &Path) -> std::path::Path
     let params = CompressParams {
         frame_rate: FPS as u16,
         apply_xyz_transform: route.compressor_transform(),
-        source_transform: route.frame_transform().unwrap(),
+        source_preparation: postkit::grok_encoder::SourcePreparation {
+            subtitle_burn: None,
+            colour_transform: route.frame_transform().unwrap(),
+        },
         ..CompressParams::default()
     };
     let cancel = Arc::new(AtomicBool::new(false));

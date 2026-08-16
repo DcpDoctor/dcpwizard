@@ -677,6 +677,28 @@ document.getElementById("prop-browse-hdr-lut")?.addEventListener("click", async 
   if (path) document.getElementById("prop-hdr-lut").value = path;
 });
 
+document.getElementById("prop-browse-burn-subtitle")?.addEventListener("click", async () => {
+  const path = await open({
+    directory: false, multiple: false,
+    filters: [
+      { name: 'Subtitles', extensions: ['srt','ass','ssa','pac','mks','mkv','fcpxml','xml'] },
+      { name: 'All', extensions: ['*'] }
+    ]
+  });
+  if (path) document.getElementById("prop-burn-subtitle").value = path;
+});
+
+document.getElementById("prop-browse-burn-subtitle-font")?.addEventListener("click", async () => {
+  const path = await open({
+    directory: false, multiple: false,
+    filters: [
+      { name: 'Fonts', extensions: ['ttf','otf','ttc'] },
+      { name: 'All', extensions: ['*'] }
+    ]
+  });
+  if (path) document.getElementById("prop-burn-subtitle-font").value = path;
+});
+
 document.getElementById("prop-browse-ccap")?.addEventListener("click", async () => {
   const path = await open({
     directory: false, multiple: false,
@@ -808,6 +830,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       atmos: document.getElementById("prop-atmos")?.value || null,
       subtitle: reel.subtitle?.path || null,
       subtitleLanguage: document.getElementById("prop-subtitle-language")?.value || "en",
+      burnSubtitle: document.getElementById("prop-burn-subtitle")?.value || null,
+      burnSubtitleFont: document.getElementById("prop-burn-subtitle-font")?.value || null,
       ccap: document.getElementById("prop-ccap")?.value || null,
       ccapLanguage: document.getElementById("prop-ccap-language")?.value || "en",
       loudnessTarget: document.getElementById("prop-loudness")?.value || null,

@@ -1,0 +1,200 @@
+//! `create --burn-subtitle`: the refusal matrix, and a burnt-in still that
+//! packages into a dcpdoctor-clean DCP.
+//!
+//! The picture assertions live in postkit (`tests/subtitle_burn_e2e.rs`), which
+//! can decode a codestream back to pixels. What matters here is that the flag
+//! combinations fail before an encode starts, and that a burnt hold produces a
+//! real package.
+
+use dcpwizard_core::dcp::{DcpConfig, create_dcp};
+use dcpwizard_core::still::StillHold;
+use dcpwizard_core::subtitle::{check_burn_supported, prepare_subtitle_burn};
+use std::path::Path;
+
+const W: u32 = 2048;
+const H: u32 = 1080;
+const FPS: u32 = 24;
+
+const SRT: &str = "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n\
+                   2\n00:00:02,000 --> 00:00:03,000\nsecond line\n\n";
+
+fn have(bin: &str, arg: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg(arg)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn write_srt(dir: &Path) -> std::path::PathBuf {
+    let path = dir.join("cues.srt");
+    std::fs::write(&path, SRT).unwrap();
+    path
+}
+
+#[test]
+fn a_burn_is_refused_wherever_it_would_be_drawn_in_the_wrong_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = write_srt(dir.path());
+
+    check_burn_supported(&srt, None, false, false).expect("a plain display-RGB burn is fine");
+    check_burn_supported(&srt, Some(&dir.path().join("other.srt")), false, false)
+        .expect("a different timed-text file is fine");
+
+    let missing = dir.path().join("nope.srt");
+    for (label, result, needle) in [
+        (
+            "missing file",
+            check_burn_supported(&missing, None, false, false),
+            "not found",
+        ),
+        (
+            "same file as --subtitle",
+            check_burn_supported(&srt, Some(&srt), false, false),
+            "pick one",
+        ),
+        (
+            "J2K input",
+            check_burn_supported(&srt, None, false, true),
+            "already compressed",
+        ),
+        (
+            "frames already X'Y'Z'",
+            check_burn_supported(&srt, None, true, false),
+            "X'Y'Z' already",
+        ),
+    ] {
+        let err = result.expect_err(label);
+        assert!(err.contains(needle), "{label}: got {err}");
+    }
+}
+
+#[test]
+fn smpte_dcst_xml_is_refused_with_a_message_naming_what_to_pass_instead() {
+    let dir = tempfile::tempdir().unwrap();
+    let xml = dir.path().join("subs.xml");
+    std::fs::write(
+        &xml,
+        r#"<?xml version="1.0"?><SubtitleReel xmlns="http://www.smpte-ra.org/schemas/428-7/2010/DCST"></SubtitleReel>"#,
+    )
+    .unwrap();
+    let err = prepare_subtitle_burn(&xml, None, FPS).unwrap_err();
+    assert!(err.contains("SMPTE DCST"), "got: {err}");
+    assert!(
+        err.contains("SRT"),
+        "the message must name a way out: {err}"
+    );
+}
+
+#[test]
+fn a_missing_burn_in_font_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = write_srt(dir.path());
+    let font = dir.path().join("nothere.ttf");
+    let err = prepare_subtitle_burn(&srt, Some(&font), FPS).unwrap_err();
+    assert!(err.contains("font not found"), "got: {err}");
+}
+
+/// A held still is the input shape with no decoder of its own, so this is the
+/// one that proves the burn is not tied to the ffmpeg path.
+#[test]
+fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
+    if !have("ffmpeg", "-version") {
+        eprintln!("skipping: ffmpeg not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let card = dir.path().join("card.png");
+    let made = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=c=gray:s={W}x{H}"),
+            "-frames:v",
+            "1",
+        ])
+        .arg(&card)
+        .output()
+        .expect("ffmpeg");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let srt = write_srt(dir.path());
+    let Ok(burn) = prepare_subtitle_burn(&srt, None, FPS) else {
+        eprintln!("skipping: no font available to burn with");
+        return;
+    };
+
+    // 3 seconds of hold over cues at 0-1s and 2-3s: the picture changes at
+    // frames 24, 48 and 72, so four distinct frames are encoded.
+    let held_frames = 3 * FPS as u64;
+    let j2k = dir.path().join("j2k");
+    dcpwizard_core::still::build_still_frames(&StillHold {
+        image: &card,
+        frames: held_frames,
+        fps: FPS,
+        width: W,
+        height: H,
+        route: dcpwizard_core::encode::XyzRoute::CompressorTransform,
+        burn: Some(burn),
+        out_dir: &j2k,
+    })
+    .expect("burnt still");
+
+    let landed = (0..held_frames)
+        .filter(|i| j2k.join(format!("frame_{i:08}.j2c")).exists())
+        .count() as u64;
+    assert_eq!(landed, held_frames, "every frame of the hold needs a file");
+
+    // Frames inside one cue's window repeat a single codestream; the frame
+    // where the cue leaves is a different picture.
+    let bytes = |index: u64| std::fs::read(j2k.join(format!("frame_{index:08}.j2c"))).unwrap();
+    assert_eq!(bytes(0), bytes(12), "frames under one cue must be the same");
+    assert_ne!(
+        bytes(0),
+        bytes(24),
+        "the frame where the first cue ends must be a different picture"
+    );
+    assert_ne!(
+        bytes(24),
+        bytes(48),
+        "the frame where the second cue starts must be a different picture"
+    );
+
+    let out = dir.path().join("dcp");
+    let config = DcpConfig {
+        title: "Burnt".into(),
+        standard: dcpwizard_core::Standard::Smpte,
+        resolution: dcpwizard_core::Resolution::TwoK,
+        content_type: dcpwizard_core::ContentType::Feature,
+        frame_rate_num: FPS,
+        frame_rate_den: 1,
+        output_dir: out.clone(),
+        j2k_dir: Some(j2k),
+        ..Default::default()
+    };
+    assert_eq!(create_dcp(&config), 0);
+    let result = dcpwizard_core::verify::verify_dcp(&out);
+    assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
+
+    // The burn is in the picture, so nothing may register a subtitle track.
+    let cpl = std::fs::read_dir(&out)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().contains("CPL"))
+        })
+        .expect("a CPL");
+    let xml = std::fs::read_to_string(&cpl).unwrap();
+    assert!(
+        !xml.contains("MainSubtitle"),
+        "a burnt-in subtitle must not also be a timed-text track"
+    );
+}

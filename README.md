@@ -74,7 +74,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Subtitle editing** on standalone files via `subtitle-edit`: `--list` cues, `--shift-ms` all cues, or `--index N` with `--text` / `--set-start-ms`+`--set-end-ms`, written back as SRT (it edits source files, never subtitles inside a finished DCP)
 - **Subtitle extraction** from a DCP or subtitle asset back to `.srt` (timed) or `.txt` (text only) via `subtitle-extract`; reads MXF-wrapped ST 428-7 and loose SMPTE/Interop XML, concatenating reels with their timeline offsets
 - **Multilingual subtitles** with RFC 5646 language tags
-- **Subtitle burn-in**, permanently render into video frames (for festivals)
+- **Burn-in during the encode** via `create --burn-subtitle <file>` (+ `--burn-subtitle-font <ttf/otf>`): the cues are drawn into the picture as it encodes, so a burnt festival print costs one generation rather than two. Takes the same formats `--subtitle` does, and covers video, image sequences and held stills. Burnt text is part of the image and registers no timed-text track; the same file cannot be both, and burning onto an already-X'Y'Z' source or a J2K directory is refused
+- **Subtitle burn-in as a standalone pass** via `burnin`, for rendering into a video file outside a package
 
 ### Audio
 - **PCM audio wrapping** (48 kHz)

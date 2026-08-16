@@ -102,6 +102,14 @@ struct CreateSubtitleOpts {
     /// TTF/OTF font to embed in the subtitle track (subset to used glyphs)
     #[arg(long)]
     subtitle_font: Option<String>,
+    /// Subtitle file rendered into the picture during the encode (SRT, ASS,
+    /// PAC, MKS, FCPXML, or Interop DCSubtitle). Burnt-in text is part of the
+    /// image and registers no timed-text track.
+    #[arg(long)]
+    burn_subtitle: Option<String>,
+    /// TTF/OTF font to draw --burn-subtitle with (default: a system font)
+    #[arg(long)]
+    burn_subtitle_font: Option<String>,
     /// Embed the whole font instead of subsetting it to the used glyphs
     #[arg(long)]
     subtitle_no_subset: bool,
@@ -2997,6 +3005,23 @@ fn run() {
                 std::process::exit(1);
             }
 
+            // a burn draws display-RGB text onto decoded frames, so refuse
+            // every route that hands the encoder X'Y'Z' or nothing to draw on,
+            // before anything is encoded
+            if let Some(ref burn) = subtitle_qol.burn_subtitle
+                && let Err(e) = dcpwizard_core::subtitle::check_burn_supported(
+                    Path::new(burn),
+                    subtitle.as_deref().map(Path::new),
+                    matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
+                        || hdr_already_pq
+                        || hdr_to_dci_lut.is_some(),
+                    !is_video_file && !still_input,
+                )
+            {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+
             let CreateSubtitleOpts {
                 subtitle_halign,
                 subtitle_valign,
@@ -3006,6 +3031,8 @@ fn run() {
                 subtitle_wrap,
                 subtitle_font,
                 subtitle_no_subset,
+                burn_subtitle,
+                burn_subtitle_font,
                 ccap,
                 ccap_language,
             } = *subtitle_qol;
@@ -3024,6 +3051,24 @@ fn run() {
                 font_path: subtitle_font.map(PathBuf::from),
                 no_subset: subtitle_no_subset,
             };
+
+            // the edit rate is settled inside each branch, and the cue timings
+            // are read against it, so the burn is built there
+            let build_subtitle_burn =
+                |fps: u32| -> Option<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>> {
+                    let path = burn_subtitle.as_deref()?;
+                    match dcpwizard_core::subtitle::prepare_subtitle_burn(
+                        Path::new(path),
+                        burn_subtitle_font.as_deref().map(Path::new),
+                        fps,
+                    ) {
+                        Ok(burn) => Some(burn),
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    }
+                };
 
             let code = if is_video_file {
                 // Full pipeline: video → J2K encode → MXF wrap → DCP
@@ -3220,7 +3265,10 @@ fn run() {
                     frame_rate: fps as u16,
                     // grok converts only what nothing else has converted
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
-                    source_transform: frame_transform,
+                    source_preparation: postkit::grok_encoder::SourcePreparation {
+                        subtitle_burn: build_subtitle_burn(fps),
+                        colour_transform: frame_transform,
+                    },
                     ..CompressParams::default()
                 };
 
@@ -3611,13 +3659,16 @@ fn run() {
                     };
                     let _ = std::fs::create_dir_all(&output_dir);
                     if let Err(e) = dcpwizard_core::still::build_still_frames(
-                        &video_path,
-                        frames,
-                        fps,
-                        width,
-                        height,
-                        xyz_route,
-                        &still_j2k_dir,
+                        &dcpwizard_core::still::StillHold {
+                            image: &video_path,
+                            frames,
+                            fps,
+                            width,
+                            height,
+                            route: xyz_route,
+                            burn: build_subtitle_burn(fps),
+                            out_dir: &still_j2k_dir,
+                        },
                     ) {
                         tracing::error!("{e}");
                         std::process::exit(1);

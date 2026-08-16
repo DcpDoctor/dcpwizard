@@ -193,6 +193,95 @@ pub fn load_styled_cues(path: &Path, fps: u32) -> Result<Vec<StyledCue>, String>
     Ok(cues)
 }
 
+/// Prepare `create --burn-subtitle`: parse the cue file and build the burn the
+/// encoder threads composite onto every decoded frame.
+///
+/// `font` is the face to shape text with; without one the system faces fontdb
+/// finds are used, and a machine with no font at all is an error rather than a
+/// silently subtitle-free encode.
+pub fn prepare_subtitle_burn(
+    input: &Path,
+    font: Option<&Path>,
+    fps: u32,
+) -> Result<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>, String> {
+    if detect_subtitle_kind(input)? == SubtitleInputKind::SmpteDcstPassthrough {
+        return Err(format!(
+            "{} is SMPTE DCST XML, which has no cue reader here: burn from the SRT, ASS, PAC, \
+             MKS, FCPXML or Interop source it was made from",
+            input.display()
+        ));
+    }
+    if let Some(path) = font
+        && !path.is_file()
+    {
+        return Err(format!("burn-in font not found: {}", path.display()));
+    }
+    let cues = load_styled_cues(input, fps)?;
+    postkit::subtitle_raster::SubtitleBurn::new(
+        cues,
+        font,
+        postkit::subtitle_raster::BurnStyle::default(),
+        fps.max(1) as f64,
+    )
+    .map(std::sync::Arc::new)
+    .map_err(|e| format!("cannot burn {}: {e}", input.display()))
+}
+
+/// Refuse a `--burn-subtitle` the encode cannot honour, before anything is
+/// encoded.
+///
+/// `frames_already_xyz` covers every route that hands the encoder X'Y'Z'
+/// frames: an `--source-colourspace xyz` source, the HDR-to-DCI LUT branch, and
+/// `--hdr-already-pq`. Text is drawn in display RGB, so it would land in the
+/// wrong space on any of them. P3 and Rec.2020 sources are fine: the burn goes
+/// on first and the DCDM matrix converts it with the picture.
+pub fn check_burn_supported(
+    burn_path: &Path,
+    timed_text_path: Option<&Path>,
+    frames_already_xyz: bool,
+    input_is_codestreams: bool,
+) -> Result<(), String> {
+    if !burn_path.is_file() {
+        return Err(format!(
+            "--burn-subtitle file not found: {}",
+            burn_path.display()
+        ));
+    }
+    if let Some(timed_text) = timed_text_path
+        && same_file(burn_path, timed_text)
+    {
+        return Err(format!(
+            "{} is given to both --burn-subtitle and --subtitle: a burnt-in subtitle must not \
+             also be a timed-text track, so pick one",
+            burn_path.display()
+        ));
+    }
+    if input_is_codestreams {
+        return Err(
+            "--burn-subtitle needs frames to draw on, and a J2K directory is already compressed"
+                .into(),
+        );
+    }
+    if frames_already_xyz {
+        return Err(
+            "--burn-subtitle draws in display RGB, but this source reaches the encoder as \
+             X'Y'Z' already (--source-colourspace xyz, --hdr-already-pq, or the HDR-to-DCI \
+             LUT): burn from the display-RGB master instead"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Whether two paths name the same file, falling back to the paths themselves
+/// when either cannot be canonicalised.
+fn same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 /// Build a subtitle track from any supported input, applying wrap/RTL/placement/
 /// font options and the `timing` the packaged programme puts the cues on. Writes
 /// the DCST XML to `out` and returns it plus any ancillary resources (font, PNGs)

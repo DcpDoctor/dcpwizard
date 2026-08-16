@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -81,6 +81,10 @@ struct JobConfig {
     atmos: Option<String>,
     subtitle: Option<String>,
     subtitle_language: String,
+    // subtitle file drawn into the picture during the encode. Registers no
+    // timed-text track: burnt-in text is part of the image.
+    burn_subtitle: Option<String>,
+    burn_subtitle_font: Option<String>,
     ccap: Option<String>,
     ccap_language: String,
     // loudness normalize spec (leqm=<db> or lufs=<value>) applied to the audio
@@ -194,6 +198,8 @@ pub async fn submit_job(
     atmos: Option<String>,
     subtitle: Option<String>,
     subtitle_language: Option<String>,
+    burn_subtitle: Option<String>,
+    burn_subtitle_font: Option<String>,
     ccap: Option<String>,
     ccap_language: Option<String>,
     loudness_target: Option<String>,
@@ -342,6 +348,31 @@ pub async fn submit_job(
         );
     }
 
+    let burn_subtitle = burn_subtitle.filter(|s| !s.is_empty());
+    let burn_subtitle_font = burn_subtitle_font.filter(|s| !s.is_empty());
+    if let Some(path) = burn_subtitle.as_deref() {
+        if !versions.is_empty() {
+            return Err(
+                "A versions manifest carries its own subtitles: clear the burn-in field".into(),
+            );
+        }
+        // parse the cue file and build the burn now, so a bad file or a missing
+        // font fails here instead of part way through the encode
+        dcpwizard_core::subtitle::check_burn_supported(
+            Path::new(path),
+            subtitle.as_deref().map(Path::new),
+            matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
+                || hdr_already_pq.unwrap_or(false)
+                || hdr_to_dci_lut.is_some(),
+            postkit::encode::detect_input_type(&video) == postkit::encode::InputType::J2kSequence,
+        )?;
+        dcpwizard_core::subtitle::prepare_subtitle_burn(
+            Path::new(path),
+            burn_subtitle_font.as_deref().map(Path::new),
+            fps_num,
+        )?;
+    }
+
     let right_eye = right_eye.filter(|s| !s.is_empty());
     let hdr_dci = hdr_dci.unwrap_or(false);
     let allow_generic_hdr_tonemap = allow_generic_hdr_tonemap.unwrap_or(false);
@@ -400,6 +431,8 @@ pub async fn submit_job(
         atmos: atmos.filter(|s| !s.is_empty()),
         subtitle,
         subtitle_language: subtitle_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
+        burn_subtitle,
+        burn_subtitle_font,
         ccap,
         ccap_language: ccap_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
         loudness_target: loudness_target.filter(|s| !s.is_empty()),
@@ -1088,6 +1121,23 @@ fn prepare_audio(
     Ok(audio_path)
 }
 
+/// The burn a job asks for, rebuilt from the cue file. `submit_job` already
+/// proved the file parses, so a failure here is a file that changed underneath.
+fn job_subtitle_burn(
+    job: &JobConfig,
+    fps: u32,
+) -> Result<Option<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>>, String> {
+    let Some(path) = job.burn_subtitle.as_deref() else {
+        return Ok(None);
+    };
+    dcpwizard_core::subtitle::prepare_subtitle_burn(
+        Path::new(path),
+        job.burn_subtitle_font.as_deref().map(Path::new),
+        fps,
+    )
+    .map(Some)
+}
+
 /// Build a still's frame directory: one encode, linked for every frame of the
 /// hold. Shaped as an [`postkit::pipeline::EncodeResult`] so the rest of the job
 /// does not care which kind of input it got.
@@ -1101,15 +1151,16 @@ fn encode_still(
     let info = dcpwizard_core::probe::probe_video(&job.video_path)
         .ok_or_else(|| format!("cannot read the size of {}", job.video_path.display()))?;
     let j2k_dir = output.join("j2k");
-    dcpwizard_core::still::build_still_frames(
-        &job.video_path,
-        job.still_length_frames,
+    dcpwizard_core::still::build_still_frames(&dcpwizard_core::still::StillHold {
+        image: &job.video_path,
+        frames: job.still_length_frames,
         fps,
-        info.width,
-        info.height,
-        dcpwizard_core::encode::xyz_route(job.source_colourspace)?,
-        &j2k_dir,
-    )?;
+        width: info.width,
+        height: info.height,
+        route: dcpwizard_core::encode::xyz_route(job.source_colourspace)?,
+        burn: job_subtitle_burn(job, fps)?,
+        out_dir: &j2k_dir,
+    })?;
     log(&format!(
         "[ENCODE] Still held for {} frame(s) at {}x{}",
         job.still_length_frames, info.width, info.height
@@ -1296,6 +1347,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         codestream_byte_cap: job
             .hdr_dci
             .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
+        subtitle_burn: job_subtitle_burn(job, fps_num)?,
     };
 
     // Encode using shared pipeline. A still never reaches it: it is one encode
@@ -1542,6 +1594,8 @@ mod tests {
             atmos: None,
             subtitle: None,
             subtitle_language: "en".into(),
+            burn_subtitle: None,
+            burn_subtitle_font: None,
             ccap: None,
             ccap_language: "en".into(),
             loudness_target: None,
