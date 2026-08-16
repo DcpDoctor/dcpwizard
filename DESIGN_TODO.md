@@ -68,7 +68,18 @@ user-facing surface is here.
   based. The credential half already has a pattern to copy: `email.rs` reads an SMTP
   config TOML whose password field redacts itself in Debug and never reaches argv or
   logs.
-- The job queue does not survive a restart, and the GUI's queue does not survive the
+- Live playback decodes J2K with libavcodec, not grok. Two decode paths exist: the
+  frame-accurate preview (PK preview.rs) resolves the CPL, decrypts and decodes
+  through grok, but live playback (PK mpv.rs, and the embedded surface through PK
+  mpv_render, which is libmpv's render API and still decodes inside mpv) hands the
+  picture MXF to mpv, whose decode is ffmpeg's native software jpeg2000 codec. At
+  DCP bitrates that decoder runs at a few fps, which is why a 250 Mbps track sits
+  black for seconds on load and can read as a frozen GUI. Grok is much faster and is
+  ours. Routing playback through it means postkit decoding frames itself (the
+  preview.rs machinery already resolves, decrypts and colour-manages) and presenting
+  them on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
+  frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
+  so the colour conversion would have to happen before the pipe either way.
   GUI. The daemon queue (CORE/job_queue.rs) is a Mutex around an in-memory map with
   no save or load, so a daemon crash or reboot loses every pending job, and unlike
   DCP-o-matic, whose batch jobs are film projects on disk that can be re-added, our
