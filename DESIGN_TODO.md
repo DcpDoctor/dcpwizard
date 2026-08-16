@@ -88,6 +88,24 @@ user-facing surface is here.
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
 
+- Burn-in costs a whole extra generation and ignores its own styling flag. Today
+  `burnin` is a standalone video-to-video pass, so burning subtitles means transcode
+  once to burn and again inside `create`, for two lossy generations where the
+  encode already decodes every frame through ffmpeg. The fix is a burn option on
+  `create` that appends the subtitles filter to the decode chain the encode already
+  builds, costing nothing extra. Only reachable for video input, since a J2K
+  directory never touches ffmpeg. Two knock-ons: a burnt-in subtitle must not also
+  register a timed-text track in the CPL, and the ISDCF name spells a burnt-in
+  subtitle language in lower case where an open one is upper case, so whatever lands
+  ISDCF naming needs to know which it is.
+  Three defects in the current path while it exists, all in PK burnin.rs:
+  `font_size`, `font_colour` and `position` are read only in the `drawtext` branch
+  used for text watermarks, so `burnin --font-size` is inert for subtitles, which is
+  the command's only styling flag; the CLI advertises "SRT, ASS, or SMPTE XML" but
+  ffmpeg's `subtitles` filter has no ST 428-7 DCST reader, so that input dies inside
+  ffmpeg instead of being refused up front; and the path goes into the filter string
+  unescaped, where `:` and `,` and `\` are ffmpeg's own separators.
+
 ### Batch E (easyDCP parity, surveyed 2026-08-16)
 
 From en.easydcp.com easyDCP Plus and IMF Studio (both now EUR 3567.62 permanent or
