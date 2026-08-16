@@ -931,7 +931,7 @@ enum Commands {
         /// Input video file
         #[arg(short, long)]
         input: String,
-        /// Subtitle file (SRT, ASS, or SMPTE XML)
+        /// Subtitle file (SRT or ASS)
         #[arg(short, long)]
         subtitles: String,
         /// Output video file
