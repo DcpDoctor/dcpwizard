@@ -91,10 +91,27 @@ user-facing surface is here.
 - Burn-in costs a whole extra generation and ignores its own styling flag. Today
   `burnin` is a standalone video-to-video pass, so burning subtitles means transcode
   once to burn and again inside `create`, for two lossy generations where the
-  encode already decodes every frame through ffmpeg. The fix is a burn option on
-  `create` that appends the subtitles filter to the decode chain the encode already
-  builds, costing nothing extra. Only reachable for video input, since a J2K
-  directory never touches ffmpeg. Two knock-ons: a burnt-in subtitle must not also
+  encode already decodes every frame through ffmpeg. The obvious fix is a burn option
+  on `create` appending the subtitles filter to the decode chain the encode already
+  builds, but that only covers one of the three input shapes. PK pipeline.rs matches
+  on input type and only `InputType::Video` reaches ffmpeg
+  (`stream_encode_inprocess`). `InputType::ImageSequence` goes to `encode_parallel`,
+  which reads TIFF/DPX/EXR/PNG natively through `grok::load_tiff`, and a J2K directory
+  passes straight through. So an ffmpeg filter leaves a directory of TIFFs, and a held
+  still, with no burn at all.
+  DCP-o-matic has no such hole because its burn never touches the decoder:
+  `render_text` rasterises cues to RGBA bitmaps with positions, the player merges them
+  per frame, and `PlayerVideo::image` burns them with one `alpha_blend` onto the
+  decoded buffer (src/lib/render_text.h, player.cc, player_video.cc). Compositing at
+  the frame buffer is decoder-agnostic, so it covers video, an image sequence, a held
+  still and a DCP re-used as content, all the same way.
+  Doing it that way needs a text rasteriser, which postkit does not have (font_subset
+  subsets glyphs, nothing draws them). It buys two things at once: burn-in on every
+  input shape, and the subtitle appearance controls (outline, shadow, effect colour,
+  outline width) that cannot work through ffmpeg's `subtitles` filter at all, since
+  that filter takes styling from the subtitle file rather than from our flags. So the
+  rasteriser is the real item and the ffmpeg filter is a stopgap for video input.
+  Two knock-ons either way: a burnt-in subtitle must not also
   register a timed-text track in the CPL, and the ISDCF name spells a burnt-in
   subtitle language in lower case where an open one is upper case, so whatever lands
   ISDCF naming needs to know which it is.
