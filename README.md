@@ -28,7 +28,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Head/tail padding** via `create --pad-head <dur> --pad-tail <dur>` (`48f`/`2s`), with `--pad-color <RRGGBB>` for a filled pad instead of black
 - **Trim** via `create --trim-start <dur> --trim-end <dur>` (same syntax), cutting the source before any padding; picture, sound and subtitles move together
 - **Still images** via `create --video <image> --still-length <dur>`: one image held for a duration, encoded once and repeated
-- **Source colour space** via `create --source-colourspace rec709|xyz` (default `rec709`), declaring whether the compressor still has to run the DCI X'Y'Z' transform
+- **Source colour space** via `create --source-colourspace rec709|p3|rec2020|xyz` (default `rec709`), declaring what the source carries; P3 and Rec.2020 are converted to X'Y'Z' during the encode
 - **Input decode range** override via `create --input-range full|legal`, correcting wrong or absent source range flags
 - **High Bitrate (HBR)**, up to 500 Mbps for demanding content
 - **CPL / PKL / ASSETMAP / VOLINDEX** generation

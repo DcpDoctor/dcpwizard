@@ -2843,15 +2843,14 @@ fn run() {
                         std::process::exit(1);
                     }
                 };
-            let colourspace_applies_xyz =
-                match dcpwizard_core::encode::applies_xyz_transform(source_space) {
-                    Ok(applies) => applies,
-                    Err(e) => {
-                        tracing::error!("{e}");
-                        std::process::exit(1);
-                    }
-                };
-            if !colourspace_applies_xyz
+            let xyz_route = match dcpwizard_core::encode::xyz_route(source_space) {
+                Ok(route) => route,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            if !xyz_route.compressor_transform()
                 && (hdr_to_dci_lut.is_some() || hdr_already_pq || allow_generic_hdr_tonemap)
             {
                 tracing::error!(
@@ -2966,6 +2965,16 @@ fn run() {
             // own, so the hold has to be asked for and cannot be asked for
             // anywhere else.
             let still_input = dcpwizard_core::still::is_still(&video_path);
+            // a codestream directory is picture that is already encoded: no
+            // transform runs over it, so a colour space here would be ignored
+            if !is_video_file
+                && !still_input
+                && let Err(e) =
+                    dcpwizard_core::encode::check_precompressed_colourspace(source_space)
+            {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
             if still_input && still_length.is_none() {
                 tracing::error!(
                     "--video {} is a single image and has no length: pass --still-length",
@@ -3052,9 +3061,18 @@ fn run() {
 
                 let mut encode_video_path = range_src.clone();
                 // the hdr-lut branch outputs x'y'z' already, and so does an
-                // --source-colourspace xyz source; every other source is display
-                // rgb and needs grok's dcdm transform at encode time
-                let mut content_already_xyz = !colourspace_applies_xyz;
+                // --source-colourspace xyz source. p3 and rec2020 are display
+                // rgb grok cannot convert, so postkit transforms those frames
+                // itself; everything else is grok's own dcdm transform
+                let mut content_already_xyz =
+                    matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz);
+                let frame_transform = match xyz_route.frame_transform() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
                 let hdr_type = dcpwizard_core::dolby_vision::detect_hdr_type(&range_src);
                 if hdr_already_pq {
                     // the operator's assertion beats detection: a pq source can
@@ -3200,7 +3218,9 @@ fn run() {
                 let params = CompressParams {
                     compression_ratio,
                     frame_rate: fps as u16,
-                    apply_xyz_transform: !content_already_xyz,
+                    // grok converts only what nothing else has converted
+                    apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
+                    source_transform: frame_transform,
                     ..CompressParams::default()
                 };
 
@@ -3596,7 +3616,7 @@ fn run() {
                         fps,
                         width,
                         height,
-                        colourspace_applies_xyz,
+                        xyz_route,
                         &still_j2k_dir,
                     ) {
                         tracing::error!("{e}");

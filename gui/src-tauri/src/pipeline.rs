@@ -298,8 +298,12 @@ pub async fn submit_job(
     let source_colourspace = dcpwizard_core::encode::parse_source_colourspace(
         source_colourspace.as_deref().unwrap_or("rec709"),
     )?;
-    let colourspace_applies_xyz =
-        dcpwizard_core::encode::applies_xyz_transform(source_colourspace)?;
+    let xyz_route = dcpwizard_core::encode::xyz_route(source_colourspace)?;
+    // a J2K directory is picture that is already encoded: no transform runs
+    // over it, so a colour space here would be ignored
+    if postkit::encode::detect_input_type(&video) == postkit::encode::InputType::J2kSequence {
+        dcpwizard_core::encode::check_precompressed_colourspace(source_colourspace)?;
+    }
 
     let upmix = parse_upmixer(upmix.as_deref())?;
 
@@ -341,6 +345,13 @@ pub async fn submit_job(
     let right_eye = right_eye.filter(|s| !s.is_empty());
     let hdr_dci = hdr_dci.unwrap_or(false);
     let allow_generic_hdr_tonemap = allow_generic_hdr_tonemap.unwrap_or(false);
+    // the generic tone map lands on Rec.709, so it and a wide-gamut source
+    // colour space cannot both describe the frames the encoder gets
+    if allow_generic_hdr_tonemap && !xyz_route.compressor_transform() {
+        return Err(
+            "The source colour space and the generic HDR tone map both decide what the encoder converts: set one or the other".into(),
+        );
+    }
     let hdr_source_colour = resolve_hdr(
         &HdrPanelOptions {
             dci: hdr_dci,
@@ -357,13 +368,11 @@ pub async fn submit_job(
     // the source colour space and the HDR options both answer "does the encoder
     // run its X'Y'Z' transform?", so only one of them may.
     let source_colour = match (
-        colourspace_applies_xyz,
+        xyz_route.compressor_transform(),
         hdr_source_colour.applies_xyz_transform(),
     ) {
         (true, _) => hdr_source_colour,
-        // postkit spells "compress untransformed" AlreadyPq; an X'Y'Z' source is
-        // that same route without the PQ label, which only --hdr-dci writes
-        (false, true) => postkit::encode::SourceColour::AlreadyPq,
+        (false, true) => xyz_route.source_colour(),
         (false, false) => {
             return Err(
                 "The source colour space and the HDR options both decide the encoder's colour transform: set one or the other".into(),
@@ -906,7 +915,13 @@ fn plan_hdr_source(
     use postkit::dolby_vision::HdrType;
     use postkit::encode::SourceColour;
 
-    if hdr_type == HdrType::Sdr || *source_colour != SourceColour::DisplayRgb {
+    // a wide-gamut source is display RGB too, so an HDR file labelled that way
+    // still has to name how it reaches DCI
+    let display_rgb = matches!(
+        source_colour,
+        SourceColour::DisplayRgb | SourceColour::DisplayRgbIn(_)
+    );
+    if hdr_type == HdrType::Sdr || !display_rgb {
         return Ok(HdrSourceStep::EncodeDirectly);
     }
     if allow_generic_tonemap {
@@ -1092,7 +1107,7 @@ fn encode_still(
         fps,
         info.width,
         info.height,
-        dcpwizard_core::encode::applies_xyz_transform(job.source_colourspace)?,
+        dcpwizard_core::encode::xyz_route(job.source_colourspace)?,
         &j2k_dir,
     )?;
     log(&format!(
@@ -2004,6 +2019,14 @@ mod tests {
             HdrSourceStep::TonemapToSdr
         );
         assert!(plan_hdr_source(HdrType::Hdr10, &SourceColour::DisplayRgb, false).is_err());
+        // a P3 source is display RGB, so an HDR file labelled P3 must still say
+        // how it reaches DCI instead of being matrixed straight through
+        assert!(plan_hdr_source(
+            HdrType::Hdr10,
+            &SourceColour::DisplayRgbIn(postkit::colour::ColourSpace::P3),
+            false,
+        )
+        .is_err());
     }
 
     #[test]

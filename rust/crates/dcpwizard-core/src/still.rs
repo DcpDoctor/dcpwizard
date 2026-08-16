@@ -49,15 +49,16 @@ fn decode_rgb48(image: &Path, width: u32, height: u32) -> Result<Vec<u8>, String
 }
 
 /// Encode `image` once and link the codestream for each of `frames` frames of
-/// `out_dir`. `apply_xyz_transform` is the encoder's Rec.709 to DCI X'Y'Z' pass,
-/// off when the source is already X'Y'Z'.
+/// `out_dir`. `route` says how the still reaches X'Y'Z': the compressor's own
+/// Rec.709 pass, postkit's matrix for a wide-gamut source, or nothing when the
+/// image is already X'Y'Z'.
 pub fn build_still_frames(
     image: &Path,
     frames: u64,
     fps: u32,
     width: u32,
     height: u32,
-    apply_xyz_transform: bool,
+    route: crate::encode::XyzRoute,
     out_dir: &Path,
 ) -> Result<(), String> {
     use postkit::grok_encoder::{self, CompressParams, RawFrame};
@@ -74,7 +75,8 @@ pub fn build_still_frames(
 
     let params = CompressParams {
         frame_rate: fps.max(1) as u16,
-        apply_xyz_transform,
+        apply_xyz_transform: route.compressor_transform(),
+        source_transform: route.frame_transform()?,
         ..CompressParams::default()
     };
     let cancel = Arc::new(AtomicBool::new(false));
@@ -141,7 +143,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let image = dir.path().join("card.png");
         std::fs::write(&image, "x").unwrap();
-        let err = build_still_frames(&image, 0, 24, 2048, 1080, true, dir.path()).unwrap_err();
+        let err = build_still_frames(
+            &image,
+            0,
+            24,
+            2048,
+            1080,
+            crate::encode::XyzRoute::CompressorTransform,
+            dir.path(),
+        )
+        .unwrap_err();
         assert!(err.contains("at least one frame"), "got: {err}");
     }
 }

@@ -76,25 +76,73 @@ pub fn parse_source_colourspace(spec: &str) -> Result<postkit::colour::ColourSpa
     }
 }
 
-/// Whether the compressor has to run its Rec.709 RGB to DCI X'Y'Z' transform for
-/// a source carrying `space`.
+/// How a source carrying `space` reaches DCI X'Y'Z' inside the encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XyzRoute {
+    /// the compressor runs its own Rec.709 RGB to X'Y'Z' transform
+    CompressorTransform,
+    /// postkit converts every frame with this space's matrix, and the
+    /// compressor's own transform stays off
+    FrameTransform(postkit::colour::ColourSpace),
+    /// the source already carries X'Y'Z'
+    AlreadyXyz,
+}
+
+/// The route a source carrying `space` takes to X'Y'Z' inside the encode.
 ///
-/// Only two spaces reach X'Y'Z' from inside the encode: Rec.709, which the
-/// compressor converts itself, and X'Y'Z', which is already there. Every other
-/// space needs a real transform first, which `dcpwizard colour --target xyz`
-/// (P3, Rec.2020) or a 3D LUT (the log and ACES spaces) does as its own pass, so
-/// asking for one here is refused rather than approximated.
-pub fn applies_xyz_transform(space: postkit::colour::ColourSpace) -> Result<bool, String> {
+/// Rec.709 is the compressor's own transform, X'Y'Z' is already there, and P3
+/// and Rec.2020 go through postkit's matrix for that space. ACES, ACEScg and
+/// LogC are refused: they are scene-referred or log, so no 3x3 matrix converts
+/// them and approximating one would be silently wrong colour.
+pub fn xyz_route(space: postkit::colour::ColourSpace) -> Result<XyzRoute, String> {
     use postkit::colour::ColourSpace;
     match space {
-        ColourSpace::Rec709 => Ok(true),
-        ColourSpace::Xyz => Ok(false),
+        ColourSpace::Rec709 => Ok(XyzRoute::CompressorTransform),
+        ColourSpace::Xyz => Ok(XyzRoute::AlreadyXyz),
+        ColourSpace::P3 | ColourSpace::Rec2020 => Ok(XyzRoute::FrameTransform(space)),
         other => Err(format!(
-            "--source-colourspace {other:?} has no transform inside the encode: convert the source \
-             to X'Y'Z' first (`dcpwizard colour --source <space> --target xyz`, or a 3D LUT via \
-             --hdr-to-dci-lut) and then pass --source-colourspace xyz"
+            "--source-colourspace {other:?} is scene-referred or log, which no 3x3 matrix \
+             converts: it needs a 3D LUT that lands on X'Y'Z' (pass it as --hdr-to-dci-lut), \
+             and then --source-colourspace xyz"
         )),
     }
+}
+
+impl XyzRoute {
+    /// Whether the compressor runs its own X'Y'Z' transform.
+    pub fn compressor_transform(self) -> bool {
+        matches!(self, XyzRoute::CompressorTransform)
+    }
+
+    /// postkit's per-frame transform, built once for a whole encode.
+    pub fn frame_transform(self) -> Result<Option<Arc<postkit::colour::DcdmTransform>>, String> {
+        self.source_colour().frame_transform()
+    }
+
+    /// How the frames reach the encoder, for the pipeline's own colour routing.
+    pub fn source_colour(self) -> postkit::encode::SourceColour {
+        use postkit::encode::SourceColour;
+        match self {
+            XyzRoute::CompressorTransform => SourceColour::DisplayRgb,
+            XyzRoute::FrameTransform(space) => SourceColour::DisplayRgbIn(space),
+            // postkit spells "compress untransformed" AlreadyPq; an X'Y'Z'
+            // source is that same route without the PQ label
+            XyzRoute::AlreadyXyz => SourceColour::AlreadyPq,
+        }
+    }
+}
+
+/// Refuse a source colour space on picture that is already compressed: no
+/// transform runs there, so anything but the Rec.709 default would be ignored.
+pub fn check_precompressed_colourspace(space: postkit::colour::ColourSpace) -> Result<(), String> {
+    if space == postkit::colour::ColourSpace::Rec709 {
+        return Ok(());
+    }
+    Err(format!(
+        "--source-colourspace {space:?} cannot be honoured for J2K input: the picture is \
+         already encoded, so no colour transform can run over it. Encode from the source \
+         picture instead"
+    ))
 }
 
 /// Refuse a video encode whose source raster is not the raster the encoder will
@@ -296,29 +344,60 @@ mod tests {
             ColourSpace::Rec709
         );
         assert!(
-            applies_xyz_transform(ColourSpace::Rec709).unwrap(),
+            xyz_route(ColourSpace::Rec709)
+                .unwrap()
+                .compressor_transform(),
             "rec709 must leave the compressor doing the conversion, as it always did"
         );
-        assert!(
-            !applies_xyz_transform(ColourSpace::Xyz).unwrap(),
+        assert_eq!(
+            xyz_route(ColourSpace::Xyz).unwrap(),
+            XyzRoute::AlreadyXyz,
             "an X'Y'Z' source must be compressed untransformed"
         );
     }
 
     #[test]
-    fn a_space_with_no_transform_here_is_refused_rather_than_approximated() {
+    fn the_wide_gamut_spaces_convert_through_postkit_and_not_the_compressor() {
         use postkit::colour::ColourSpace;
-        for space in [
-            ColourSpace::P3,
-            ColourSpace::Rec2020,
-            ColourSpace::Aces,
-            ColourSpace::AcesCg,
-            ColourSpace::LogC,
-        ] {
-            let err = applies_xyz_transform(space).unwrap_err();
+        for space in [ColourSpace::P3, ColourSpace::Rec2020] {
+            let route = xyz_route(space).unwrap();
+            assert_eq!(route, XyzRoute::FrameTransform(space));
             assert!(
-                err.contains("colour --source"),
-                "{space:?} must name the conversion pass: {err}"
+                !route.compressor_transform(),
+                "{space:?} is converted here, so the compressor must not convert it again"
+            );
+            assert!(
+                route.frame_transform().unwrap().is_some(),
+                "{space:?} must carry a transform into the encode"
+            );
+            assert_eq!(
+                route.source_colour(),
+                postkit::encode::SourceColour::DisplayRgbIn(space)
+            );
+        }
+    }
+
+    #[test]
+    fn a_scene_referred_or_log_space_is_refused_rather_than_approximated() {
+        use postkit::colour::ColourSpace;
+        for space in [ColourSpace::Aces, ColourSpace::AcesCg, ColourSpace::LogC] {
+            let err = xyz_route(space).unwrap_err();
+            assert!(
+                err.contains("3D LUT"),
+                "{space:?} must name the LUT pass: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn precompressed_picture_takes_the_default_colour_space_and_nothing_else() {
+        use postkit::colour::ColourSpace;
+        assert!(check_precompressed_colourspace(ColourSpace::Rec709).is_ok());
+        for space in [ColourSpace::P3, ColourSpace::Rec2020, ColourSpace::Xyz] {
+            let err = check_precompressed_colourspace(space).unwrap_err();
+            assert!(
+                err.contains("already encoded"),
+                "{space:?} must say why it cannot be honoured: {err}"
             );
         }
     }

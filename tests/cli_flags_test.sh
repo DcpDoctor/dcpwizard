@@ -203,9 +203,13 @@ refuse() {
 refuse "create --hdr-dci needs PQ path" "needs the source path to PQ" \
        create --title x --video "$C" --output "$C" --hdr-dci
 
-# A colour space with no transform inside the encode must be refused, not
-# approximated, and it must name the conversion pass that does have one.
-refuse "create --source-colourspace p3" "colour --source" \
+# A scene-referred or log space has no matrix into X'Y'Z', so it must be
+# refused rather than approximated, naming the pass that does convert it.
+refuse "create --source-colourspace aces" "3D LUT" \
+       create --title x --video "$C" --output "$C" --source-colourspace aces
+# P3 and Rec.2020 do convert, but only where an encode runs: a codestream
+# directory is already encoded.
+refuse "create --source-colourspace p3 on J2K input" "already encoded" \
        create --title x --video "$C" --output "$C" --source-colourspace p3
 # --still-length only means something for a single-image --video
 refuse "create --still-length without a still" "carries its own length" \
