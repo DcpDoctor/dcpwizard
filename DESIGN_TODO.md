@@ -157,12 +157,8 @@ user-facing surface is here.
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
 
-- Burn-in styling flags: what is left. Size, colour, effect, effect colour, outline
-  width, x/y scale and the fades all reach the rasteriser now. Line height and margin
-  are still `BurnStyle` fields no flag can name, and postkit has no override for
-  either, so they need a `BurnStyleOverrides` field before a flag is worth adding.
-  Separately, cosmic-text's bidi handling could replace the hand-rolled
-  `--subtitle-rtl` reshaping.
+- cosmic-text's bidi handling could replace the hand-rolled `--subtitle-rtl`
+  reshaping.
 - Timed-text appearance covers the open `--subtitle` track only. `--ccap` keeps the
   default `Font` line and fades, and `create --versions` renders through the older
   frame-based writer, which reads no `SubtitleOptions` field at all (placement, RTL,

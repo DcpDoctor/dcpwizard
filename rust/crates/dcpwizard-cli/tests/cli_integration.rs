@@ -560,6 +560,35 @@ fn create_refuses_a_burn_appearance_with_nothing_to_burn() {
         .failure()
         .stdout(predicate::str::contains("--burn-effect"))
         .stdout(predicate::str::contains("--burn-subtitle"));
+
+    create_with(&dir, &video, &["--burn-margin", "12"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--burn-margin"))
+        .stdout(predicate::str::contains("--burn-subtitle"));
+}
+
+#[test]
+fn create_refuses_a_burn_line_height_below_one() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+    let srt = dir.path().join("cues.srt");
+    write_test_srt(&srt);
+
+    create_with(
+        &dir,
+        &video,
+        &[
+            "--burn-subtitle",
+            srt.to_str().unwrap(),
+            "--burn-line-height",
+            "0.5",
+        ],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("line height"));
 }
 
 #[test]

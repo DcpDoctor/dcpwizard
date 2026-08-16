@@ -373,6 +373,10 @@ struct CreateBurnAppearance {
     burn_effect_colour: Option<String>,
     #[arg(long, help = burn_outline_width_help())]
     burn_outline_width: Option<f32>,
+    #[arg(long, help = burn_line_height_help())]
+    burn_line_height: Option<f32>,
+    #[arg(long, help = burn_margin_help())]
+    burn_margin: Option<f32>,
     /// Horizontal stretch of the burnt-in text (default 1.0)
     #[arg(long)]
     burn_x_scale: Option<f32>,
@@ -406,6 +410,20 @@ fn burn_outline_width_help() -> String {
     )
 }
 
+fn burn_line_height_help() -> String {
+    format!(
+        "Burn-in line box height as a multiple of the text height (default {:.2})",
+        postkit::subtitle_raster::DEFAULT_LINE_HEIGHT_RATIO
+    )
+}
+
+fn burn_margin_help() -> String {
+    format!(
+        "Burn-in distance from the anchored edge as a percent of the frame height (default {:.1})",
+        postkit::subtitle_raster::DEFAULT_MARGIN_RATIO * RATIO_TO_PERCENT
+    )
+}
+
 impl CreateBurnAppearance {
     /// The flags the caller actually gave, so a refusal can name them.
     fn named(&self) -> Vec<&'static str> {
@@ -415,6 +433,8 @@ impl CreateBurnAppearance {
             ("--burn-effect", self.burn_effect.is_some()),
             ("--burn-effect-colour", self.burn_effect_colour.is_some()),
             ("--burn-outline-width", self.burn_outline_width.is_some()),
+            ("--burn-line-height", self.burn_line_height.is_some()),
+            ("--burn-margin", self.burn_margin.is_some()),
             ("--burn-x-scale", self.burn_x_scale.is_some()),
             ("--burn-y-scale", self.burn_y_scale.is_some()),
             ("--burn-fade-up", self.burn_fade_up.is_some()),
@@ -445,6 +465,8 @@ impl CreateBurnAppearance {
                 None => None,
             },
             outline_width_percent: self.burn_outline_width,
+            line_height_ratio: self.burn_line_height,
+            margin_percent: self.burn_margin,
             x_scale: self.burn_x_scale,
             y_scale: self.burn_y_scale,
             fade_up_ms: self.burn_fade_up,

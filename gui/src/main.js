@@ -1082,6 +1082,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       burnEffect: document.getElementById("prop-burn-effect")?.value || null,
       burnEffectColour: document.getElementById("prop-burn-effect-colour")?.value || null,
       burnOutlineWidth: document.getElementById("prop-burn-outline-width")?.value || null,
+      burnLineHeight: document.getElementById("prop-burn-line-height")?.value || null,
+      burnMargin: document.getElementById("prop-burn-margin")?.value || null,
       burnFadeUp: document.getElementById("prop-burn-fade-up")?.value || null,
       burnFadeDown: document.getElementById("prop-burn-fade-down")?.value || null,
       ccap: document.getElementById("prop-ccap")?.value || null,
