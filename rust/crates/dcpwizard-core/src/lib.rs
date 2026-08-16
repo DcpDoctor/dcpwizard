@@ -2,6 +2,7 @@ pub mod aaf_import;
 pub mod accessibility;
 pub mod assemble;
 pub mod assetmap;
+pub mod audio_adjust;
 pub mod audio_route;
 pub mod burnin;
 pub mod cert_fetch;

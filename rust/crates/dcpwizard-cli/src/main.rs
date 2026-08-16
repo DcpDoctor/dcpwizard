@@ -43,6 +43,21 @@ struct CreateAudioQol {
     /// a (band-split) or b (passthrough + delayed surrounds).
     #[arg(long, value_parser = ["a", "b"])]
     upmix: Option<String>,
+    /// Audio gain in dB, applied after any upmix and loudness pass.
+    #[arg(long)]
+    audio_gain: Option<f64>,
+    /// Fade the audio up from silence over this many seconds.
+    #[arg(long)]
+    audio_fade_in: Option<f64>,
+    /// Fade the audio down to silence over this many seconds.
+    #[arg(long)]
+    audio_fade_out: Option<f64>,
+    /// Fade the picture up from black over this many seconds.
+    #[arg(long)]
+    video_fade_in: Option<f64>,
+    /// Fade the picture down to black over this many seconds.
+    #[arg(long)]
+    video_fade_out: Option<f64>,
     /// Wait until this wall-clock time before encoding (dom#2359): HH:MM,
     /// an RFC 3339 timestamp, or a +offset (+30m, +2h).
     #[arg(long)]
@@ -1665,6 +1680,7 @@ fn prepare_create_audio(
     upmix: Option<&str>,
     loudness_target: Option<&str>,
     true_peak_ceiling: Option<f64>,
+    adjust: &dcpwizard_core::audio_adjust::AudioAdjust,
     work_dir: &Path,
 ) -> Result<Option<PathBuf>, String> {
     let Some(mut path) = audio else {
@@ -1707,6 +1723,14 @@ fn prepare_create_audio(
             plan.resulting_true_peak_dbtp,
         );
         path = out;
+    }
+
+    if !adjust.is_empty() {
+        std::fs::create_dir_all(work_dir).map_err(|e| e.to_string())?;
+        let out = work_dir.join("adjusted.wav");
+        let seconds = dcpwizard_core::audio_adjust::duration_seconds(&path)?;
+        path = dcpwizard_core::audio_adjust::apply(&path, &out, adjust, seconds)?;
+        tracing::info!("Applied audio gain/fades");
     }
 
     Ok(Some(path))
@@ -2528,6 +2552,11 @@ fn run() {
                 loudness_target,
                 true_peak_ceiling,
                 upmix,
+                audio_gain,
+                audio_fade_in,
+                audio_fade_out,
+                video_fade_in,
+                video_fade_out,
                 start_at,
                 resume,
                 shutdown_when_done,
@@ -2584,6 +2613,11 @@ fn run() {
                         std::process::exit(1);
                     }
                 };
+            let audio_adjust = dcpwizard_core::audio_adjust::AudioAdjust {
+                gain_db: audio_gain,
+                fade_in_seconds: audio_fade_in,
+                fade_out_seconds: audio_fade_out,
+            };
             let parsed_luminance = match luminance
                 .as_deref()
                 .map(dcpwizard_core::cpl::Luminance::parse)
@@ -2910,6 +2944,17 @@ fn run() {
                     tracing::warn!("could not save resume state: {e}");
                 }
 
+                let video_filter = match dcpwizard_core::audio_adjust::video_fade_filter(
+                    video_fade_in,
+                    video_fade_out,
+                    total_frames as f64 / fps.max(1) as f64,
+                ) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
                 let encode_start = std::time::Instant::now();
                 let result = grok_encoder::encode_video_pipeline_resumable(
                     &encode_video_path,
@@ -2920,6 +2965,7 @@ fn run() {
                     height,
                     &cancel,
                     resume,
+                    video_filter.as_deref(),
                     |p: EncodeProgress| {
                         let percent = if p.total_frames > 0 {
                             (p.frames_encoded as f64 / p.total_frames as f64) * 100.0
@@ -3019,6 +3065,7 @@ fn run() {
                     upmix.as_deref(),
                     loudness_target.as_deref(),
                     true_peak_ceiling,
+                    &audio_adjust,
                     &output_dir.join("audio_work"),
                 ) {
                     Ok(p) => p,
@@ -3210,6 +3257,7 @@ fn run() {
                     upmix.as_deref(),
                     loudness_target.as_deref(),
                     true_peak_ceiling,
+                    &audio_adjust,
                     &work_dir,
                 ) {
                     Ok(p) => p,

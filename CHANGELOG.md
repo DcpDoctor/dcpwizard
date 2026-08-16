@@ -6,6 +6,7 @@
 - **Composition identity in the CPL** — `create` now writes the `AnnotationText` Bv2.1 requires (equal to the content title, on both CPL and PKL), a `VersionNumber` in the CompositionMetadataAsset, and a `<Hash>` on every reel asset, which some servers check instead of the PKL's. Our own validator flagged all four on our own output
 - **ST 429-16 composition metadata** — `create --release-territory/--version-number/--chain/--distributor/--facility/--luminance`. A numeric territory declares the UN M.49 scope, without which readers measure it against the RFC 5646 region grammar and reject it
 - `create-multi --container-dims`, matching `create`
+- **Gain and fades** — `create --audio-gain` in dB, `--audio-fade-in/--audio-fade-out` and `--video-fade-in/--video-fade-out` in seconds. All four keep the running time the same, so the sound still matches the picture duration the CPL declares; a fade longer than the programme is refused
 - **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
 
 ### Fixed
