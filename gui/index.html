@@ -490,6 +490,36 @@
                     <input id="prop-subtitle-language" type="text" value="en" placeholder="en">
                   </div>
                   <div class="prop-field">
+                    <label for="prop-subtitle-font-size">Subtitle size (points)</label>
+                    <input id="prop-subtitle-font-size" type="number" min="1" step="1" placeholder="42">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-subtitle-colour">Subtitle colour (RRGGBB or RRGGBBAA)</label>
+                    <input id="prop-subtitle-colour" type="text" placeholder="FFFFFF">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-subtitle-effect">Subtitle effect</label>
+                    <select id="prop-subtitle-effect">
+                      <option value="">Default (shadow)</option>
+                      <option value="none">None</option>
+                      <option value="outline">Outline</option>
+                      <option value="shadow">Shadow</option>
+                    </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-subtitle-effect-colour">Subtitle effect colour (RRGGBB or RRGGBBAA)</label>
+                    <input id="prop-subtitle-effect-colour" type="text" placeholder="000000">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-subtitle-fade-up">Subtitle fade up (ms)</label>
+                    <input id="prop-subtitle-fade-up" type="number" min="0" step="1" placeholder="a twelfth of a second">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-subtitle-fade-down">Subtitle fade down (ms)</label>
+                    <input id="prop-subtitle-fade-down" type="number" min="0" step="1" placeholder="a twelfth of a second">
+                  </div>
+                  <p class="field-hint">Subtitle appearance styles the imported subtitle track. Closed captions keep the default appearance.</p>
+                  <div class="prop-field">
                     <label for="prop-burn-subtitle">Burn subtitles into the picture</label>
                     <div class="input-with-btn">
                       <input id="prop-burn-subtitle" type="text" placeholder="SRT, ASS, PAC, MKS, FCPXML or Interop XML…" readonly>
@@ -502,6 +532,39 @@
                       <input id="prop-burn-subtitle-font" type="text" placeholder="System font" readonly>
                       <button id="prop-browse-burn-subtitle-font" class="btn-sm">…</button>
                     </div>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-font-size">Burn-in font size (% of frame height)</label>
+                    <input id="prop-burn-font-size" type="number" min="0" step="0.1" placeholder="4.5">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-colour">Burn-in colour (RRGGBB or RRGGBBAA)</label>
+                    <input id="prop-burn-colour" type="text" placeholder="FFFFFF">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-effect">Burn-in effect</label>
+                    <select id="prop-burn-effect">
+                      <option value="">Default (shadow)</option>
+                      <option value="none">None</option>
+                      <option value="outline">Outline</option>
+                      <option value="shadow">Shadow</option>
+                    </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-effect-colour">Burn-in effect colour (RRGGBB or RRGGBBAA)</label>
+                    <input id="prop-burn-effect-colour" type="text" placeholder="000000">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-outline-width">Burn-in outline width (% of text height)</label>
+                    <input id="prop-burn-outline-width" type="number" min="0" step="0.1" placeholder="5.0">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-fade-up">Burn-in fade up (ms)</label>
+                    <input id="prop-burn-fade-up" type="number" min="0" step="1" placeholder="0">
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-burn-fade-down">Burn-in fade down (ms)</label>
+                    <input id="prop-burn-fade-down" type="number" min="0" step="1" placeholder="0">
                   </div>
                   <div class="prop-field">
                     <label for="prop-ccap">Closed captions (CCAP)</label>

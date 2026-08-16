@@ -296,6 +296,9 @@ struct JobConfig {
     // timed-text track: burnt-in text is part of the image.
     burn_subtitle: Option<String>,
     burn_subtitle_font: Option<String>,
+    // how the burnt-in text and the packaged track look
+    burn_style: postkit::subtitle_raster::BurnStyleOverrides,
+    subtitle_appearance: dcpwizard_core::subtitle::TimedTextAppearance,
     ccap: Option<String>,
     ccap_language: String,
     // loudness normalize spec (leqm=<db> or lufs=<value>) applied to the audio
@@ -394,6 +397,38 @@ fn holds_dcp(dir: &std::path::Path) -> bool {
     DCP_ROOT_FILES.iter().any(|name| dir.join(name).exists())
 }
 
+/// What a panel field holds, or None when the user left it empty.
+fn filled(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|text| !text.is_empty())
+}
+
+/// A number typed into an appearance field, refused under the name of the
+/// `create` flag it feeds.
+fn parsed_field<T: std::str::FromStr>(
+    flag: &str,
+    value: &Option<String>,
+) -> Result<Option<T>, String> {
+    match filled(value) {
+        Some(text) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{flag}: {text} is not a number")),
+        None => Ok(None),
+    }
+}
+
+/// A colour typed into an appearance field, refused under the name of the
+/// `create` flag it feeds.
+fn parsed_colour(
+    flag: &str,
+    value: &Option<String>,
+) -> Result<Option<postkit::subtitle_formats::Rgba>, String> {
+    match filled(value) {
+        Some(text) => dcpwizard_core::subtitle::parse_colour_flag(flag, text).map(Some),
+        None => Ok(None),
+    }
+}
+
 // ─── Tauri commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -418,8 +453,21 @@ pub async fn submit_job(
     atmos: Option<String>,
     subtitle: Option<String>,
     subtitle_language: Option<String>,
+    subtitle_font_size: Option<String>,
+    subtitle_colour: Option<String>,
+    subtitle_effect: Option<String>,
+    subtitle_effect_colour: Option<String>,
+    subtitle_fade_up: Option<String>,
+    subtitle_fade_down: Option<String>,
     burn_subtitle: Option<String>,
     burn_subtitle_font: Option<String>,
+    burn_font_size: Option<String>,
+    burn_colour: Option<String>,
+    burn_effect: Option<String>,
+    burn_effect_colour: Option<String>,
+    burn_outline_width: Option<String>,
+    burn_fade_up: Option<String>,
+    burn_fade_down: Option<String>,
     ccap: Option<String>,
     ccap_language: Option<String>,
     loudness_target: Option<String>,
@@ -664,8 +712,48 @@ pub async fn submit_job(
         );
     }
 
+    let subtitle_appearance = dcpwizard_core::subtitle::TimedTextAppearance::from_flags(
+        parsed_field("--subtitle-font-size", &subtitle_font_size)?,
+        filled(&subtitle_colour),
+        filled(&subtitle_effect),
+        filled(&subtitle_effect_colour),
+        parsed_field("--subtitle-fade-up", &subtitle_fade_up)?,
+        parsed_field("--subtitle-fade-down", &subtitle_fade_down)?,
+    )?;
+    let burn_style = postkit::subtitle_raster::BurnStyleOverrides {
+        font_size_percent: parsed_field("--burn-font-size", &burn_font_size)?,
+        colour: parsed_colour("--burn-colour", &burn_colour)?,
+        effect: match filled(&burn_effect) {
+            Some(text) => Some(dcpwizard_core::subtitle::parse_effect_flag(
+                "--burn-effect",
+                text,
+            )?),
+            None => None,
+        },
+        effect_colour: parsed_colour("--burn-effect-colour", &burn_effect_colour)?,
+        outline_width_percent: parsed_field("--burn-outline-width", &burn_outline_width)?,
+        x_scale: None,
+        y_scale: None,
+        fade_up_ms: parsed_field("--burn-fade-up", &burn_fade_up)?,
+        fade_down_ms: parsed_field("--burn-fade-down", &burn_fade_down)?,
+    };
+
     let burn_subtitle = burn_subtitle.filter(|s| !s.is_empty());
     let burn_subtitle_font = burn_subtitle_font.filter(|s| !s.is_empty());
+    if subtitle.is_none()
+        && subtitle_appearance != dcpwizard_core::subtitle::TimedTextAppearance::default()
+    {
+        return Err(
+            "The subtitle appearance styles the timed-text track the subtitle field packages, and captions keep the default appearance: pick a subtitle file or clear those fields".into(),
+        );
+    }
+    if burn_subtitle.is_none()
+        && burn_style != postkit::subtitle_raster::BurnStyleOverrides::default()
+    {
+        return Err(
+            "The burn-in appearance styles the text the burn-in field draws into the picture: pick a burn-in subtitle file or clear those fields".into(),
+        );
+    }
     if let Some(path) = burn_subtitle.as_deref() {
         if !versions.is_empty() {
             return Err(
@@ -686,6 +774,7 @@ pub async fn submit_job(
             Path::new(path),
             burn_subtitle_font.as_deref().map(Path::new),
             fps_num,
+            &burn_style,
         )?;
     }
 
@@ -749,6 +838,8 @@ pub async fn submit_job(
         subtitle_language: subtitle_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
         burn_subtitle,
         burn_subtitle_font,
+        burn_style,
+        subtitle_appearance,
         ccap,
         ccap_language: ccap_language.unwrap_or_else(|| DEFAULT_LANGUAGE.into()),
         loudness_target: loudness_target.filter(|s| !s.is_empty()),
@@ -1591,6 +1682,7 @@ fn job_subtitle_burn(
         Path::new(path),
         job.burn_subtitle_font.as_deref().map(Path::new),
         fps,
+        &job.burn_style,
     )
     .map(Some)
 }
@@ -1705,6 +1797,10 @@ fn build_dcp_config(
         atmos_path: job.atmos.as_ref().map(PathBuf::from),
         subtitle_path: job.subtitle.as_ref().map(PathBuf::from),
         subtitle_language: job.subtitle_language.clone(),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            appearance: job.subtitle_appearance.clone(),
+            ..Default::default()
+        },
         ccap_path: job.ccap.as_ref().map(PathBuf::from),
         ccap_language: job.ccap_language.clone(),
         pad_head: job.pad_head.clone(),
@@ -2059,6 +2155,8 @@ mod tests {
             subtitle_language: "en".into(),
             burn_subtitle: None,
             burn_subtitle_font: None,
+            burn_style: postkit::subtitle_raster::BurnStyleOverrides::default(),
+            subtitle_appearance: dcpwizard_core::subtitle::TimedTextAppearance::default(),
             ccap: None,
             ccap_language: "en".into(),
             loudness_target: None,
