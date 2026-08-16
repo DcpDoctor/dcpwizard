@@ -68,6 +68,17 @@ user-facing surface is here.
   based. The credential half already has a pattern to copy: `email.rs` reads an SMTP
   config TOML whose password field redacts itself in Debug and never reaches argv or
   logs.
+- The job queue does not survive a restart, and the GUI's queue does not survive the
+  GUI. The daemon queue (CORE/job_queue.rs) is a Mutex around an in-memory map with
+  no save or load, so a daemon crash or reboot loses every pending job, and unlike
+  DCP-o-matic, whose batch jobs are film projects on disk that can be re-added, our
+  jobs carry their whole config as JSON params in memory, so losing the queue loses
+  the specifications. The GUI is worse: its Jobs panel is a separate JobQueue in
+  tauri state (gui pipeline.rs), never talks to the daemon (only `serve` proxies to
+  it), and dies with the window. Both halves are mostly plumbing: Job is already
+  Serialize/Deserialize, so persist to an XDG-dir JSONL on submit and state change
+  and reload pending jobs on daemon start, and have the GUI submit over the existing
+  IPC when the daemon is up, falling back to in-process when it is not.
 - `--source-colourspace` accepts postkit's full ColourSpace set but only rec709 and
   xyz encode; p3, rec2020, aces, acescg and logc are refused at runtime, pointing at
   `colour --target xyz` as the separate pass. The in-encode transform they need does
