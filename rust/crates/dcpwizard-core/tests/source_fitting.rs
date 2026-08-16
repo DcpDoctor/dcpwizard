@@ -160,7 +160,7 @@ fn a_letterboxed_source_fills_the_scope_container_on_the_two_k_raster() {
         &clip,
         &work,
         &postkit::pipeline::EncodeRunOptions {
-            fps: FPS,
+            fps: postkit::encode::FrameRate::whole(FPS),
             picture: resolved.processing.clone(),
             ..postkit::pipeline::EncodeRunOptions::default()
         },

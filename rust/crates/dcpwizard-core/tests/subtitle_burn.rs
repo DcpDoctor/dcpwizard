@@ -9,12 +9,16 @@
 use dcpwizard_core::dcp::{DcpConfig, create_dcp};
 use dcpwizard_core::still::StillHold;
 use dcpwizard_core::subtitle::{check_burn_supported, prepare_subtitle_burn};
+use postkit::encode::FrameRate;
 use postkit::subtitle_raster::BurnStyleOverrides;
 use std::path::Path;
 
 const W: u32 = 2048;
 const H: u32 = 1080;
-const FPS: u32 = 24;
+const FPS: FrameRate = FrameRate {
+    numerator: 24,
+    denominator: 1,
+};
 
 const SRT: &str = "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n\
                    2\n00:00:02,000 --> 00:00:03,000\nsecond line\n\n";
@@ -134,7 +138,7 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
 
     // 3 seconds of hold over cues at 0-1s and 2-3s: the picture changes at
     // frames 24, 48 and 72, so four distinct frames are encoded.
-    let held_frames = 3 * FPS as u64;
+    let held_frames = 3 * FPS.numerator as u64;
     let j2k = dir.path().join("j2k");
     dcpwizard_core::still::build_still_frames(&StillHold {
         image: &card,
@@ -175,8 +179,8 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
         standard: dcpwizard_core::Standard::Smpte,
         resolution: dcpwizard_core::Resolution::TwoK,
         content_type: dcpwizard_core::ContentType::Feature,
-        frame_rate_num: FPS,
-        frame_rate_den: 1,
+        frame_rate_num: FPS.numerator,
+        frame_rate_den: FPS.denominator,
         output_dir: out.clone(),
         j2k_dir: Some(j2k),
         ..Default::default()

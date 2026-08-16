@@ -168,7 +168,7 @@ fn check_burn(plan: &CreatePlan) -> Result<(), String> {
     crate::subtitle::prepare_subtitle_burn(
         burn,
         plan.burn_subtitle_font.as_deref(),
-        plan.fps,
+        postkit::encode::FrameRate::whole(plan.fps),
         &plan.burn_style,
     )
     .map(|_| ())

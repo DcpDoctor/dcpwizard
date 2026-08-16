@@ -3605,22 +3605,23 @@ fn run() {
 
             // the edit rate is settled inside each branch, and the cue timings
             // are read against it, so the burn is built there
-            let build_subtitle_burn =
-                |fps: u32| -> Option<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>> {
-                    let path = burn_subtitle.as_deref()?;
-                    match dcpwizard_core::subtitle::prepare_subtitle_burn(
-                        Path::new(path),
-                        burn_subtitle_font.as_deref().map(Path::new),
-                        fps,
-                        &burn_style,
-                    ) {
-                        Ok(burn) => Some(burn),
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            std::process::exit(1);
-                        }
+            let build_subtitle_burn = |fps: postkit::encode::FrameRate| -> Option<
+                std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>,
+            > {
+                let path = burn_subtitle.as_deref()?;
+                match dcpwizard_core::subtitle::prepare_subtitle_burn(
+                    Path::new(path),
+                    burn_subtitle_font.as_deref().map(Path::new),
+                    fps,
+                    &burn_style,
+                ) {
+                    Ok(burn) => Some(burn),
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
                     }
-                };
+                }
+            };
 
             // one description of the job, checked and hinted before anything is
             // encoded. The frame count costs a decode, so the source is probed
@@ -3925,7 +3926,7 @@ fn run() {
                     // grok converts only what nothing else has converted
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
                     source_preparation: postkit::grok_encoder::SourcePreparation {
-                        subtitle_burn: build_subtitle_burn(fps),
+                        subtitle_burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
                         colour_transform: frame_transform,
                     },
                     ..CompressParams::default()
@@ -4337,12 +4338,12 @@ fn run() {
                         &dcpwizard_core::still::StillHold {
                             image: &video_path,
                             frames,
-                            fps,
+                            fps: postkit::encode::FrameRate::whole(fps),
                             width,
                             height,
                             picture_filter: picture_filter.as_deref(),
                             route: xyz_route,
-                            burn: build_subtitle_burn(fps),
+                            burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
                             out_dir: &still_j2k_dir,
                         },
                     ) {
@@ -4583,7 +4584,7 @@ fn run() {
                 num_resolutions: 6,
                 codeblock_size: 32,
                 progression: "CPRL".to_string(),
-                fps,
+                fps: postkit::encode::FrameRate::whole(fps),
                 compressor_path: grk_bin,
                 lib_dir: None,
                 ..StreamEncodeOptions::default()

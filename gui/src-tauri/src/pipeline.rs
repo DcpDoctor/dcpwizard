@@ -789,7 +789,7 @@ pub async fn submit_job(
         dcpwizard_core::subtitle::prepare_subtitle_burn(
             Path::new(path),
             burn_subtitle_font.as_deref().map(Path::new),
-            fps_num,
+            postkit::encode::FrameRate::whole(fps_num),
             &burn_style,
         )?;
     }
@@ -1783,7 +1783,7 @@ fn prepare_audio(
 /// proved the file parses, so a failure here is a file that changed underneath.
 fn job_subtitle_burn(
     job: &JobConfig,
-    fps: u32,
+    fps: postkit::encode::FrameRate,
 ) -> Result<Option<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>>, String> {
     let Some(path) = job.burn_subtitle.as_deref() else {
         return Ok(None);
@@ -1803,7 +1803,7 @@ fn job_subtitle_burn(
 fn encode_still(
     job: &JobConfig,
     output: &std::path::Path,
-    fps: u32,
+    fps: postkit::encode::FrameRate,
     picture: &dcpwizard_core::source_picture::ResolvedPicture,
     log: impl Fn(&str),
 ) -> Result<postkit::pipeline::EncodeResult, String> {
@@ -1960,7 +1960,8 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         ),
     );
 
-    let (fps_num, _) = frame_rate_of(&job.framerate);
+    let (fps_num, fps_den) = frame_rate_of(&job.framerate);
+    let encode_fps = postkit::encode::FrameRate::new(fps_num, fps_den);
 
     // reel boundaries before the encode: a source with no chapter marks should
     // fail now, not after an hour of J2K.
@@ -2011,12 +2012,12 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
-        fps: fps_num,
+        fps: encode_fps,
         source_colour: job.source_colour.clone(),
         codestream_byte_cap: job
             .hdr_dci
             .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
-        subtitle_burn: job_subtitle_burn(job, fps_num)?,
+        subtitle_burn: job_subtitle_burn(job, encode_fps)?,
         picture: resolved_picture.processing.clone(),
     };
 
@@ -2026,7 +2027,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let app_ref = app.clone();
     let log_ref = log_file.clone();
     let encode_result = if job.still_length_frames > 0 {
-        encode_still(job, output, fps_num, &resolved_picture, |msg| {
+        encode_still(job, output, encode_fps, &resolved_picture, |msg| {
             log_to(&log_ref, msg)
         })?
     } else {

@@ -261,7 +261,11 @@ fn detect_crop(source: &Path, threshold: f32, is_image_sequence: bool) -> Result
     let list_dir = tempfile::tempdir()
         .map_err(|e| format!("cannot create a working directory for auto-crop: {e}"))?;
     let list = list_dir.path().join("frames.ffconcat");
-    postkit::encode::write_image_concat_list(&frames, IMAGE_LIST_FRAME_RATE, &list)?;
+    postkit::encode::write_image_concat_list(
+        &frames,
+        postkit::encode::FrameRate::whole(IMAGE_LIST_FRAME_RATE),
+        &list,
+    )?;
     detect_black_borders(
         &list,
         DecodeSource::ImageList,

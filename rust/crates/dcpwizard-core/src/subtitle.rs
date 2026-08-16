@@ -324,7 +324,7 @@ pub fn load_styled_cues(path: &Path, fps: u32) -> Result<Vec<StyledCue>, String>
 pub fn prepare_subtitle_burn(
     input: &Path,
     font: Option<&Path>,
-    fps: u32,
+    fps: postkit::encode::FrameRate,
     style: &BurnStyleOverrides,
 ) -> Result<std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>, String> {
     if detect_subtitle_kind(input)? == SubtitleInputKind::SmpteDcstPassthrough {
@@ -342,8 +342,9 @@ pub fn prepare_subtitle_burn(
     let style = style
         .apply(BurnStyle::default())
         .map_err(|e| format!("burn-in appearance: {e}"))?;
-    let cues = load_styled_cues(input, fps)?;
-    postkit::subtitle_raster::SubtitleBurn::new(cues, font, style, fps.max(1) as f64)
+    // a frame-timed cue file is read against the DCP edit rate, which is whole
+    let cues = load_styled_cues(input, fps.as_f64().round() as u32)?;
+    postkit::subtitle_raster::SubtitleBurn::new(cues, font, style, fps.as_f64())
         .map(std::sync::Arc::new)
         .map_err(|e| format!("cannot burn {}: {e}", input.display()))
 }
