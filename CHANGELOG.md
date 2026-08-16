@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Window state restore** — the GUI reopens with the size, position and maximized state it was closed with (tauri-plugin-window-state)
 - **Composition identity in the CPL** — `create` now writes the `AnnotationText` Bv2.1 requires (equal to the content title, on both CPL and PKL), a `VersionNumber` in the CompositionMetadataAsset, and a `<Hash>` on every reel asset, which some servers check instead of the PKL's. Our own validator flagged all four on our own output
 - **ST 429-16 composition metadata** — `create --release-territory/--version-number/--chain/--distributor/--facility/--luminance`. A numeric territory declares the UN M.49 scope, without which readers measure it against the RFC 5646 region grammar and reject it
 - `create-multi --container-dims`, matching `create`
