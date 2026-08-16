@@ -532,7 +532,8 @@ dcpwizard cinema add --name "Odeon" --email ops@odeon.test --notes "priority"
 dcpwizard cinema add-screen --cinema Odeon --name "Screen 1" --cert screen1.pem
 dcpwizard cinema add-screen --cinema Odeon --name "Screen 2" --cert screen2.pem --inline
 dcpwizard cinema list
-dcpwizard cinema search 4ca4b493          # by name, or cert serial/thumbprint
+# the thumbprint is the base64 ST 430-2 value a KDM carries, not a hex digest
+dcpwizard cinema search YGxSeoFg          # by name, or cert serial/thumbprint
 dcpwizard cinema import-flm facility.xml  # import an FLM-x (SMPTE 430-7) file
 
 # Named validity templates (default: ~/.local/share/dcpwizard/kdm-templates.json)

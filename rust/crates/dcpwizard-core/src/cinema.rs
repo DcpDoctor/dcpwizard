@@ -68,16 +68,64 @@ pub struct Recipient {
     pub cert_path: PathBuf,
 }
 
+/// read the certificate behind a screen, wherever it lives.
+fn cert_info(cert: &CertSource) -> Result<postkit::certificate::CertInfo, String> {
+    match cert {
+        CertSource::Path(p) => store::cert_info_from_file(p),
+        CertSource::Inline(pem) => store::cert_info_from_pem(pem),
+    }
+}
+
 impl CinemaDb {
     /// load the db, returning an empty db if the file does not exist yet.
     /// corrupt json fails loud rather than silently discarding cinemas.
+    ///
+    /// the cached certificate fields are refreshed here: they are derived from a
+    /// certificate the db still points at, so when what they mean changes (the
+    /// thumbprint became the ST 430-2 value a KDM carries) the repair is to
+    /// recompute them, not to version the file. list and search have to keep
+    /// working on a store that cannot be written, so a failed rewrite warns.
     pub fn load(path: &Path) -> Result<Self, String> {
-        match std::fs::read_to_string(path) {
+        let mut db: Self = match std::fs::read_to_string(path) {
             Ok(s) => serde_json::from_str(&s)
-                .map_err(|e| format!("cannot parse cinema db {}: {e}", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(format!("cannot read cinema db {}: {e}", path.display())),
+                .map_err(|e| format!("cannot parse cinema db {}: {e}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(format!("cannot read cinema db {}: {e}", path.display())),
+        };
+        if db.refresh_cached_cert_fields()
+            && let Err(e) = db.save(path)
+        {
+            tracing::warn!(
+                "cinema db {} holds outdated certificate details and could not be rewritten: {e}",
+                path.display()
+            );
         }
+        Ok(db)
+    }
+
+    /// recompute every screen's cached serial/thumbprint/subject from its
+    /// certificate, reporting whether any of them moved. a screen whose
+    /// certificate has gone missing keeps what it cached: dropping the values
+    /// would lose the only record of which certificate it was.
+    fn refresh_cached_cert_fields(&mut self) -> bool {
+        let mut changed = false;
+        for cinema in &mut self.cinemas {
+            for screen in &mut cinema.screens {
+                let Ok(info) = cert_info(&screen.cert) else {
+                    continue;
+                };
+                if screen.cert_serial != info.serial
+                    || screen.cert_thumbprint != info.thumbprint
+                    || screen.cert_subject != info.subject_cn
+                {
+                    screen.cert_serial = info.serial;
+                    screen.cert_thumbprint = info.thumbprint;
+                    screen.cert_subject = info.subject_cn;
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -120,10 +168,7 @@ impl CinemaDb {
     /// the cert is validated as real X.509 here (untrusted input) and rejected
     /// otherwise.
     fn make_screen(name: &str, cert: CertSource) -> Result<Screen, String> {
-        let info = match &cert {
-            CertSource::Path(p) => store::cert_info_from_file(p)?,
-            CertSource::Inline(pem) => store::cert_info_from_pem(pem)?,
-        };
+        let info = cert_info(&cert)?;
         Ok(Screen {
             name: name.to_string(),
             cert,
@@ -429,5 +474,121 @@ mod tests {
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].screen, "S1");
         assert!(db.resolve(&[], &["A/nope".into()], tmp.path()).is_err());
+    }
+
+    /// A db written before the thumbprint became the ST 430-2 value: the cached
+    /// fields hold whatever the old code computed.
+    fn db_with_stale_cache(cert: CertSource) -> CinemaDb {
+        CinemaDb {
+            cinemas: vec![Cinema {
+                name: "Odeon".into(),
+                emails: vec![],
+                notes: String::new(),
+                screens: vec![Screen {
+                    name: "Screen 1".into(),
+                    cert,
+                    cert_serial: "stale-serial".into(),
+                    cert_thumbprint: "4ca4b493deadbeef".into(),
+                    cert_subject: "stale-subject".into(),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn loading_an_old_db_recomputes_the_cached_certificate_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = leaf_cert(dir.path(), "screen1");
+        let info = store::cert_info_from_file(&cert).unwrap();
+        let db_path = dir.path().join("cinemas.json");
+        db_with_stale_cache(CertSource::Path(cert))
+            .save(&db_path)
+            .unwrap();
+
+        let loaded = CinemaDb::load(&db_path).unwrap();
+        let screen = &loaded.cinemas[0].screens[0];
+        assert_eq!(screen.cert_thumbprint, info.thumbprint);
+        assert_eq!(screen.cert_serial, info.serial);
+        assert_eq!(screen.cert_subject, info.subject_cn);
+        // the repair is written back, so the next reader sees it too
+        let on_disk = CinemaDb::load(&db_path).unwrap();
+        assert_eq!(
+            on_disk.cinemas[0].screens[0].cert_thumbprint,
+            info.thumbprint
+        );
+        // and the search a user runs with a thumbprint from a KDM now matches
+        assert_eq!(loaded.search(&info.thumbprint).len(), 1);
+    }
+
+    #[test]
+    fn a_screen_whose_certificate_is_gone_keeps_its_cached_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = leaf_cert(dir.path(), "screen1");
+        let db_path = dir.path().join("cinemas.json");
+        db_with_stale_cache(CertSource::Path(cert.clone()))
+            .save(&db_path)
+            .unwrap();
+        std::fs::remove_file(&cert).unwrap();
+
+        let loaded =
+            CinemaDb::load(&db_path).expect("a missing certificate must not fail the load");
+        let screen = &loaded.cinemas[0].screens[0];
+        assert_eq!(screen.cert_thumbprint, "4ca4b493deadbeef");
+        assert_eq!(screen.cert_serial, "stale-serial");
+    }
+
+    #[test]
+    fn a_second_load_rewrites_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = leaf_cert(dir.path(), "screen1");
+        let db_path = dir.path().join("cinemas.json");
+        db_with_stale_cache(CertSource::Path(cert))
+            .save(&db_path)
+            .unwrap();
+
+        CinemaDb::load(&db_path).unwrap();
+        let after_migration = std::fs::read(&db_path).unwrap();
+        let modified = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+
+        CinemaDb::load(&db_path).unwrap();
+        assert_eq!(std::fs::read(&db_path).unwrap(), after_migration);
+        assert_eq!(
+            std::fs::metadata(&db_path).unwrap().modified().unwrap(),
+            modified,
+            "an up-to-date db must not be rewritten at all"
+        );
+    }
+
+    #[test]
+    fn an_unwritable_store_still_loads_and_searches() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = leaf_cert(dir.path(), "screen1");
+        let info = store::cert_info_from_file(&cert).unwrap();
+        let store_dir = dir.path().join("readonly");
+        std::fs::create_dir(&store_dir).unwrap();
+        let db_path = store_dir.join("cinemas.json");
+        db_with_stale_cache(CertSource::Path(cert))
+            .save(&db_path)
+            .unwrap();
+
+        // atomic_write needs to create a temp file in the directory, which a
+        // read-only directory refuses
+        let mut perms = std::fs::metadata(&store_dir).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(true);
+        std::fs::set_permissions(&store_dir, perms).unwrap();
+
+        let loaded = CinemaDb::load(&db_path).expect("a read-only store must still load");
+        // the in-memory values are repaired even though the file could not be
+        assert_eq!(
+            loaded.cinemas[0].screens[0].cert_thumbprint,
+            info.thumbprint
+        );
+        assert_eq!(loaded.search(&info.thumbprint).len(), 1);
+
+        let mut perms = std::fs::metadata(&store_dir).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&store_dir, perms).unwrap();
     }
 }
