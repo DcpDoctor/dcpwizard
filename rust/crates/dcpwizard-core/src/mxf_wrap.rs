@@ -43,10 +43,11 @@ pub struct MxfWrapConfig {
     /// AES-128 content encryption for J2K picture / PCM sound. Not serialized.
     #[serde(skip)]
     pub encryption: Option<postkit::mxf_wrap::MxfEncryption>,
-    /// ST 429-12 MCA channel-label config for a PCM wrap (e.g.
-    /// `"51(L,R,C,LFE,Ls,Rs)"`). None auto-derives from the probed channel count.
+    /// ST 429-12 MCA channel labels for a PCM wrap (e.g. `"51(L,R,C,LFE,Ls,Rs)"`
+    /// plus the spoken language). None auto-derives the labels from the probed
+    /// channel count and leaves the language to asdcplib's en-US default.
     #[serde(skip)]
-    pub mca_config: Option<String>,
+    pub mca_config: Option<postkit::mxf_wrap::McaConfig>,
     /// The id the MXF carries as its AssetUUID. A caller that already named the
     /// output file or wrote the CPL/PKL/ASSETMAP entry must pass its id here, or
     /// the MXF ends up carrying a different id than the package claims. None
@@ -289,7 +290,7 @@ pub fn wrap_mxf_files(
     mxf_type: MxfType,
     frame_rate: u32,
     encryption: Option<postkit::mxf_wrap::MxfEncryption>,
-    mca_config: Option<String>,
+    mca_config: Option<postkit::mxf_wrap::McaConfig>,
     asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     if input_files.is_empty() {
@@ -317,7 +318,12 @@ pub fn wrap_mxf_files(
                 return None;
             }
             if mca_config.is_none() {
-                mca_config = build_mca_config(channels as u32, None, None);
+                mca_config = build_mca_config(channels as u32, None, None).map(|labels| {
+                    postkit::mxf_wrap::McaConfig {
+                        labels,
+                        spoken_language: None,
+                    }
+                });
             }
         }
     }

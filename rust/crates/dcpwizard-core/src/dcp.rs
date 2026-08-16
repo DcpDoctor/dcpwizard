@@ -688,7 +688,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         // sign-language: override the MCA config so channel 15 is labelled SLVS
         // (the audio is already the combined 16-channel track). Otherwise derive
         // the layout from the channel count plus any HI/VI channels.
-        let mca_config = if let Some(lang) = config.sign_language_lang.as_ref() {
+        let mca_labels = if let Some(lang) = config.sign_language_lang.as_ref() {
             let main_ch = config.sign_language_main_channels.unwrap_or(0);
             let main = crate::mxf_wrap::build_mca_config(main_ch, None, None).unwrap_or_default();
             Some(crate::sign_language::slvs_mca_config(
@@ -699,6 +699,10 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else {
             crate::mxf_wrap::build_mca_config(channels, config.hi_channel, config.vi_channel)
         };
+        let mca_config = mca_labels.map(|labels| postkit::mxf_wrap::McaConfig {
+            labels,
+            spoken_language: config.audio_language.clone(),
+        });
         // MainSoundConfiguration for the CPL metadata asset, from the same channel
         // count as the MCA labels (silent fill channels become '-').
         if let Some(configuration) =

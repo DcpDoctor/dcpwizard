@@ -505,13 +505,26 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 Err(()) => return -1,
             };
             sound_key_id = key.as_ref().map(|k| k.info.key_id.clone());
+            let channels = match hound::WavReader::open(&wav_tmp) {
+                Ok(reader) => reader.spec().channels as u32,
+                Err(e) => {
+                    tracing::error!("cannot read {}: {e}", wav_tmp.display());
+                    return -1;
+                }
+            };
+            let mca_config =
+                crate::mxf_wrap::build_mca_config(channels, config.hi_channel, config.vi_channel)
+                    .map(|labels| postkit::mxf_wrap::McaConfig {
+                        labels,
+                        spoken_language: config.audio_language.clone(),
+                    });
             let wrapped = crate::mxf_wrap::wrap_mxf_files(
                 vec![wav_tmp.clone()],
                 &sound_path,
                 crate::mxf_wrap::MxfType::PcmAudio,
                 fps,
                 key.as_ref().map(mxf_enc),
-                None,
+                mca_config,
                 Some(*sound_uuid.as_bytes()),
             );
             temps.push(wav_tmp);

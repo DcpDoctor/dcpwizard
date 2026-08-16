@@ -14,16 +14,6 @@ user-facing surface is here.
   any frame is encoded, so a package whose picture resolution is Auto is named from
   the flat fallback aspect rather than the raster the encoder lands on. The CLI
   names after the encode and gets it right. CORE isdcf_title.rs, GUI pipeline.rs.
-- The sound MXF declares the wrong spoken language. Every PCM wrap comes out with
-  `RFC5646SpokenLanguage` = `en-US` on the soundfield group and every channel,
-  whatever `DcpConfig::audio_language` says, so a French package claims English
-  audio. asdcplib's MCA config parser takes the language as a second argument to
-  `DecodeString` (defaulted to `en-US`) and refuses the per-channel `TOKEN:lang`
-  form for anything but SLVS, and postkit's `asdcp_pcm_writer_open_write_mca` shim
-  passes no language at all. Fixing it is a language parameter on that shim and on
-  `MxfWrapOptions`, then a postkit pin bump. Nothing in this repo can reach it.
-  Verified by reading the labels back with `pcm::MxfReader::mca_label_subdescriptors`
-  (see the assertion in CORE tests/isdcf_naming.rs).
 - Cross-platform embedded preview: all three hosts are implemented in guikit
   (linux GtkGLArea verified live, macos NSOpenGLView layered over the WKWebView,
   windows WS_CHILD window with wgl over the WebView2 child), pinned here and in

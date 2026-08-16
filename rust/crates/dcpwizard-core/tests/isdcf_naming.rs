@@ -165,9 +165,7 @@ fn a_named_dcp_carries_its_isdcf_title_ratings_and_content_version() {
     );
     assert!(cpl.contains("<Label>PG-13</Label>"), "{cpl}");
 
-    // the spoken language the sound MXF declares is asdcplib's hard-coded
-    // default: postkit's wrap passes no language to the MCA config parser, so
-    // DcpConfig::audio_language cannot reach it yet
+    // the sound MXF declares the audio language on every MCA label
     let sound_mxf = std::fs::read_dir(&out)
         .unwrap()
         .flatten()
@@ -187,9 +185,7 @@ fn a_named_dcp_carries_its_isdcf_title_ratings_and_content_version() {
         .map(|label| label.spoken_language)
         .collect();
     assert!(
-        languages
-            .iter()
-            .all(|lang| lang.as_deref() == Some("en-US")),
-        "every MCA label carries asdcplib's default language, got {languages:?}"
+        !languages.is_empty() && languages.iter().all(|lang| lang.as_deref() == Some("en")),
+        "every MCA label carries the audio language, got {languages:?}"
     );
 }
