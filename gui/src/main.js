@@ -168,7 +168,6 @@ function loadSettings() {
   }
   const naming = document.getElementById("set-isdcf-naming");
   if (naming) naming.checked = prefs.isdcfNaming;
-  refreshIsdcfPreview();
 }
 
 document.getElementById("settings-form")?.addEventListener("submit", (e) => {
