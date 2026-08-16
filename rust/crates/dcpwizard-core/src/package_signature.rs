@@ -241,6 +241,8 @@ mod tests {
             issuer: "PostPerfection".into(),
             creator: "dcpwizard".into(),
             issue_date: "2026-08-12T11:14:22+00:00".into(),
+            content_version_label: None,
+            ratings: Vec::new(),
             reels: vec![DcpCplReel {
                 reel_id: "8a2b1c3d-4e5f-6071-8293-a4b5c6d7e8f9".into(),
                 picture_id: "11111111-2222-3333-4444-555555555555".into(),

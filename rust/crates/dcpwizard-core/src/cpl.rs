@@ -294,6 +294,8 @@ pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i
         issue_date: time_now_iso(),
         // Bv2.1 8.1: present, and equal to the content title
         annotation_text: Some(config.title.clone()),
+        content_version_label: None,
+        ratings: Vec::new(),
         reels,
     };
 
