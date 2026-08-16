@@ -106,7 +106,11 @@ user-facing surface is here.
   the frame buffer is decoder-agnostic, so it covers video, an image sequence, a held
   still and a DCP re-used as content, all the same way.
   Doing it that way needs a text rasteriser, which postkit does not have (font_subset
-  subsets glyphs, nothing draws them). It buys two things at once: burn-in on every
+  subsets glyphs, nothing draws them). Crate settled 2026-08-16: cosmic-text 0.17
+  (default-features off, swash), the stack glass2glass g2g-plugins already uses, and
+  its textoverlay.rs is the design reference (shaped horizontal cues via cosmic-text,
+  ab_glyph column renderer for vertical, RGBA8 in / painted text out). Its bidi
+  handling could later replace the hand-rolled `--subtitle-rtl` reshaping. It buys two things at once: burn-in on every
   input shape, and the subtitle appearance controls (outline, shadow, effect colour,
   outline width) that cannot work through ffmpeg's `subtitles` filter at all, since
   that filter takes styling from the subtitle file rather than from our flags. So the
