@@ -122,44 +122,23 @@ user-facing surface is here.
   ST/LT/XT tiers (fine, since the match only sharpens the error). Non-Sony .mxf
   still resolves to DNxHR.
 
-- Burn-in costs a whole extra generation and ignores its own styling flag. Today
-  `burnin` is a standalone video-to-video pass, so burning subtitles means transcode
-  once to burn and again inside `create`, for two lossy generations where the
-  encode already decodes every frame through ffmpeg. The obvious fix is a burn option
-  on `create` appending the subtitles filter to the decode chain the encode already
-  builds, but that only covers one of the three input shapes. PK pipeline.rs matches
-  on input type and only `InputType::Video` reaches ffmpeg
-  (`stream_encode_inprocess`). `InputType::ImageSequence` goes to `encode_parallel`,
-  which reads TIFF/DPX/EXR/PNG natively through `grok::load_tiff`, and a J2K directory
-  passes straight through. So an ffmpeg filter leaves a directory of TIFFs, and a held
-  still, with no burn at all.
-  DCP-o-matic has no such hole because its burn never touches the decoder:
-  `render_text` rasterises cues to RGBA bitmaps with positions, the player merges them
-  per frame, and `PlayerVideo::image` burns them with one `alpha_blend` onto the
-  decoded buffer (src/lib/render_text.h, player.cc, player_video.cc). Compositing at
-  the frame buffer is decoder-agnostic, so it covers video, an image sequence, a held
-  still and a DCP re-used as content, all the same way.
-  Doing it that way needs a text rasteriser, which postkit does not have (font_subset
-  subsets glyphs, nothing draws them). Crate settled 2026-08-16: cosmic-text 0.17
-  (default-features off, swash), the stack glass2glass g2g-plugins already uses, and
-  its textoverlay.rs is the design reference (shaped horizontal cues via cosmic-text,
-  ab_glyph column renderer for vertical, RGBA8 in / painted text out). Its bidi
-  handling could later replace the hand-rolled `--subtitle-rtl` reshaping. It buys two things at once: burn-in on every
-  input shape, and the subtitle appearance controls (outline, shadow, effect colour,
-  outline width) that cannot work through ffmpeg's `subtitles` filter at all, since
-  that filter takes styling from the subtitle file rather than from our flags. So the
-  rasteriser is the real item and the ffmpeg filter is a stopgap for video input.
-  Two knock-ons either way: a burnt-in subtitle must not also
-  register a timed-text track in the CPL, and the ISDCF name spells a burnt-in
-  subtitle language in lower case where an open one is upper case, so whatever lands
-  ISDCF naming needs to know which it is.
-  Three defects in the current path while it exists, all in PK burnin.rs:
-  `font_size`, `font_colour` and `position` are read only in the `drawtext` branch
-  used for text watermarks, so `burnin --font-size` is inert for subtitles, which is
-  the command's only styling flag; the CLI advertises "SRT, ASS, or SMPTE XML" but
-  ffmpeg's `subtitles` filter has no ST 428-7 DCST reader, so that input dies inside
-  ffmpeg instead of being refused up front; and the path goes into the filter string
-  unescaped, where `:` and `,` and `\` are ffmpeg's own separators.
+- Burn-in styling flags. `create --burn-subtitle` composites with
+  `BurnStyle::default()` only: size, line height, margin and default colour exist in
+  the struct but no flag reaches them, and outline, shadow, effect colour and outline
+  width are not in the rasteriser at all. Those four are the appearance controls the
+  rasteriser was built to enable (they cannot work through ffmpeg's `subtitles`
+  filter, which styles from the subtitle file rather than from flags), so this is the
+  remaining half of the burn-in bullet. PK subtitle_raster.rs is where they land.
+  Knock-on for whatever lands ISDCF naming: the name spells a burnt-in subtitle
+  language in lower case where an open one is upper case, so it needs to know which
+  it is (a burnt package registers no timed-text track, which is the signal).
+  Separately, cosmic-text's bidi handling could replace the hand-rolled
+  `--subtitle-rtl` reshaping.
+- The standalone `burnin` command is now redundant for DCP work. `create
+  --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
+  an extra lossy transcode and its `--font-size` is inert for subtitles (read only in
+  the `drawtext` watermark branch). Worth deciding whether it stays as a plain
+  video-to-video tool or goes.
 
 ### Batch E (easyDCP parity, surveyed 2026-08-16)
 
