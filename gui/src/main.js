@@ -1012,6 +1012,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       setTitleProgress(-1);
       notifyBuildComplete(true, title);
       addRecentProject(output, title);
+      showPostBuildActions(output);
       endBuild();
       unlisten();
       unlistenVal();
@@ -1166,6 +1167,42 @@ document.getElementById("btn-preview")?.addEventListener("click", async () => {
   }
 });
 
+// === Post-build actions ===
+function finishedOutputDir() {
+  return document.getElementById("post-build-actions")?.dataset.output;
+}
+
+function showPostBuildActions(outputDir) {
+  const row = document.getElementById("post-build-actions");
+  if (!row) return;
+  row.dataset.output = outputDir;
+  row.hidden = false;
+}
+
+function hidePostBuildActions() {
+  const row = document.getElementById("post-build-actions");
+  if (row) row.hidden = true;
+}
+
+document.getElementById("post-build-play")?.addEventListener("click", () => {
+  const output = finishedOutputDir();
+  if (output) previewDcp(output);
+});
+
+document.getElementById("post-build-inspect")?.addEventListener("click", () => {
+  const output = finishedOutputDir();
+  if (!output) return;
+  switchView("verify");
+  document.getElementById("verify-path").textContent = output;
+  document.getElementById("verify-run").disabled = false;
+  runVerification();
+});
+
+document.getElementById("post-build-reveal")?.addEventListener("click", () => {
+  const output = finishedOutputDir();
+  if (output) revealItemInDir(output);
+});
+
 // === Verify ===
 document.getElementById("verify-browse")?.addEventListener("click", async () => {
   const dir = await open({ directory: true });
@@ -1175,7 +1212,7 @@ document.getElementById("verify-browse")?.addEventListener("click", async () => 
   }
 });
 
-document.getElementById("verify-run")?.addEventListener("click", async () => {
+async function runVerification() {
   const dir = document.getElementById("verify-path").textContent;
   if (!dir || dir.startsWith("No ")) return;
 
@@ -1197,7 +1234,9 @@ document.getElementById("verify-run")?.addEventListener("click", async () => {
     resultsBox.textContent = "✗ Verification failed\n\n" + (result.stderr || result.stdout);
     setStatus("Verification failed");
   }
-});
+}
+
+document.getElementById("verify-run")?.addEventListener("click", runVerification);
 
 // === Security: Encrypt ===
 document.getElementById("crypt-browse-dcp")?.addEventListener("click", async () => {
@@ -1833,6 +1872,7 @@ let buildInFlight = false;
 
 function beginBuild() {
   buildInFlight = true;
+  hidePostBuildActions();
   updateToolbarState();
 }
 
