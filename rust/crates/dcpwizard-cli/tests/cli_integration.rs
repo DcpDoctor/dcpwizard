@@ -293,9 +293,9 @@ fn write_test_video(path: &std::path::Path, width: u32, height: u32) {
 }
 
 #[test]
-fn create_refuses_a_source_that_is_not_the_forced_container_raster() {
+fn create_fits_a_source_that_is_not_the_forced_raster_onto_it() {
     let dir = TempDir::new().unwrap();
-    // a flat master: 1998 wide, so --twok would read 2048-wide frames out of it
+    // a flat master: 1998 wide, so --twok has to pad it out to 2048
     let video = dir.path().join("flat.mp4");
     write_test_video(&video, 1998, 1080);
     let out = dir.path().join("out");
@@ -312,8 +312,17 @@ fn create_refuses_a_source_that_is_not_the_forced_container_raster() {
             "--twok",
         ])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("1998x1080").and(predicate::str::contains("2048x1080")));
+        .success()
+        .stdout(predicate::str::contains(
+            "scale to 1998x1080, pad to 2048x1080 at (25,0)",
+        ));
+    assert!(
+        std::fs::read_dir(&out)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("CPL_")),
+        "a fitted source must produce a package"
+    );
 }
 
 #[test]
@@ -335,8 +344,7 @@ fn create_encodes_a_source_that_already_is_the_forced_container_raster() {
             "--twok",
         ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("encode raster").not());
+        .success();
     assert!(
         std::fs::read_dir(&out)
             .unwrap()
@@ -344,4 +352,131 @@ fn create_encodes_a_source_that_already_is_the_forced_container_raster() {
             .any(|e| e.file_name().to_string_lossy().starts_with("CPL_")),
         "a matching source must still produce a package"
     );
+}
+
+// ── create picture processing and audio map flags ───────────────────────────
+
+/// A `create` that fails before any encoding, so only the refusal is exercised.
+fn create_with(dir: &TempDir, video: &std::path::Path, extra: &[&str]) -> assert_cmd::Command {
+    let mut command = cmd();
+    command.args([
+        "create",
+        "--title",
+        "T",
+        "--video",
+        video.to_str().unwrap(),
+        "-o",
+        dir.path().join("out").to_str().unwrap(),
+    ]);
+    command.args(extra);
+    command
+}
+
+#[test]
+fn create_lists_every_picture_processing_flag() {
+    cmd()
+        .args(["create", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--crop-left"))
+        .stdout(predicate::str::contains("--crop-right"))
+        .stdout(predicate::str::contains("--crop-top"))
+        .stdout(predicate::str::contains("--crop-bottom"))
+        .stdout(predicate::str::contains("--auto-crop"))
+        .stdout(predicate::str::contains("--auto-crop-threshold"))
+        .stdout(predicate::str::contains("--fill-crop"))
+        .stdout(predicate::str::contains("--deinterlace"))
+        .stdout(predicate::str::contains("--denoise"))
+        .stdout(predicate::str::contains("--rotate"))
+        .stdout(predicate::str::contains("--flip"))
+        .stdout(predicate::str::contains("--audio-map"))
+        .stdout(predicate::str::contains("before any rotation"));
+}
+
+#[test]
+fn create_refuses_two_ways_of_choosing_a_crop() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--twok", "--fill-crop", "--auto-crop"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("one or the other"));
+    create_with(
+        &dir,
+        &video,
+        &["--twok", "--fill-crop", "--crop-left", "10"],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("one or the other"));
+}
+
+#[test]
+fn create_refuses_a_fill_crop_with_no_aspect_to_fill() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+
+    create_with(&dir, &video, &["--fill-crop"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--container"));
+}
+
+#[test]
+fn create_refuses_picture_processing_on_a_codestream_directory() {
+    let dir = TempDir::new().unwrap();
+    let j2k = dir.path().join("j2k");
+    std::fs::create_dir_all(&j2k).unwrap();
+
+    create_with(&dir, &j2k, &["--deinterlace"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("already compressed"));
+}
+
+#[test]
+fn create_refuses_an_audio_map_beside_another_way_of_placing_channels() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+    let audio = dir.path().join("stereo.wav");
+    write_wav(&audio, 2, &[0; 96]);
+
+    for extra in [
+        vec!["--upmix", "a"],
+        vec!["--audio-input-order", "lrc-ls-rs-lfe"],
+    ] {
+        let mut args = vec!["--audio", audio.to_str().unwrap(), "--audio-map", "1:L,2:R"];
+        args.extend(extra);
+        create_with(&dir, &video, &args)
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("one or the other"));
+    }
+}
+
+#[test]
+fn create_refuses_an_audio_map_that_names_an_unknown_lane() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("hd.mp4");
+    write_test_video(&video, 1920, 1080);
+    let audio = dir.path().join("stereo.wav");
+    write_wav(&audio, 2, &[0; 96]);
+
+    create_with(
+        &dir,
+        &video,
+        &[
+            "--audio",
+            audio.to_str().unwrap(),
+            "--audio-map",
+            "1:Surround",
+        ],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("Surround"));
 }

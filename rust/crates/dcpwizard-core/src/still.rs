@@ -24,13 +24,21 @@ pub fn is_still(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
-/// Decode `image` to one rgb48be frame at `width`x`height`, sized by the caller
-/// from its own probe so a mismatch is refused before this runs.
-fn decode_rgb48(image: &Path, width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let output = std::process::Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
-        .arg(image)
+/// Decode `image` to one rgb48be frame at `width`x`height`, through `filter`.
+/// The size is the caller's, planned from its own probe, so a mismatch is
+/// refused before this runs.
+fn decode_rgb48(
+    image: &Path,
+    width: u32,
+    height: u32,
+    filter: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let mut command = std::process::Command::new("ffmpeg");
+    command.arg("-y").arg("-i").arg(image);
+    if let Some(filter) = filter {
+        command.arg("-vf").arg(filter);
+    }
+    let output = command
         .args(["-frames:v", "1", "-pix_fmt", "rgb48be", "-f", "rawvideo"])
         .arg("pipe:1")
         .stderr(std::process::Stdio::null())
@@ -57,6 +65,9 @@ pub struct StillHold<'a> {
     pub fps: u32,
     pub width: u32,
     pub height: u32,
+    /// ffmpeg `-vf` chain that crops, turns and fits the image, whose output is
+    /// `width`x`height`.
+    pub picture_filter: Option<&'a str>,
     /// How the still reaches X'Y'Z': the compressor's own Rec.709 pass,
     /// postkit's matrix for a wide-gamut source, or nothing when the image is
     /// already X'Y'Z'.
@@ -82,6 +93,7 @@ pub fn build_still_frames(hold: &StillHold) -> Result<(), String> {
         fps,
         width,
         height,
+        picture_filter,
         route,
         burn,
         out_dir,
@@ -91,7 +103,7 @@ pub fn build_still_frames(hold: &StillHold) -> Result<(), String> {
     if frames == 0 {
         return Err("a still needs a hold of at least one frame".into());
     }
-    let data = decode_rgb48(image, width, height)?;
+    let data = decode_rgb48(image, width, height, *picture_filter)?;
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     crate::reel::clear_stale_frames(out_dir)?;
@@ -213,6 +225,7 @@ mod tests {
             fps: 24,
             width: 2048,
             height: 1080,
+            picture_filter: None,
             route: crate::encode::XyzRoute::CompressorTransform,
             burn: None,
             out_dir: dir.path(),

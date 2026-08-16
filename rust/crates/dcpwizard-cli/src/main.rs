@@ -43,6 +43,12 @@ struct CreateAudioQol {
     /// a (band-split) or b (passthrough + delayed surrounds).
     #[arg(long, value_parser = ["a", "b"])]
     upmix: Option<String>,
+    /// Route the --audio channels to DCP lanes: comma-separated IN:OUT or
+    /// IN:OUT@GAIN, where IN is a 1-based source channel, OUT a lane name
+    /// (L, R, C, LFE, Ls, Rs, Lc, Rc, BsL, BsR, HI, VI) or number, and GAIN is
+    /// decibels. Runs before every other audio step.
+    #[arg(long)]
+    audio_map: Option<String>,
     /// Audio gain in dB, applied after any upmix and loudness pass.
     #[arg(long)]
     audio_gain: Option<f64>,
@@ -143,6 +149,74 @@ struct CreateSourceOpts {
     /// Required for a still input, and refused for anything else.
     #[arg(long)]
     still_length: Option<String>,
+}
+
+/// Source picture processing: what happens to the decoded frames before they
+/// are compressed. Boxed into the Create variant.
+#[derive(Args)]
+struct CreatePictureOpts {
+    /// Cut this many pixels off the source's left edge, before any rotation
+    #[arg(long, default_value_t = 0)]
+    crop_left: u32,
+    /// Cut this many pixels off the source's right edge, before any rotation
+    #[arg(long, default_value_t = 0)]
+    crop_right: u32,
+    /// Cut this many pixels off the source's top edge, before any rotation
+    #[arg(long, default_value_t = 0)]
+    crop_top: u32,
+    /// Cut this many pixels off the source's bottom edge, before any rotation
+    #[arg(long, default_value_t = 0)]
+    crop_bottom: u32,
+    /// Measure the source's black borders and cut them off
+    #[arg(long)]
+    auto_crop: bool,
+    /// Black level --auto-crop reads as border, 0 to 1 (default 0.1)
+    #[arg(long)]
+    auto_crop_threshold: Option<f32>,
+    /// Cut the source to the container's aspect so the picture fills the frame
+    /// instead of being letterboxed. Needs --container or --twok/--fourk.
+    #[arg(long)]
+    fill_crop: bool,
+    /// Turn the source's fields into progressive frames
+    #[arg(long)]
+    deinterlace: bool,
+    /// Run the source through a denoiser
+    #[arg(long)]
+    denoise: bool,
+    /// Rotate the picture clockwise by this many degrees, after the crop
+    #[arg(long, value_parser = ["90", "180", "270"])]
+    rotate: Option<String>,
+    /// Flip the picture, after any rotation
+    #[arg(long, value_parser = ["horizontal", "vertical", "both"])]
+    flip: Option<String>,
+}
+
+impl CreatePictureOpts {
+    fn resolve(&self) -> Result<dcpwizard_core::source_picture::SourcePictureOptions, String> {
+        use dcpwizard_core::source_picture::{
+            DEFAULT_AUTO_CROP_THRESHOLD, SourcePictureOptions, parse_flip, parse_rotation,
+        };
+        let (flip_horizontal, flip_vertical) =
+            parse_flip(self.flip.as_deref().unwrap_or_default())?;
+        Ok(SourcePictureOptions {
+            crop: postkit::picture_processing::Crop {
+                left: self.crop_left,
+                right: self.crop_right,
+                top: self.crop_top,
+                bottom: self.crop_bottom,
+            },
+            auto_crop: self.auto_crop,
+            auto_crop_threshold: self
+                .auto_crop_threshold
+                .unwrap_or(DEFAULT_AUTO_CROP_THRESHOLD),
+            fill_crop: self.fill_crop,
+            deinterlace: self.deinterlace,
+            denoise: self.denoise,
+            rotation: parse_rotation(self.rotate.as_deref().unwrap_or_default())?,
+            flip_horizontal,
+            flip_vertical,
+        })
+    }
 }
 
 /// The KDM choices beyond the certificates and the window, shared by `kdm`,
@@ -368,6 +442,8 @@ enum Commands {
         audio_qol: Box<CreateAudioQol>,
         #[command(flatten)]
         source_opts: Box<CreateSourceOpts>,
+        #[command(flatten)]
+        picture_opts: Box<CreatePictureOpts>,
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
         #[command(flatten)]
@@ -1756,26 +1832,53 @@ fn build_sign_language_audio(
     Ok((combined, main_channels))
 }
 
-/// The raster a still is encoded at: its own, checked against `--twok`/`--fourk`
-/// when one of those was asked for, since nothing here scales the image.
-fn still_raster(image: &Path, twok: bool, fourk: bool) -> Result<(u32, u32), String> {
-    let info = dcpwizard_core::probe::probe_video(image)
-        .ok_or_else(|| format!("cannot read the size of {}", image.display()))?;
+/// The rasters `create` has to land the picture on: the one `--twok`/`--fourk`
+/// forces, and the container's active area inside it. A (0,0) container is the
+/// "no container given" the resolver returns.
+fn encode_geometry(
+    twok: bool,
+    fourk: bool,
+    container: (u32, u32),
+) -> dcpwizard_core::source_picture::EncodeGeometry {
     let forced = fourk
         .then_some(dcpwizard_core::Resolution::FourK)
         .or(twok.then_some(dcpwizard_core::Resolution::TwoK));
-    match forced {
-        Some(resolution) => {
-            dcpwizard_core::encode::check_encode_raster(
-                info.width,
-                info.height,
-                resolution.width(),
-                resolution.height(),
-            )?;
-            Ok((resolution.width(), resolution.height()))
-        }
-        None => Ok((info.width, info.height)),
+    dcpwizard_core::source_picture::EncodeGeometry {
+        forced_raster: forced.map(|resolution| (resolution.width(), resolution.height())),
+        container: (container != (0, 0)).then_some(container),
     }
+}
+
+/// One `-vf` argument, or None when nothing has to happen while decoding.
+fn join_decode_filters(picture: &[String], extra: Option<&str>) -> Option<String> {
+    let mut filters: Vec<&str> = picture.iter().map(String::as_str).collect();
+    filters.extend(extra);
+    (!filters.is_empty()).then(|| filters.join(","))
+}
+
+/// How a still is decoded: the raster it is encoded at, and the filters that
+/// bring it there.
+fn still_picture(
+    image: &Path,
+    picture_options: &dcpwizard_core::source_picture::SourcePictureOptions,
+    geometry: &dcpwizard_core::source_picture::EncodeGeometry,
+) -> Result<(u32, u32, Option<String>), String> {
+    let info = dcpwizard_core::probe::probe_video(image)
+        .ok_or_else(|| format!("cannot read the size of {}", image.display()))?;
+    let resolved = dcpwizard_core::source_picture::resolve_picture(
+        picture_options,
+        image,
+        info.width,
+        info.height,
+        geometry,
+        false,
+    )?;
+    tracing::info!("Picture: {}", resolved.plan.describe());
+    Ok((
+        resolved.encode_width,
+        resolved.encode_height,
+        join_decode_filters(&resolved.plan.filters, None),
+    ))
 }
 
 /// A resolved `--trim-start`/`--trim-end` request: what is cut, and what is left.
@@ -1862,8 +1965,9 @@ fn resolve_trim(
     })
 }
 
-/// Create-time audio processing (W5): filename channel routing when `audio` is a
-/// directory (dom#2134), then stereo->5.1 upmix (dom#921/#1080), then the
+/// Create-time audio processing (W5): the mix matrix, then filename channel
+/// routing when `audio` is a directory (dom#2134), then stereo->5.1 upmix
+/// (dom#921/#1080), then the
 /// picture/sound delay, then loudness normalization (dom#1382). The delay comes
 /// before loudness so normalisation measures the silence that actually ships.
 /// Intermediates go under `work_dir` (a scratch dir). Runs before sign-language
@@ -1871,6 +1975,7 @@ fn resolve_trim(
 #[allow(clippy::too_many_arguments)]
 fn prepare_create_audio(
     audio: Option<PathBuf>,
+    audio_map: Option<&str>,
     upmix: Option<&str>,
     delay_ms: Option<i64>,
     loudness_target: Option<&str>,
@@ -1881,6 +1986,32 @@ fn prepare_create_audio(
     let Some(mut path) = audio else {
         return Ok(None);
     };
+
+    // the map places every channel by hand, so it runs before anything that
+    // moves channels for it
+    if let Some(spec) = audio_map {
+        std::fs::create_dir_all(work_dir).map_err(|e| e.to_string())?;
+        let mapped = work_dir.join("mapped.wav");
+        let applied = dcpwizard_core::audio_map::apply_audio_map(spec, &path, &mapped)?;
+        tracing::info!(
+            "Audio map: {} channels to {} over {} frames{}",
+            applied.report.input_channels,
+            applied.report.output_channels,
+            applied.report.frames,
+            if applied.pure_routing {
+                ", bit-exact routing"
+            } else {
+                ""
+            }
+        );
+        if applied.report.clipped_samples > 0 {
+            tracing::warn!(
+                "Audio map clipped {} sample(s): lower the cell gains",
+                applied.report.clipped_samples
+            );
+        }
+        path = mapped;
+    }
 
     if path.is_dir() {
         std::fs::create_dir_all(work_dir).map_err(|e| e.to_string())?;
@@ -2762,12 +2893,14 @@ fn run() {
             composition_metadata,
             audio_qol,
             source_opts,
+            picture_opts,
             signer_opts,
         } => {
             let CreateAudioQol {
                 loudness_target,
                 true_peak_ceiling,
                 upmix,
+                audio_map,
                 audio_gain,
                 audio_delay,
                 audio_fade_in,
@@ -2784,6 +2917,13 @@ fn run() {
                 trim_end,
                 still_length,
             } = *source_opts;
+            let picture_options = match picture_opts.resolve() {
+                Ok(options) => options,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
             let CreateCompositionMetadata {
                 content_type,
                 release_territory,
@@ -2893,6 +3033,29 @@ fn run() {
                     std::process::exit(1);
                 }
             };
+            // --audio-map places every channel by hand, and each of these places
+            // channels its own way, so two of them would fight over the same
+            // lanes.
+            if audio_map.is_some() {
+                let competing = [
+                    (
+                        audio_input_order == dcpwizard_core::mxf_wrap::AudioInputOrder::LrcLsRsLfe,
+                        "--audio-input-order lrc-ls-rs-lfe",
+                    ),
+                    (upmix.is_some(), "--upmix"),
+                    (
+                        audio.as_deref().map(|a| Path::new(a).is_dir()) == Some(true),
+                        "a channel WAV directory as --audio",
+                    ),
+                ];
+                if let Some((_, name)) = competing.into_iter().find(|(set, _)| *set) {
+                    tracing::error!(
+                        "--audio-map and {name} both decide which DCP lane each channel lands \
+                         on: pass one or the other"
+                    );
+                    std::process::exit(1);
+                }
+            }
 
             // parse the multi-version manifest up front so a bad manifest fails
             // before any encoding
@@ -2975,13 +3138,19 @@ fn run() {
             let still_input = dcpwizard_core::still::is_still(&video_path);
             // a codestream directory is picture that is already encoded: no
             // transform runs over it, so a colour space here would be ignored
-            if !is_video_file
-                && !still_input
-                && let Err(e) =
+            if !is_video_file && !still_input {
+                if let Err(e) =
                     dcpwizard_core::encode::check_precompressed_colourspace(source_space)
-            {
-                tracing::error!("{e}");
-                std::process::exit(1);
+                {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+                if let Err(e) =
+                    dcpwizard_core::source_picture::check_precompressed_picture(&picture_options)
+                {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
             }
             if still_input && still_length.is_none() {
                 tracing::error!(
@@ -3218,24 +3387,26 @@ fn run() {
                     std::process::exit(1);
                 }
 
-                // Apply resolution override
-                let (source_width, source_height) = (width, height);
-                if let Some(forced) = fourk
-                    .then_some(dcpwizard_core::Resolution::FourK)
-                    .or(twok.then_some(dcpwizard_core::Resolution::TwoK))
-                {
-                    width = forced.width();
-                    height = forced.height();
-                }
-                if let Err(e) = dcpwizard_core::encode::check_encode_raster(
-                    source_width,
-                    source_height,
+                // the source is fitted onto the forced raster while it decodes,
+                // so the encode raster is what the plan produces, never the
+                // source size on its own
+                let resolved_picture = match dcpwizard_core::source_picture::resolve_picture(
+                    &picture_options,
+                    &encode_video_path,
                     width,
                     height,
+                    &encode_geometry(twok, fourk, (container_width, container_height)),
+                    false,
                 ) {
-                    tracing::error!("{e}");
-                    std::process::exit(1);
-                }
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+                tracing::info!("Picture: {}", resolved_picture.plan.describe());
+                width = resolved_picture.encode_width;
+                height = resolved_picture.encode_height;
 
                 if let Some(ref info) = video_info {
                     tracing::info!(
@@ -3297,7 +3468,7 @@ fn run() {
                     tracing::warn!("could not save resume state: {e}");
                 }
 
-                let video_filter = match dcpwizard_core::audio_adjust::video_fade_filter(
+                let fade_filter = match dcpwizard_core::audio_adjust::video_fade_filter(
                     video_fade_in,
                     video_fade_out,
                     total_frames as f64 / fps.max(1) as f64,
@@ -3308,6 +3479,9 @@ fn run() {
                         std::process::exit(1);
                     }
                 };
+                let picture_filter = join_decode_filters(&resolved_picture.plan.filters, None);
+                let video_filter =
+                    join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref());
                 let encode_start = std::time::Instant::now();
                 let result = grok_encoder::encode_video_pipeline_resumable(
                     &encode_video_path,
@@ -3361,7 +3535,9 @@ fn run() {
                     let j2k_right = output_dir.join("j2k_right");
                     let _ = std::fs::create_dir_all(&j2k_right);
                     tracing::info!("Encoding right eye: {}", re_path.display());
-                    let re_result = grok_encoder::encode_video_pipeline(
+                    // both eyes are one picture track, so the right eye is
+                    // cropped, turned and fitted exactly as the left one was
+                    let re_result = grok_encoder::encode_video_pipeline_resumable(
                         &re_path,
                         &j2k_right,
                         &params,
@@ -3369,6 +3545,8 @@ fn run() {
                         width,
                         height,
                         &cancel,
+                        false,
+                        picture_filter.as_deref(),
                         |_p: EncodeProgress| {},
                     );
                     if !re_result.success {
@@ -3415,6 +3593,7 @@ fn run() {
                 // directory), stereo->5.1 upmix, then loudness normalization.
                 let audio_path = match prepare_create_audio(
                     raw_audio,
+                    audio_map.as_deref(),
                     upmix.as_deref(),
                     audio_delay,
                     loudness_target.as_deref(),
@@ -3650,8 +3829,12 @@ fn run() {
                             std::process::exit(1);
                         }
                     };
-                    let (width, height) = match still_raster(&video_path, twok, fourk) {
-                        Ok(dims) => dims,
+                    let (width, height, picture_filter) = match still_picture(
+                        &video_path,
+                        &picture_options,
+                        &encode_geometry(twok, fourk, (container_width, container_height)),
+                    ) {
+                        Ok(picture) => picture,
                         Err(e) => {
                             tracing::error!("{e}");
                             std::process::exit(1);
@@ -3665,6 +3848,7 @@ fn run() {
                             fps,
                             width,
                             height,
+                            picture_filter: picture_filter.as_deref(),
                             route: xyz_route,
                             burn: build_subtitle_burn(fps),
                             out_dir: &still_j2k_dir,
@@ -3698,6 +3882,7 @@ fn run() {
                 let work_dir = output_dir.join("audio_work");
                 let prepared_audio = match prepare_create_audio(
                     audio.map(PathBuf::from),
+                    audio_map.as_deref(),
                     upmix.as_deref(),
                     audio_delay,
                     loudness_target.as_deref(),

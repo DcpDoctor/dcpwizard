@@ -140,6 +140,7 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
         fps: FPS,
         width: W,
         height: H,
+        picture_filter: None,
         route: dcpwizard_core::encode::XyzRoute::CompressorTransform,
         burn: Some(burn),
         out_dir: &j2k,
