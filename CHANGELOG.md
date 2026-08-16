@@ -27,6 +27,15 @@
 - **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
 
 ### Fixed
+- **Reels without cues carried no subtitle**: `create --versions` with reel
+  splitting gave a reel none of the cues fell into no MainSubtitle at all, which
+  dcpdoctor reports as `subtitle_missing_from_reel` because a composition with
+  subtitles needs one on every reel. Every reel now carries a timed-text asset
+  spanning it, empty (`<dcst:SubtitleList/>`, what libdcp writes) where there is
+  nothing to show, and the wrap takes the reel's frame count as the essence
+  duration instead of deriving it from the last cue, so IntrinsicDuration and
+  Duration match the picture on every reel. Closed captions follow the same rule,
+  since every reel has to carry the same number of them
 - **Timed-text packaging was not conformant**: every package carrying a converted
   subtitle or caption track failed six of dcpdoctor's ST 429-5 / ST 428-7 checks, and
   libdcp's verifier reads the same rules. The MXF ResourceID was the track file's own

@@ -216,6 +216,7 @@ fn wrap_timed_text_track(
             out_mxf,
             fps,
             Some(asset_uuid),
+            None,
         );
         let _ = std::fs::remove_file(&dcst_path);
         for (p, _) in &prepared.resources {
@@ -854,6 +855,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 &subtitle_mxf_path,
                 fps,
                 Some(*subtitle_uuid.as_bytes()),
+                None,
             );
             // the DCST and any staged font now live inside the MXF
             let _ = std::fs::remove_file(&dcst_path);

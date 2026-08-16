@@ -573,6 +573,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                     &sub_path,
                     fps,
                     Some(*subtitle_uuid.as_bytes()),
+                    None,
                 );
                 temps.push(dcst);
                 let Some(track) = wrapped else {
@@ -621,6 +622,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                     &ccap_path,
                     fps,
                     Some(*ccap_uuid.as_bytes()),
+                    None,
                 );
                 temps.push(dcst);
                 let Some(track) = wrapped else {

@@ -102,11 +102,13 @@ fn tag(text: &str, t: &str) -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
-/// (picture_id, sound_id, subtitle_id) per reel, in reel order.
+/// The asset ids and durations of one reel, in reel order.
 struct ReelIds {
     picture: String,
+    picture_duration: u64,
     sound: Option<String>,
     subtitle: Option<String>,
+    subtitle_duration: Option<u64>,
 }
 
 fn cpl_reels(cpl: &Path) -> Vec<ReelIds> {
@@ -114,18 +116,24 @@ fn cpl_reels(cpl: &Path) -> Vec<ReelIds> {
     let mut out = Vec::new();
     for seg in xml.split("<Reel>").skip(1) {
         let seg = seg.split("</Reel>").next().unwrap_or("");
-        let id_in = |tagname: &str| -> Option<String> {
+        let block_in = |tagname: &str| -> Option<String> {
             let open = format!("<{tagname}>");
             let start = seg.find(&open)?;
             let block = &seg[start..];
             let block = block.split(&format!("</{tagname}>")).next().unwrap_or("");
-            tag(block, "Id").map(|v| v.replace("urn:uuid:", ""))
+            Some(block.to_string())
         };
+        let id_in =
+            |tagname: &str| tag(&block_in(tagname)?, "Id").map(|v| v.replace("urn:uuid:", ""));
+        let duration_in =
+            |tagname: &str| tag(&block_in(tagname)?, "IntrinsicDuration")?.parse().ok();
         let picture = id_in("MainPicture").expect("reel has a picture");
         out.push(ReelIds {
             picture,
+            picture_duration: duration_in("MainPicture").expect("reel has a picture duration"),
             sound: id_in("MainSound"),
             subtitle: id_in("MainSubtitle"),
+            subtitle_duration: duration_in("MainSubtitle"),
         });
     }
     out
@@ -267,6 +275,48 @@ fn multi_reel_versions_share_picture_per_reel() {
     for r in 0..2 {
         assert_eq!(a[r].picture, b[r].picture, "reel {r} picture shared");
         assert_eq!(a[r].sound, b[r].sound, "reel {r} sound shared");
+    }
+
+    // both cues sit in reel 1, so reel 2 carries an empty document; every reel of
+    // a subtitled composition still has to carry a subtitle spanning it
+    for reels in [&a, &b] {
+        for (index, reel) in reels.iter().enumerate() {
+            let subtitle = reel
+                .subtitle
+                .as_ref()
+                .unwrap_or_else(|| panic!("reel {} has a MainSubtitle", index + 1));
+            assert_eq!(
+                reel.subtitle_duration,
+                Some(reel.picture_duration),
+                "reel {} subtitle spans the reel",
+                index + 1
+            );
+            let asset = dcpdoctor_core::subtitle::read_wrapped_timed_text(
+                &out.join(format!("subtitle_{subtitle}.mxf")),
+                &dcpdoctor_core::kdm::ContentKeys::none(),
+                dcpdoctor_core::subtitle::FontData::Omit,
+            )
+            .unwrap_or_else(|| panic!("read reel {} subtitle essence", index + 1));
+            assert_eq!(
+                u64::from(asset.container_duration),
+                reel.picture_duration,
+                "reel {} essence spans the reel",
+                index + 1
+            );
+            if index == 0 {
+                assert!(
+                    asset.xml.contains("<dcst:Subtitle "),
+                    "reel 1 carries the cue: {}",
+                    asset.xml
+                );
+            } else {
+                assert!(
+                    asset.xml.contains("<dcst:SubtitleList/>"),
+                    "reel 2 document is empty: {}",
+                    asset.xml
+                );
+            }
+        }
     }
 
     let result = dcpwizard_core::verify::verify_dcp(&out);

@@ -601,6 +601,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
                     &sub_lang,
                     config,
                     fps,
+                    None,
                     &mut pkl_entries,
                     &mut am_entries,
                     &mut temps,

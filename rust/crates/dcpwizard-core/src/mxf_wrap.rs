@@ -411,6 +411,7 @@ pub fn wrap_mxf_files(
         resource_ids: vec![],
         hdr: None,
         asset_uuid,
+        timed_text_duration_frames: None,
     };
 
     let result = postkit::mxf_wrap::mxf_wrap(&opts);
@@ -426,13 +427,16 @@ pub fn wrap_mxf_files(
 /// Wrap a DCST XML plus its ancillary resources (embedded font, bitmap PNGs)
 /// into a timed-text MXF. Each `(file, id)` resource is embedded under `id`, so
 /// a `urn:uuid` reference in the DCST matches the stored resource. The XML is
-/// the first input file; resources follow in order.
+/// the first input file; resources follow in order. `duration_frames` is the
+/// essence duration to write when the caller knows it, which is how a reel's
+/// subtitle spans the reel; None derives it from the last cue.
 pub fn wrap_timed_text_resources(
     dcst: &std::path::Path,
     resources: &[(PathBuf, [u8; 16])],
     output_mxf: &std::path::Path,
     frame_rate: u32,
     asset_uuid: Option<[u8; 16]>,
+    duration_frames: Option<u32>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     let mut input_files = vec![dcst.to_path_buf()];
     let mut resource_ids = Vec::new();
@@ -454,6 +458,7 @@ pub fn wrap_timed_text_resources(
         resource_ids,
         hdr: None,
         asset_uuid,
+        timed_text_duration_frames: duration_frames,
     };
     let result = postkit::mxf_wrap::mxf_wrap(&opts);
     if result.success {

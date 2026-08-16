@@ -477,6 +477,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         let mut cpl_reels = Vec::with_capacity(ranges.len());
         let mut bundle_keys: Vec<ContentKey> = Vec::new();
         for (i, (range, ess)) in ranges.iter().zip(&essences).enumerate() {
+            let reel_duration_frames = ess.reel_frames as u32;
             // sound: own audio overrides the shared base sound
             let (sound_uuid, sound_key_id, sound_key_info) = match own_audio.as_ref() {
                 Some((src, info)) => {
@@ -528,27 +529,28 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     }
                 }
             } else if let Some(cues) = sub_cues.as_ref() {
+                // a composition with subtitles needs one on every reel, so a reel
+                // no cue falls into gets an empty document spanning it
                 let rebased = crate::reel::rebase_cues_for_reel(cues, *range);
-                if !rebased.is_empty() {
-                    match wrap_subtitle_cues(
-                        "subtitle",
-                        &rebased,
-                        &sub_lang,
-                        config,
-                        fps,
-                        &mut pkl_entries,
-                        &mut am_entries,
-                        &mut temps,
-                    ) {
-                        Ok(track) => {
-                            subtitle_id = Some(track.id);
-                            subtitle_duration = track.duration;
-                            subtitle_hash = Some(track.hash);
-                        }
-                        Err(()) => {
-                            cleanup(&temps);
-                            return -1;
-                        }
+                match wrap_subtitle_cues(
+                    "subtitle",
+                    &rebased,
+                    &sub_lang,
+                    config,
+                    fps,
+                    Some(reel_duration_frames),
+                    &mut pkl_entries,
+                    &mut am_entries,
+                    &mut temps,
+                ) {
+                    Ok(track) => {
+                        subtitle_id = Some(track.id);
+                        subtitle_duration = track.duration;
+                        subtitle_hash = Some(track.hash);
+                    }
+                    Err(()) => {
+                        cleanup(&temps);
+                        return -1;
                     }
                 }
             }
@@ -577,27 +579,28 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     }
                 }
             } else if let Some(cues) = ccap_cues.as_ref() {
+                // every reel carries the same number of closed captions, so an
+                // empty reel gets an empty document spanning it
                 let rebased = crate::reel::rebase_cues_for_reel(cues, *range);
-                if !rebased.is_empty() {
-                    match wrap_subtitle_cues(
-                        "ccap",
-                        &rebased,
-                        &sub_lang,
-                        config,
-                        fps,
-                        &mut pkl_entries,
-                        &mut am_entries,
-                        &mut temps,
-                    ) {
-                        Ok(track) => {
-                            ccap_id = Some(track.id);
-                            ccap_duration = track.duration;
-                            ccap_hash = Some(track.hash);
-                        }
-                        Err(()) => {
-                            cleanup(&temps);
-                            return -1;
-                        }
+                match wrap_subtitle_cues(
+                    "ccap",
+                    &rebased,
+                    &sub_lang,
+                    config,
+                    fps,
+                    Some(reel_duration_frames),
+                    &mut pkl_entries,
+                    &mut am_entries,
+                    &mut temps,
+                ) {
+                    Ok(track) => {
+                        ccap_id = Some(track.id);
+                        ccap_duration = track.duration;
+                        ccap_hash = Some(track.hash);
+                    }
+                    Err(()) => {
+                        cleanup(&temps);
+                        return -1;
                     }
                 }
             }
@@ -859,6 +862,7 @@ pub(crate) fn wrap_subtitle_cues(
     lang: &str,
     config: &DcpConfig,
     fps: u32,
+    duration_frames: Option<u32>,
     pkl: &mut Vec<crate::pkl::PklEntry>,
     am: &mut Vec<crate::assetmap::AssetMapEntry>,
     temps: &mut Vec<PathBuf>,
@@ -880,6 +884,7 @@ pub(crate) fn wrap_subtitle_cues(
         &path,
         fps,
         Some(*uuid.as_bytes()),
+        duration_frames,
     );
     temps.push(dcst);
     // the staged font now lives inside the MXF; a bitmap resource is the

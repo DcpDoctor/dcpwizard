@@ -474,10 +474,13 @@ fn cues_have_text(cues: &[StyledCue]) -> bool {
 }
 
 /// The font file a track embeds: the caller's, or a system sans face found the
-/// way the burn rasteriser finds one. `None` only for a track with no text at
-/// all. A text track with no font anywhere is refused, because a `Font` naming a
-/// face the package does not carry is what players fall back from.
+/// way the burn rasteriser finds one. `None` for a track with no cues or no text
+/// at all. A text track with no font anywhere is refused, because a `Font` naming
+/// a face the package does not carry is what players fall back from.
 fn font_to_embed(opts: &SubtitleOptions, cues: &[StyledCue]) -> Result<Option<PathBuf>, String> {
+    if cues.is_empty() {
+        return Ok(None);
+    }
     if let Some(path) = opts.font_path.as_ref() {
         return Ok(Some(path.clone()));
     }
@@ -1238,6 +1241,13 @@ fn render_dcst_styled(
             uuid::Uuid::from_bytes(id).hyphenated()
         ));
     }
+    if cues.is_empty() {
+        // ST 428-7 wants a SubtitleList child, but libdcp writes this for a reel
+        // with no cues and dcpdoctor reads it, so it stays out of the schema test
+        xml.push_str("  <dcst:SubtitleList/>\n");
+        xml.push_str("</dcst:SubtitleReel>\n");
+        return xml;
+    }
     let font_id_attribute = match font_ref {
         Some(_) => format!(" ID=\"{SUBTITLE_FONT_ID}\""),
         None => String::new(),
@@ -1351,6 +1361,35 @@ mod trim_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reel of a subtitled composition that no cue falls into still carries a
+    /// subtitle asset, and what it carries is a document with nothing in it.
+    #[test]
+    fn a_reel_with_no_cues_writes_an_empty_subtitle_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("subtitle.xml");
+        let resources = write_dcst_frames(&[], "de", 24, &out).unwrap();
+        assert!(resources.is_empty(), "no font to embed: {resources:?}");
+
+        let xml = std::fs::read_to_string(&out).unwrap();
+        assert!(xml.contains("<dcst:SubtitleList/>"), "{xml}");
+        assert!(!xml.contains("LoadFont"), "no font is referenced: {xml}");
+        assert!(!xml.contains("<dcst:Font"), "no Font wrapper: {xml}");
+        for element in [
+            "dcst:Id",
+            "dcst:ContentTitleText",
+            "dcst:IssueDate",
+            "dcst:ReelNumber",
+            "dcst:Language",
+            "dcst:EditRate",
+            "dcst:TimeCodeRate",
+            "dcst:StartTime",
+        ] {
+            assert!(xml.contains(&format!("<{element}>")), "{element} in {xml}");
+        }
+        assert!(xml.contains("<dcst:Language>de</dcst:Language>"), "{xml}");
+        assert!(xml.ends_with("</dcst:SubtitleReel>\n"), "{xml}");
+    }
 
     #[test]
     fn two_line_cue_anchors_at_bottom() {

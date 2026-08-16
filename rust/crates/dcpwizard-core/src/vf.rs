@@ -520,6 +520,7 @@ fn prepare_timed_text(
         &vf_dir.join(&filename),
         fps,
         Some(*id.as_bytes()),
+        None,
     );
     if let Some(tmp) = temp_dcst {
         let _ = std::fs::remove_file(tmp);

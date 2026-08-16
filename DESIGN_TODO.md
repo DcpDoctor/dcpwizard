@@ -164,12 +164,19 @@ user-facing surface is here.
   so placement, RTL and wrap are ignored on both (the font is embedded either way).
   Styling a caption track, or carrying the caller's `SubtitleOptions` into the
   versions path, is the same piece of work.
-- `create --versions` with reel splitting leaves a reel with no cues carrying no
-  MainSubtitle, which dcpdoctor reports as `subtitle_missing_from_reel`: a
-  composition with subtitles needs one on every reel. Covering it means wrapping a
-  cue-less timed-text track, which postkit's wrap refuses today because it reads the
-  essence duration off the cue timing. `multi_reel_versions_share_picture_per_reel`
-  fails on it.
+- An empty reel subtitle document is not schema-valid. `create --versions` with
+  reel splitting now gives every reel a MainSubtitle, empty where no cue falls in
+  the reel, which is what libdcp writes, but ST 428-7's XSD requires at least one
+  Subtitle under SubtitleList and dcpdoctor xmllints the unwrapped document, so it
+  reports `xml_schema_violation` on the empty ones. dcpdoctor has to exempt an
+  empty SubtitleList (its own `subtitle_missing_from_reel` and first-event rules
+  already treat that document as legitimate) and dcpwizard then bumps the
+  `dcpdoctor-core` rev. `multi_reel_versions_share_picture_per_reel` fails on it
+  until then.
+- `create --reel-length` with `--subtitle` has the same gap: reel.rs still skips
+  the wrap for a reel with no cues, so those packages carry
+  `subtitle_missing_from_reel`. Worth fixing the same way once the schema question
+  above is settled.
 - The standalone `burnin` command is now redundant for DCP work. `create
   --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
   an extra lossy transcode and its `--font-size` is inert for subtitles (read only in
