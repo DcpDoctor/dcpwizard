@@ -172,6 +172,55 @@ calling them gaps: "Dolby Vision 4.0 packaging" (imfwizard converts RPU profiles
 and 8.4, unclear whether that is what 4.0 means) and the IMF "Extended" application
 alongside App2 and ProRes.
 
+### Storm DCP Studio survey (2026-08-16)
+
+From pixelstorm-media.com/pages/storm-dcp-studio (unreleased at survey time, v0.1,
+every price and platform "coming soon", so screenshots not a shipping product).
+Their Pro tier is roughly our existing feature set. Items marked "imfwizard too"
+should also land there and are noted in its DESIGN_TODO.
+
+- Playback overlays. Safe area (95/90%), aspect mask, center cross, rule-of-thirds
+  grid, and render toggles for subtitles and closed captions, drawn over the
+  player. We have none. Cheap draws that turn playback into a QC tool, which is
+  what the embedded preview is for. imfwizard too.
+- Playback decode resolution (full/half/quarter). J2K decodes at reduced
+  resolution natively by discarding DWT levels, so half and quarter cost a
+  fraction of full decode. The difference between smooth 4K QC on a laptop and a
+  slideshow. imfwizard too.
+- QC report additions, both in CORE report.rs on top of what dcpdoctor verifies.
+  Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
+  <= 82, trailer <= 85): PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
+  is the number cinema mix stages use, so it needs the M-weighting added. And a
+  codestream forensics section (decomp levels, precincts, tile-parts, POC, MCT,
+  worst frame bytes against the cap), which PK j2k.rs can already parse. The
+  forensics half applies to imfwizard too, Leq(m) is cinema-only.
+- Crop indicator in the preview. Their preview stamps "+-275px top/bottom cropped"
+  on the frame. We show nothing about how source maps to container. Belongs with
+  whatever lands crop/auto-crop and the automatic source fitting bullet above.
+  imfwizard too.
+- Post-build actions. Their build-complete state offers Inspect DCP, Play DCP and
+  Show in Finder in one place. We send a notification and have a context-menu
+  reveal. Three buttons wired to things already shipped (dcpdoctor report, the
+  player, reveal). imfwizard too.
+- Ident and rating-card library. A drag-drop library of head idents, tail idents,
+  rating cards and anti-piracy clips joined onto the build. Real ad and trailer
+  workflow, but it is conform/concatenation work, so a real lift. DCP-only.
+- Encode log detail. Their log breaks each reel down into colour-convert,
+  encode-prep and encode ms/frame, and reports the MXF write overlapped with the
+  encode. We show stage plus fps. imfwizard too.
+- Player HUD counters for buffer depth and dropped frames next to frame and fps.
+  imfwizard too.
+- CLI bitrate flag. The GUI takes 50-500 Mbit/s but the CLI has no bandwidth
+  flag at all, a gap of ours their page made visible. Their slider also marks the
+  DCI 250 limit and offers an IMAX 500 preset. Check imfwizard's CLI for the same
+  hole.
+- Unverified parity claim: their "Force Wild Track Format" toggle conforms any
+  audio to a 16-channel container with silent fill and no upmix. Check whether we
+  can pad to 16ch without upmixing before claiming we match. DCP-only.
+- When ISDCF naming lands, copy their live-registry idea: the title builder pulls
+  the current ISDCF registry (studio codes, territories) instead of vendoring a
+  snapshot.
+
 ## Done 2026-08-12
 
 - `edit` drops the signature from every document it rewrites (the CPL, any PKL
