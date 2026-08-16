@@ -101,6 +101,8 @@ pub fn run() {
             guikit::preview::preview_get_metadata,
             guikit::preview::preview_set_surface,
             guikit::preview::preview_is_embedded,
+            guikit::preview::preview_set_overlays,
+            guikit::preview::preview_set_decode_scale,
             pipeline::submit_job,
             pipeline::cancel_job,
             pipeline::pause_job,

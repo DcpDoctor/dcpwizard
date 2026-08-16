@@ -213,14 +213,13 @@ every price and platform "coming soon", so screenshots not a shipping product).
 Their Pro tier is roughly our existing feature set. Items marked "imfwizard too"
 should also land there and are noted in its DESIGN_TODO.
 
-- Playback overlays. Safe area (95/90%), aspect mask, center cross, rule-of-thirds
-  grid, and render toggles for subtitles and closed captions, drawn over the
-  player. We have none. Cheap draws that turn playback into a QC tool, which is
-  what the embedded preview is for. imfwizard too.
-- Playback decode resolution (full/half/quarter). J2K decodes at reduced
-  resolution natively by discarding DWT levels, so half and quarter cost a
-  fraction of full decode. The difference between smooth 4K QC on a laptop and a
-  slideshow. imfwizard too.
+- Playback overlays, decode resolution and HUD landed in guikit's preview header
+  (safe area 95/90%, aspect mask 1.85/1.90/2.39, centre cross, thirds grid as one
+  mpv `vf` chain; full/half/quarter through the J2K decoder's `lowres`, proven on
+  real J2K with the mpv CLI; frame, fps, buffer depth and dropped frames in the
+  metadata poll). Not yet clicked through in the running window. Still open:
+  render toggles for subtitles and closed captions, which the DCP loader does not
+  load. imfwizard too.
 - QC report additions, both in CORE report.rs on top of what dcpdoctor verifies.
   Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
   <= 82, trailer <= 85): PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
