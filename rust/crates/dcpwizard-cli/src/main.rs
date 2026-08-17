@@ -512,6 +512,41 @@ struct CreateSourceOpts {
     still_length: Option<String>,
 }
 
+/// Black frames and silence extending the head and tail of the programme, and
+/// the colour they are filled with. Boxed into the Create variant.
+#[derive(Args)]
+struct CreatePadding {
+    /// Pad the head with black frames + silence. Duration with a unit:
+    /// frames (48f) or seconds (2s). Shifts subtitles by the same offset.
+    #[arg(long)]
+    pad_head: Option<String>,
+    /// Pad the tail with black frames + silence. Same syntax as --pad-head.
+    #[arg(long)]
+    pad_tail: Option<String>,
+    /// Background/pad colour as hex sRGB (RRGGBB or #RRGGBB). Default: black.
+    /// Applied to head/tail pad frames via the DCDM colour transform.
+    #[arg(long)]
+    pad_color: Option<String>,
+}
+
+/// Library items joined onto the build as reels of their own, and the folder
+/// they are resolved against. Boxed into the Create variant.
+#[derive(Args)]
+struct CreateLibraryItems {
+    /// Join a library item onto the head of the build as its own reel, by name
+    /// (repeatable, in the order given). See `library list`.
+    #[arg(long = "head-item", value_name = "NAME", conflicts_with = "versions")]
+    head_items: Vec<String>,
+    /// Join a library item onto the tail of the build as its own reel, by name
+    /// (repeatable, in the order given).
+    #[arg(long = "tail-item", value_name = "NAME", conflicts_with = "versions")]
+    tail_items: Vec<String>,
+    /// Library folder to resolve --head-item / --tail-item against
+    /// (default: XDG data dir)
+    #[arg(long)]
+    library_dir: Option<String>,
+}
+
 /// Source picture processing: what happens to the decoded frames before they
 /// are compressed. Boxed into the Create variant.
 #[derive(Args)]
@@ -763,17 +798,8 @@ enum Commands {
         /// Sound channel index (0-based) carrying the Visually Impaired (VI-N) track
         #[arg(long)]
         vi_channel: Option<u32>,
-        /// Pad the head with black frames + silence. Duration with a unit:
-        /// frames (48f) or seconds (2s). Shifts subtitles by the same offset.
-        #[arg(long)]
-        pad_head: Option<String>,
-        /// Pad the tail with black frames + silence. Same syntax as --pad-head.
-        #[arg(long)]
-        pad_tail: Option<String>,
-        /// Background/pad colour as hex sRGB (RRGGBB or #RRGGBB). Default: black.
-        /// Applied to head/tail pad frames via the DCDM colour transform.
-        #[arg(long)]
-        pad_color: Option<String>,
+        #[command(flatten)]
+        padding: Box<CreatePadding>,
         /// Custom container dimensions WxH (e.g. 1920x1080). Must be even and fit
         /// within the 2K (2048x1080) or 4K (4096x2160) container. Overrides --container.
         #[arg(long, conflicts_with = "container")]
@@ -811,6 +837,9 @@ enum Commands {
         isdcf_naming: Box<CreateIsdcfNaming>,
         #[command(flatten)]
         signer_opts: Box<SignerOpts>,
+
+        #[command(flatten)]
+        library_items: Box<CreateLibraryItems>,
 
         /// Run the pre-build check and stop: every refusal and every hint,
         /// without encoding or writing anything under --output.
@@ -1679,6 +1708,16 @@ enum Commands {
         action: TemplateAction,
     },
 
+    /// Manage the library of head idents, tail idents, rating cards and
+    /// anti-piracy clips that `create --head-item` / `--tail-item` join on
+    Library {
+        /// Library folder (default: XDG data dir)
+        #[arg(long, global = true)]
+        library_dir: Option<String>,
+        #[command(subcommand)]
+        action: LibraryAction,
+    },
+
     /// Download a projector/server certificate by vendor + serial (dom#2705)
     #[command(name = "cert-fetch")]
     CertFetch {
@@ -2030,6 +2069,33 @@ enum TemplateAction {
     /// List validity templates
     List,
     /// Remove a validity template
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryAction {
+    /// Copy media into the library
+    Add {
+        /// Video or image file to import
+        #[arg(long)]
+        file: String,
+        /// Name to file it under, and the name `create` addresses it by
+        #[arg(long)]
+        name: String,
+        /// head-ident, tail-ident, rating-card or anti-piracy
+        #[arg(long)]
+        kind: String,
+        /// How long a still image is held, in seconds. A video carries its own
+        /// length and takes no duration.
+        #[arg(long)]
+        duration: Option<f64>,
+    },
+    /// List what the library holds
+    List,
+    /// Drop an item and the media copied in with it
     Remove {
         #[arg(long)]
         name: String,
@@ -2940,6 +3006,74 @@ fn run_kdm_history(
     0
 }
 
+/// The library the CLI reads: the folder named, else the app's own.
+fn open_library(library_dir: Option<String>) -> dcpwizard_core::library::Library {
+    match library_dir {
+        Some(dir) => dcpwizard_core::library::Library::open_at(PathBuf::from(dir)),
+        None => dcpwizard_core::library::Library::open(),
+    }
+}
+
+fn run_library(library_dir: Option<String>, action: LibraryAction) -> i32 {
+    use dcpwizard_core::library::{LibraryItemKind, item_frames};
+    let library = open_library(library_dir);
+    let result: Result<(), String> = match action {
+        LibraryAction::Add {
+            file,
+            name,
+            kind,
+            duration,
+        } => LibraryItemKind::parse(&kind).and_then(|kind| {
+            let item = library.import(Path::new(&file), &name, kind, duration)?;
+            println!(
+                "Added '{}' ({}) — {}x{}, {:.2}s, {}",
+                item.name,
+                item.kind,
+                item.width,
+                item.height,
+                item.seconds,
+                if item.has_audio {
+                    "with audio"
+                } else {
+                    "silent"
+                }
+            );
+            Ok(())
+        }),
+        LibraryAction::List => library.items().map(|items| {
+            if items.is_empty() {
+                println!("The library is empty. Add items with `dcpwizard library add`.");
+            }
+            for item in &items {
+                println!(
+                    "{}\t{}\t{}x{}\t{:.2}s ({} frames at 24 fps)\t{}",
+                    item.name,
+                    item.kind,
+                    item.width,
+                    item.height,
+                    item.seconds,
+                    item_frames(item, DEFAULT_FRAME_RATE),
+                    if item.has_audio {
+                        "with audio"
+                    } else {
+                        "silent"
+                    }
+                );
+            }
+        }),
+        LibraryAction::Remove { name } => library.remove(&name).inspect(|()| {
+            println!("Removed '{name}'");
+        }),
+    };
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!("{e}");
+            1
+        }
+    }
+}
+
 fn run_kdm_template(templates_file: Option<String>, action: TemplateAction) -> i32 {
     let path = templates_db_path(templates_file);
     let mut store = match dcpwizard_core::kdm_template::TemplateStore::load(&path) {
@@ -3277,20 +3411,19 @@ fn run() {
             atmos,
             hi_channel,
             vi_channel,
-            pad_head,
-            pad_tail,
-            pad_color,
             container_dims,
             split_at,
             split_chapters,
             input_range,
             markers,
+            padding,
             composition_metadata,
             audio_qol,
             source_opts,
             picture_opts,
             isdcf_naming,
             signer_opts,
+            library_items,
             check,
         } => {
             let CreateAudioQol {
@@ -3309,6 +3442,11 @@ fn run() {
                 resume,
                 shutdown_when_done,
             } = *audio_qol;
+            let CreatePadding {
+                pad_head,
+                pad_tail,
+                pad_color,
+            } = *padding;
             let CreateSourceOpts {
                 source_colourspace,
                 trim_start,
@@ -3355,6 +3493,25 @@ fn run() {
                 tracing::error!("{e}");
                 std::process::exit(1);
             }
+            // resolve the library items before the encode: a name the library
+            // does not hold, or media it has lost, fails in a second
+            let CreateLibraryItems {
+                head_items,
+                tail_items,
+                library_dir,
+            } = *library_items;
+            let (head_items, tail_items) = {
+                let library = open_library(library_dir);
+                let resolve = |names: &[String]| {
+                    dcpwizard_core::library_reel::attach_by_name(&library, names).unwrap_or_else(
+                        |e| {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        },
+                    )
+                };
+                (resolve(&head_items), resolve(&tail_items))
+            };
             // scheduled start: block until the wall-clock time before any work.
             if let Some(spec) = start_at.as_deref() {
                 match dcpwizard_core::encode_qol::parse_start_at(
@@ -3768,6 +3925,7 @@ fn run() {
                         std::process::exit(1);
                     }
                 },
+                library_items: head_items.len() + tail_items.len(),
             };
             if let Err(e) = dcpwizard_core::preflight::check_before_encode(&plan) {
                 tracing::error!("{e}");
@@ -4301,6 +4459,8 @@ fn run() {
                     audio_language: naming.audio_language.clone(),
                     ratings: naming.ratings.clone(),
                     content_versions: naming.content_versions.clone(),
+                    head_items: head_items.clone(),
+                    tail_items: tail_items.clone(),
                 };
                 apply_isdcf_name(&mut config, &naming, burnt_in_subtitle);
                 let code = match versions_specs.as_ref() {
@@ -4521,6 +4681,8 @@ fn run() {
                     audio_language: naming.audio_language.clone(),
                     ratings: naming.ratings.clone(),
                     content_versions: naming.content_versions.clone(),
+                    head_items,
+                    tail_items,
                 };
                 apply_isdcf_name(&mut config, &naming, burnt_in_subtitle);
                 let code = match versions_specs.as_ref() {
@@ -5838,6 +6000,11 @@ fn run() {
             templates_file,
             action,
         } => run_kdm_template(templates_file, action),
+
+        Commands::Library {
+            library_dir,
+            action,
+        } => run_library(library_dir, action),
 
         Commands::CertFetch {
             vendor,

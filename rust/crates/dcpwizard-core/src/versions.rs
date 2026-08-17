@@ -124,6 +124,13 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         tracing::error!("{e}");
         return -1;
     }
+    if config.has_library_items() {
+        tracing::error!(
+            "library items are not supported with --versions: every version shares one set of \
+             reels, and an item would have to be conformed once per version to sit in them"
+        );
+        return -1;
+    }
 
     let Some(j2k_dir) = config.j2k_dir.as_ref() else {
         tracing::error!("A J2K input directory is required");

@@ -129,6 +129,21 @@ pub struct DcpConfig {
     /// the default FFOC/LFOC pair.
     #[serde(default)]
     pub markers: Vec<String>,
+    /// Library items joined onto the build as reels before the feature's, in
+    /// the order given. Conformed to this job's raster, rate and sound layout
+    /// at build time; the feature's own essence is untouched.
+    #[serde(default)]
+    pub head_items: Vec<crate::library::AttachedItem>,
+    /// Library items joined on as reels after the feature's.
+    #[serde(default)]
+    pub tail_items: Vec<crate::library::AttachedItem>,
+}
+
+impl DcpConfig {
+    /// Whether any library item is joined onto this build.
+    pub fn has_library_items(&self) -> bool {
+        !self.head_items.is_empty() || !self.tail_items.is_empty()
+    }
 }
 
 /// Validate custom container dimensions against the resolution bounds.
@@ -309,7 +324,25 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     {
         required += crate::free_space::path_size(extra);
     }
+    for item in config.head_items.iter().chain(&config.tail_items) {
+        required += crate::free_space::path_size(&item.media);
+    }
     if let Err(e) = crate::free_space::check_destination_space(&config.output_dir, required) {
+        tracing::error!("{e}");
+        return -1;
+    }
+
+    // An item reel is ordinary 2D SDR picture and sound: refuse the combinations
+    // it has no place for before anything is wrapped.
+    if let Err(e) =
+        crate::preflight::check_library_item_support(&crate::preflight::LibraryItemContent {
+            attached: config.has_library_items(),
+            stereo_3d: config.right_eye_dir.is_some(),
+            atmos: config.atmos_path.is_some(),
+            hdr_dci: config.hdr_dci,
+            markers: !config.markers.is_empty(),
+        })
+    {
         tracing::error!("{e}");
         return -1;
     }
@@ -643,6 +676,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let mut sound_key = None;
     // sound layout for the SMPTE CompositionMetadataAsset (ST 429-16)
     let mut main_sound = None;
+    // what an item reel's sound has to match, read off the track this wraps
+    let mut job_sound = None;
 
     if let Some(audio_path) = prepared_audio.as_ref().or(config.audio_path.as_ref())
         && audio_path.exists()
@@ -706,6 +741,15 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 configuration,
                 sample_rate,
             });
+        }
+        if config.has_library_items() {
+            match crate::library_reel::job_sound(audio_path) {
+                Ok(sound) => job_sound = Some(sound),
+                Err(e) => {
+                    tracing::error!("{e}");
+                    return -1;
+                }
+            }
         }
         // when padding, extend the PCM with silence so the sound stays aligned
         // with the padded picture (sample-accurate at frame edges)
@@ -978,14 +1022,20 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         }
     };
 
-    let markers =
+    // with items joined on, the feature is no longer the first or last reel, so
+    // FFOC/LFOC belong to the composition rather than to this reel and are
+    // placed over the joined run below
+    let markers = if config.has_library_items() {
+        Vec::new()
+    } else {
         match crate::markers::markers_for_composition(&config.markers, fps, picture_duration) {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!("{e}");
                 return -1;
             }
-        };
+        }
+    };
 
     // hashed here rather than with the rest of the PKL entries because the CPL
     // carries the same values and is written first
@@ -1061,13 +1111,38 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         markers,
     };
 
+    // ── Conform and join the library items ────────────────────────────
+    let mut joined = if config.has_library_items() {
+        progress.stage(88, "conforming library items");
+        let format = crate::library_reel::JobFormat {
+            fps,
+            geometry,
+            sound: job_sound,
+        };
+        match crate::library_reel::join_library_items(config, &format, vec![reel]) {
+            Ok(joined) => joined,
+            Err(e) => {
+                tracing::error!("{e}");
+                return -1;
+            }
+        }
+    } else {
+        crate::library_reel::JoinedComposition {
+            reels: vec![reel],
+            ..Default::default()
+        }
+    };
+    if config.has_library_items() {
+        crate::cpl::apply_default_markers(&mut joined.reels);
+    }
+
     let cpl_path = config.output_dir.join(format!("CPL_{cpl_uuid}.xml"));
     let cpl_config = crate::cpl::CplConfig {
         title: config.title.clone(),
         content_kind: config.content_type.as_cpl_kind().into(),
         ratings: config.ratings.clone(),
         content_version_label: config.content_versions.first().cloned(),
-        reels: vec![reel],
+        reels: joined.reels,
         standard: config.standard,
         main_sound,
         sign_language: config.sign_language_lang.clone(),
@@ -1164,6 +1239,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         });
     }
 
+    pkl_entries.append(&mut joined.pkl);
+
     if crate::pkl::generate_pkl(
         &pkl_entries,
         &pkl_uuid,
@@ -1235,6 +1312,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         });
     }
 
+    am_entries.append(&mut joined.assetmap);
+
     if crate::assetmap::generate_assetmap(&am_entries, &config.output_dir, config.standard, None)
         != 0
     {
@@ -1268,6 +1347,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         {
             bundle.keys.push(key.info);
         }
+        bundle.keys.append(&mut joined.keys);
         if let Err(e) = bundle.write(keys_path) {
             tracing::error!("Failed to write keys file: {e}");
             return -1;

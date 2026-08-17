@@ -72,6 +72,8 @@ pub struct CreatePlan {
     pub four_k: bool,
     pub reel_length_minutes: u32,
     pub reel_split_frames: Vec<u64>,
+    /// How many library items are joined onto the build as extra reels.
+    pub library_items: usize,
 }
 
 impl Default for CreatePlan {
@@ -111,6 +113,7 @@ impl Default for CreatePlan {
             four_k: false,
             reel_length_minutes: 0,
             reel_split_frames: Vec::new(),
+            library_items: 0,
         }
     }
 }
@@ -146,6 +149,7 @@ pub fn check_before_encode(plan: &CreatePlan) -> Result<(), String> {
     crate::hfr::validate_fps_resolution(plan.fps, plan.four_k, plan.standard == Standard::Smpte)?;
     check_burn(plan)?;
     check_reel_splitting(plan)?;
+    check_library_items(plan)?;
     check_audio_map(plan)?;
     check_audio_channels(plan)?;
     check_active_area(plan)?;
@@ -181,6 +185,62 @@ fn check_reel_splitting(plan: &CreatePlan) -> Result<(), String> {
         hdr_dci: plan.hdr_dci,
         markers: !plan.markers.is_empty(),
     })
+}
+
+fn check_library_items(plan: &CreatePlan) -> Result<(), String> {
+    check_library_item_support(&LibraryItemContent {
+        attached: plan.library_items > 0,
+        stereo_3d: plan.right_eye.is_some(),
+        atmos: plan.atmos.is_some(),
+        hdr_dci: plan.hdr_dci,
+        markers: !plan.markers.is_empty(),
+    })
+}
+
+/// What a build with library items joined onto it would have to carry, for the
+/// tracks an item reel has no place for.
+pub struct LibraryItemContent {
+    pub attached: bool,
+    pub stereo_3d: bool,
+    pub atmos: bool,
+    pub hdr_dci: bool,
+    pub markers: bool,
+}
+
+/// An item reel is ordinary 2D SDR picture and sound, so a composition carrying
+/// any of these would need the item conformed to something this cannot make.
+pub fn check_library_item_support(content: &LibraryItemContent) -> Result<(), String> {
+    if !content.attached {
+        return Ok(());
+    }
+    if content.stereo_3d {
+        return Err(
+            "library items are not supported with stereoscopic 3D: an item has one eye".to_string(),
+        );
+    }
+    if content.atmos {
+        return Err(
+            "library items are not supported with Atmos: the auxiliary track covers the \
+             feature's reels and an item reel carries none"
+                .to_string(),
+        );
+    }
+    if content.hdr_dci {
+        return Err(
+            "library items are not supported with --hdr-dci: an item would have to be graded \
+             to ST 2084 PQ to sit in the same composition"
+                .to_string(),
+        );
+    }
+    if content.markers {
+        return Err(
+            "--marker is not supported with library items: a marker offset is relative to its \
+             own reel, and the items move which reel the feature is. A composition with items \
+             gets the default FFOC/LFOC pair"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// What a split composition would have to carry, for the tracks the multi-reel

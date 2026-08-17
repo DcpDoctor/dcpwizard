@@ -45,6 +45,8 @@ pub mod job_queue;
 pub mod kdm;
 pub mod kdm_log;
 pub mod kdm_template;
+pub mod library;
+pub mod library_reel;
 pub mod loudness;
 pub mod markers;
 pub mod mca;

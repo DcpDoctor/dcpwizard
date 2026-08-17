@@ -722,6 +722,34 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
         });
     }
 
+    // library items become reels of their own on either side of the feature's
+    let job_sound = match wav.as_ref().filter(|_| config.has_library_items()) {
+        Some((path, _)) => match crate::library_reel::job_sound(path) {
+            Ok(sound) => Some(sound),
+            Err(e) => {
+                tracing::error!("{e}");
+                return -1;
+            }
+        },
+        None => None,
+    };
+    let format = crate::library_reel::JobFormat {
+        fps,
+        geometry,
+        sound: job_sound,
+    };
+    let mut joined = match crate::library_reel::join_library_items(config, &format, cpl_reels) {
+        Ok(joined) => joined,
+        Err(e) => {
+            tracing::error!("{e}");
+            return -1;
+        }
+    };
+    pkl_entries.append(&mut joined.pkl);
+    am_entries.append(&mut joined.assetmap);
+    key_infos.append(&mut joined.keys);
+    let mut cpl_reels = joined.reels;
+
     // explicit --marker specs are refused for a split composition, so the reels
     // carry the default pair
     crate::cpl::apply_default_markers(&mut cpl_reels);
