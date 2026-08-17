@@ -212,9 +212,9 @@ should also land there and are noted in its DESIGN_TODO.
   Not yet clicked through in the running window. imfwizard too.
 - QC report addition, in CORE report.rs on top of what dcpdoctor verifies:
   Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
-  <= 82, trailer <= 85). PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
-  is the number cinema mix stages use, so it needs the M-weighting added.
-  Cinema-only. The codestream forensics half is served: `report` runs the verify
+  <= 82, trailer <= 85). postkit `loudness::measure_leq_m` already measures it
+  (CCIR 468 weighted) and dcpdoctor's `qc-report` prints it, dcpwizard's own
+  report does not yet. Cinema-only. The codestream forensics half is served: `report` runs the verify
   with `scan_every_frame`, so dcpdoctor's `j2k_codestream_summary` line reaches
   the report's Info rows.
 - Post-build actions. Done: a finished build shows Play / Inspect / Reveal beside
@@ -231,8 +231,6 @@ should also land there and are noted in its DESIGN_TODO.
   count and an elapsed clock, and nothing that separates the three, so it would take
   a wider progress payload from postkit first. Their claim that the MXF write
   overlaps the encode is untouched here. imfwizard too.
-- Player HUD counters for buffer depth and dropped frames next to frame and fps.
-  imfwizard too.
 
 ## Done 2026-08-12
 
