@@ -82,13 +82,6 @@ user-facing surface is here.
   `grok_encoder`) and the CPL and MXF writers assume a J2K picture descriptor, so
   this is a second essence type end to end rather than a flag. Only worth it if a
   customer actually has gear that needs it.
-- TMS upload after build (DCP-o-matic config `tms_protocol` ftp or sftp, plus
-  `tms_ip`, `tms_path`, `tms_user`, `tms_password` and `upload_after_make_dcp`):
-  push the finished package to a theatre management system. Delivery here is drive
-  copy (`copy`, `format-drive`), webhook and the REST API, all local or callback
-  based. The credential half already has a pattern to copy: `email.rs` reads an SMTP
-  config TOML whose password field redacts itself in Debug and never reaches argv or
-  logs.
 - Live playback decodes J2K with libavcodec, not grok. Two decode paths exist: the
   frame-accurate preview (PK preview.rs) resolves the CPL, decrypts and decodes
   through grok, but live playback (PK mpv.rs, and the embedded surface through PK
@@ -205,6 +198,22 @@ should also land there and are noted in its DESIGN_TODO.
   validation and the total, and the encode line is followed by a breakdown of
   decoder wait, frame prep, J2K and write off postkit's phase clocks. Nothing
   here overlaps the wrap with the encode yet. imfwizard too.
+
+## Done 2026-08-17
+
+- TMS upload (CORE/tms_upload.rs, `tms <package> [--tms-config]`, `create
+  --upload-to-tms`): every file of a finished package goes into
+  `<config path>/<package dir name>/` over sftp (ssh2 0.9.6 over libssh2, the first
+  release whose vendored copy carries the CVE-2026-55200 fix) or ftp (suppaftp 10,
+  blocking client). The config is a TOML file read the way `email.rs` reads the SMTP
+  one, with the same redacting Debug, and the password reaches the server through the
+  protocol's own auth, never argv. An sftp host is checked against
+  `~/.ssh/known_hosts` and refused when the key is unknown or changed, which
+  DCP-o-matic does not do. Remaining: FTPS (suppaftp has a rustls client, but plain
+  ftp is what DCP-o-matic's `tms_protocol` offers and what TMS gear answers on), key
+  authentication instead of a password, and the GUI panel; `create-vf`,
+  `create-multi` and `assemble` upload through the `tms` subcommand rather than a
+  flag of their own.
 
 ## Done 2026-08-12
 

@@ -133,6 +133,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **CLI scriptable**, all features accessible from command line
 - **Version dashboard**, OV/VF management, territory tracking, distribution matrix export
 - **Webhook notifications**, HTTP callbacks on job completion/failure
+- **TMS upload**, push a finished package to a theatre management system over sftp (host key checked against `known_hosts`) or ftp, on its own or straight after a build
 
 ### Mastering & Compliance
 - **DCDM creation**, Digital Cinema Distribution Master (X'Y'Z' 12/16-bit) intermediate
@@ -641,6 +642,13 @@ dcpwizard accessibility ./my_dcp --standard cvaa   # cvaa|eaa|aoda|ofcom
 dcpwizard webhook --url https://example.com/hook --event job.completed \
     --job-id 42 --payload '{"status":"ok"}'
 
+# Upload a finished package to a theatre management system
+dcpwizard tms /path/to/MyFilm_FTR_F_EN-XX_OV --tms-config ~/.config/dcpwizard/tms.toml
+
+# Or upload straight after a build
+dcpwizard create --title "My Film" --video film.mp4 --audio film.wav \
+    -o /out/MyFilm_OV --upload-to-tms
+
 # Content version / delivery tracking (SQLite)
 dcpwizard version record --db deliveries.db --package-uuid <uuid> \
     --title "My Film" --version OV --destination "AMC" --method hard_drive --verified
@@ -685,6 +693,37 @@ subject_template = "KDMs for {title} — {cinema}"
 With `--cinema`, one email per cinema is sent to its stored contact emails (plus
 any `--email-to`), each with that cinema's KDMs zipped. `--email-only-additional`
 sends only to `--email-to`.
+
+### TMS upload config
+
+`tms` and `create --upload-to-tms` read a TOML file, by default
+`~/.config/dcpwizard/tms.toml` (`--tms-config` points elsewhere). It holds the TMS
+password, so keep it outside the repo, mode 600. The password is never logged,
+never echoed in errors and never passed as a command-line argument.
+
+| key | required | notes |
+|-----|----------|-------|
+| `protocol` | yes | `sftp` or `ftp` |
+| `host` | yes | TMS hostname or IP |
+| `port` | no | defaults to 22 for sftp, 21 for ftp |
+| `path` | yes | remote directory the package directory is created under |
+| `user` | yes | login user |
+| `password` | yes | login password |
+
+```toml
+protocol = "sftp"
+host = "tms.cinema.example"
+path = "/mnt/dcp"
+user = "projectionist"
+password = "..."
+```
+
+Every file of the package is uploaded into `<path>/<package directory name>/`.
+An sftp host must be in `~/.ssh/known_hosts`: an unknown or changed host key is
+refused rather than handed the password, and the error prints the fingerprint and
+the `ssh-keyscan` line that records it once the cinema has confirmed it. Plain
+`ftp` sends the login and the package unencrypted, so prefer `sftp` wherever the
+TMS offers it.
 
 ## REST API
 
