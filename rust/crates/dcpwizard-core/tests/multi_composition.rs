@@ -58,6 +58,15 @@ fn base_config(out: &Path) -> DcpConfig {
         frame_rate_num: FPS,
         frame_rate_den: 1,
         output_dir: out.to_path_buf(),
+        // a packaged text track has to embed a font, so name the one in the repo
+        // instead of depending on the machine carrying a face
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            font_path: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -88,9 +97,6 @@ fn picture_id(cpl: &Path) -> String {
 
 #[test]
 fn distinct_compositions_share_pkl_not_essence_and_validate() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let j2k_a = root.path().join("a_j2k");
     let j2k_b = root.path().join("b_j2k");
@@ -150,14 +156,4 @@ fn manifest_loader_rejects_missing_j2k_dir() {
     let manifest = root.path().join("m.json");
     std::fs::write(&manifest, r#"[{"title":"X","j2k_dir":"/no/such/dir"}]"#).unwrap();
     assert!(load_compositions(&manifest).is_err());
-}
-
-/// A packaged text track has to embed a font, and the paths these tests exercise
-/// take no `--subtitle-font`, so they need a face on the machine running them.
-fn no_system_font() -> bool {
-    if postkit::subtitle_raster::find_system_sans_font().is_none() {
-        eprintln!("skipping: this machine carries no system sans font");
-        return true;
-    }
-    false
 }

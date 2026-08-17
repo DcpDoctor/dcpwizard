@@ -897,7 +897,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             ccap_lang,
             fps,
             cue_timing,
-            &crate::subtitle::SubtitleOptions::default(),
+            &config.subtitle_opts.for_closed_caption(),
             *ccap_uuid.as_bytes(),
         ) {
             Some(d) => {

@@ -600,6 +600,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
                     &cues,
                     &sub_lang,
                     config,
+                    &config.subtitle_opts,
                     fps,
                     None,
                     &mut pkl_entries,

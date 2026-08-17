@@ -401,7 +401,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             path,
             config.source_trim,
             fps,
-            &crate::subtitle::SubtitleOptions::default(),
+            &config.subtitle_opts.for_closed_caption(),
             &config.output_dir,
         ) {
             Ok(p) => Some(p),
@@ -612,7 +612,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 &rebased,
                 ccap_lang,
                 fps,
-                &crate::subtitle::SubtitleOptions::default(),
+                &config.subtitle_opts.for_closed_caption(),
                 plan.font.as_ref(),
             );
             if let Err(e) = std::fs::write(&dcst, xml) {

@@ -1341,6 +1341,7 @@ pub async fn create_vf(
         title: title.unwrap_or_default(),
         replacement_reels,
         subtitle_language: String::new(),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions::default(),
         signer: None,
     };
 

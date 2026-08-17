@@ -77,9 +77,6 @@ fn mxf_names(dir: &Path) -> Vec<String> {
 // Reel splitting must emit a MainClosedCaption per reel, alongside the picture.
 #[test]
 fn multi_reel_carries_closed_captions() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 48);
@@ -107,6 +104,7 @@ fn multi_reel_carries_closed_captions() {
         audio_path: Some(wav),
         ccap_path: Some(ccap),
         ccap_language: "en".into(),
+        subtitle_opts: font_options(),
         reel_split_frames: vec![24],
         ..Default::default()
     };
@@ -130,9 +128,6 @@ fn multi_reel_carries_closed_captions() {
 // A version with a ccap track emits MainClosedCaption in its CPL.
 #[test]
 fn version_carries_closed_captions() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 24);
@@ -149,6 +144,7 @@ fn version_carries_closed_captions() {
         frame_rate_den: 1,
         output_dir: out.clone(),
         j2k_dir: Some(j2k),
+        subtitle_opts: font_options(),
         ..Default::default()
     };
     let versions = vec![VersionSpec {
@@ -171,9 +167,6 @@ fn version_carries_closed_captions() {
 // A VF that adds a ccap track references the OV picture and ships one ccap MXF.
 #[test]
 fn vf_adds_closed_caption_track() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let ov_j2k = root.path().join("ov_j2k");
     make_content_frames(&ov_j2k, 24);
@@ -202,6 +195,7 @@ fn vf_adds_closed_caption_track() {
         vf_dir: vf.clone(),
         title: "OV with CC".into(),
         subtitle_language: "en".into(),
+        subtitle_opts: font_options(),
         replacement_reels: vec![ReplacementReel {
             reel_number: 1,
             ccap: Some(ccap),
@@ -223,12 +217,13 @@ fn vf_adds_closed_caption_track() {
     assert_eq!(ccap_mxfs.len(), 1, "VF ships one ccap MXF: {ccap_mxfs:?}");
 }
 
-/// A packaged text track has to embed a font, and the paths these tests exercise
-/// take no `--subtitle-font`, so they need a face on the machine running them.
-fn no_system_font() -> bool {
-    if postkit::subtitle_raster::find_system_sans_font().is_none() {
-        eprintln!("skipping: this machine carries no system sans font");
-        return true;
+/// A packaged text track has to embed a font, so the tests name the one in the
+/// repo instead of depending on the machine carrying a face.
+fn font_options() -> dcpwizard_core::subtitle::SubtitleOptions {
+    dcpwizard_core::subtitle::SubtitleOptions {
+        font_path: Some(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/LiberationSans-Regular.ttf"),
+        ),
+        ..Default::default()
     }
-    false
 }

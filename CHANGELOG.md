@@ -29,6 +29,7 @@
 - **CPL markers** — every created composition now carries a ST 429-7 `MainMarkers` asset in reel 1 (Bv2.1 expects one), with FFOC/LFOC by default. `create --marker LABEL=timecode` (repeatable) places any of the ten defined markers, e.g. the FFEC/FFMC distributors ask for; the offsets are validated against the composition length. Previously the `markers` subcommand printed a MarkerList nothing read
 
 ### Fixed
+- **The subtitle options stopped at the create path**: `create --versions`, `create-multi`, `create-vf` and every closed-caption track rendered their timed text under the default options, so `--subtitle-font` and the placement, RTL and wrap flags were inert there and a machine with no system sans face could not build any of them at all. All four now render with the options the job was given, `create-vf` takes a `--subtitle-font` of its own, and a caption track carries the font and the placement while keeping the default appearance, which is what `--ccap` is documented to do. The eight end-to-end tests that skipped themselves on a machine with no font now name the face in the repo and run everywhere
 - **Reels without cues carried no subtitle**: `create --reel-length` and `create
   --versions` gave a reel none of the cues fell into no MainSubtitle at all, which
   dcpdoctor reports as `subtitle_missing_from_reel` because a composition with

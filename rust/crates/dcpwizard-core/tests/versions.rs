@@ -74,6 +74,15 @@ fn base_config(out: &Path, j2k: PathBuf, audio: Option<PathBuf>) -> DcpConfig {
         output_dir: out.to_path_buf(),
         j2k_dir: Some(j2k),
         audio_path: audio,
+        // a packaged text track has to embed a font, so name the one in the repo
+        // instead of depending on the machine carrying a face
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            font_path: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -183,9 +192,6 @@ fn pkl_count(dir: &Path) -> usize {
 
 #[test]
 fn two_versions_share_essence_and_validate() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     make_content_frames(&j2k, 48);
@@ -249,9 +255,6 @@ fn two_versions_share_essence_and_validate() {
 
 #[test]
 fn multi_reel_versions_share_picture_per_reel() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let j2k = root.path().join("j2k");
     // 1 minute = 1440 frames per reel; 1470 forces two reels (30-frame tail)
@@ -435,14 +438,4 @@ fn per_version_audio_overrides_base_sound() {
 
     let result = dcpwizard_core::verify::verify_dcp(&out);
     assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
-}
-
-/// A packaged text track has to embed a font, and the paths these tests exercise
-/// take no `--subtitle-font`, so they need a face on the machine running them.
-fn no_system_font() -> bool {
-    if postkit::subtitle_raster::find_system_sans_font().is_none() {
-        eprintln!("skipping: this machine carries no system sans font");
-        return true;
-    }
-    false
 }

@@ -10,6 +10,9 @@ pub struct VfConfig {
     pub replacement_reels: Vec<ReplacementReel>,
     /// Language code for wrapped subtitle tracks (default "en").
     pub subtitle_language: String,
+    /// How the wrapped timed text is rendered: the font to embed and the
+    /// placement. Without a font here the machine's own faces are used.
+    pub subtitle_opts: crate::subtitle::SubtitleOptions,
     pub signer: Option<crate::package_signature::PackageSigner>,
 }
 
@@ -178,6 +181,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
                     sub_lang,
                     edit_num,
                     entry.duration_frames,
+                    &config.subtitle_opts,
                     &config.vf_dir,
                 ) else {
                     return -1;
@@ -198,6 +202,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
                     sub_lang,
                     edit_num,
                     entry.duration_frames,
+                    &config.subtitle_opts.for_closed_caption(),
                     &config.vf_dir,
                 ) else {
                     return -1;
@@ -483,6 +488,7 @@ fn prepare_timed_text(
     lang: &str,
     fps: u32,
     fallback_duration: u64,
+    opts: &crate::subtitle::SubtitleOptions,
     vf_dir: &Path,
 ) -> Option<NewAsset> {
     if !input.exists() {
@@ -501,7 +507,7 @@ fn prepare_timed_text(
         input.to_path_buf()
     } else {
         let tmp = vf_dir.join(format!("{prefix}_{}.xml", uuid::Uuid::new_v4()));
-        match crate::subtitle::srt_to_shifted_dcst(input, 0, lang, fps, &tmp) {
+        match crate::subtitle::srt_to_shifted_dcst(input, 0, lang, fps, opts, &tmp) {
             Ok(r) => resources = r,
             Err(e) => {
                 tracing::error!("{prefix} conversion failed: {e}");
@@ -762,6 +768,7 @@ mod tests {
             vf_dir: vf.clone(),
             title: String::new(),
             subtitle_language: String::new(),
+            subtitle_opts: crate::subtitle::SubtitleOptions::default(),
             signer: None,
             replacement_reels: vec![ReplacementReel {
                 reel_number: 1,
@@ -844,6 +851,7 @@ mod tests {
             vf_dir: tmp.path().join("vf"),
             title: String::new(),
             subtitle_language: String::new(),
+            subtitle_opts: crate::subtitle::SubtitleOptions::default(),
             signer: None,
             replacement_reels: vec![],
         };
@@ -863,6 +871,7 @@ mod tests {
             vf_dir: tmp.path().join("vf"),
             title: String::new(),
             subtitle_language: String::new(),
+            subtitle_opts: crate::subtitle::SubtitleOptions::default(),
             signer: None,
             replacement_reels: vec![ReplacementReel {
                 reel_number: 9,

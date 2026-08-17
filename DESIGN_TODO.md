@@ -159,11 +159,6 @@ user-facing surface is here.
 
 - cosmic-text's bidi handling could replace the hand-rolled `--subtitle-rtl`
   reshaping.
-- Timed-text appearance covers the open `--subtitle` track only. `--ccap` and
-  `create --versions` render through the same writer under `SubtitleOptions::default()`,
-  so placement, RTL and wrap are ignored on both (the font is embedded either way).
-  Styling a caption track, or carrying the caller's `SubtitleOptions` into the
-  versions path, is the same piece of work.
 - The standalone `burnin` command is now redundant for DCP work. `create
   --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
   an extra lossy transcode and its `--font-size` is inert for subtitles (read only in

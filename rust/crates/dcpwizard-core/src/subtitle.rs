@@ -71,6 +71,19 @@ pub struct SubtitleOptions {
     pub appearance: TimedTextAppearance,
 }
 
+impl SubtitleOptions {
+    /// The same options for a closed-caption track. The `--subtitle-*`
+    /// appearance flags style the open subtitle track only, which is what the
+    /// CLI refuses them without, so a caption keeps the default look and takes
+    /// the font and the placement.
+    pub fn for_closed_caption(&self) -> Self {
+        SubtitleOptions {
+            appearance: TimedTextAppearance::default(),
+            ..self.clone()
+        }
+    }
+}
+
 /// Point size the packaged `Font` line carries when nothing names one.
 const DEFAULT_TIMED_TEXT_SIZE: u32 = 42;
 
@@ -921,6 +934,7 @@ pub fn srt_to_shifted_dcst(
     head_frames: u64,
     lang: &str,
     fps: u32,
+    opts: &SubtitleOptions,
     out: &Path,
 ) -> Result<Vec<(PathBuf, [u8; 16])>, String> {
     let cues: Vec<SubCue> = parse_srt_frames(srt, fps)?
@@ -931,7 +945,7 @@ pub fn srt_to_shifted_dcst(
             text: c.text,
         })
         .collect();
-    write_dcst_frames(&cues, lang, fps, out)
+    write_dcst_frames(&cues, lang, fps, opts, out)
 }
 
 /// Write a reel's DCST from frame-based cues (already rebased to reel-local 0),
@@ -940,10 +954,11 @@ pub fn write_dcst_frames(
     cues: &[SubCue],
     lang: &str,
     fps: u32,
+    opts: &SubtitleOptions,
     out: &Path,
 ) -> Result<Vec<(PathBuf, [u8; 16])>, String> {
     let styled = styled_from_frames(cues, fps);
-    write_dcst_styled(&styled, lang, fps, &SubtitleOptions::default(), 0, out)
+    write_dcst_styled(&styled, lang, fps, opts, 0, out)
 }
 
 /// The cues a reel of a subtitled composition carries when none of its own fall

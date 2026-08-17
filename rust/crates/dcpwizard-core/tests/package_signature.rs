@@ -383,6 +383,7 @@ fn create_vf_signs_after_the_supplemental_marker_rewrite() {
         vf_dir: out.clone(),
         title: "VF".into(),
         subtitle_language: "en".into(),
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions::default(),
         replacement_reels: vec![dcpwizard_core::vf::ReplacementReel {
             reel_number: 1,
             picture: Some(replacement),

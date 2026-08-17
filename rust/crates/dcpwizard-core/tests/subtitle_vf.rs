@@ -89,9 +89,6 @@ fn read_cpl(dir: &Path) -> String {
 
 #[test]
 fn subtitle_only_vf_references_ov_and_volume_validates() {
-    if no_system_font() {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let ov = make_ov(root.path());
 
@@ -104,6 +101,15 @@ fn subtitle_only_vf_references_ov_and_volume_validates() {
         vf_dir: vf.clone(),
         title: "OV Movie with subs".into(),
         subtitle_language: "en".into(),
+        // a packaged text track has to embed a font, so name the one in the repo
+        // instead of depending on the machine carrying a face
+        subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+            font_path: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/LiberationSans-Regular.ttf"),
+            ),
+            ..Default::default()
+        },
         replacement_reels: vec![ReplacementReel {
             reel_number: 1,
             subtitle: Some(srt),
@@ -185,14 +191,4 @@ fn subtitle_only_vf_references_ov_and_volume_validates() {
     // the OV output itself stays verify-clean (the VF did not touch it)
     let result = dcpwizard_core::verify::verify_dcp(&ov);
     assert!(result.valid, "OV dcpdoctor errors: {:?}", result.errors);
-}
-
-/// A packaged text track has to embed a font, and the paths these tests exercise
-/// take no `--subtitle-font`, so they need a face on the machine running them.
-fn no_system_font() -> bool {
-    if postkit::subtitle_raster::find_system_sans_font().is_none() {
-        eprintln!("skipping: this machine carries no system sans font");
-        return true;
-    }
-    false
 }

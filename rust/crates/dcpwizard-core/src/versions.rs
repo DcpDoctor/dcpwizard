@@ -540,6 +540,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &rebased,
                     &sub_lang,
                     config,
+                    &config.subtitle_opts,
                     fps,
                     Some(reel_duration_frames),
                     &mut pkl_entries,
@@ -593,6 +594,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &rebased,
                     &sub_lang,
                     config,
+                    &config.subtitle_opts.for_closed_caption(),
                     fps,
                     Some(reel_duration_frames),
                     &mut pkl_entries,
@@ -867,6 +869,7 @@ pub(crate) fn wrap_subtitle_cues(
     cues: &[crate::subtitle::SubCue],
     lang: &str,
     config: &DcpConfig,
+    opts: &crate::subtitle::SubtitleOptions,
     fps: u32,
     duration_frames: Option<u32>,
     pkl: &mut Vec<crate::pkl::PklEntry>,
@@ -875,7 +878,7 @@ pub(crate) fn wrap_subtitle_cues(
 ) -> Result<WrappedTimedText, ()> {
     let uuid = uuid::Uuid::new_v4();
     let dcst = config.output_dir.join(format!("{prefix}_{uuid}.xml"));
-    let resources = match crate::subtitle::write_dcst_frames(cues, lang, fps, &dcst) {
+    let resources = match crate::subtitle::write_dcst_frames(cues, lang, fps, opts, &dcst) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("{prefix} write failed: {e}");

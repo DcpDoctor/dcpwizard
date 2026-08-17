@@ -880,6 +880,10 @@ enum Commands {
         /// Language code for wrapped subtitle tracks
         #[arg(long, default_value = "en")]
         subtitle_language: String,
+        /// TTF/OTF font to embed in the wrapped timed text (default: a system
+        /// sans face)
+        #[arg(long)]
+        subtitle_font: Option<String>,
         #[command(flatten)]
         signer_opts: SignerOpts,
     },
@@ -6155,6 +6159,7 @@ fn run() {
             replace_ccap,
             add_ccap,
             subtitle_language,
+            subtitle_font,
             signer_opts,
         } => {
             // Parse REEL=PATH into a per-reel map. picture/sound/subtitle/ccap share
@@ -6213,6 +6218,10 @@ fn run() {
                     vf_dir: PathBuf::from(&output),
                     title,
                     subtitle_language,
+                    subtitle_opts: dcpwizard_core::subtitle::SubtitleOptions {
+                        font_path: subtitle_font.map(PathBuf::from),
+                        ..Default::default()
+                    },
                     replacement_reels: reels.into_values().collect(),
                     signer: package_signer(&signer_opts),
                 };
