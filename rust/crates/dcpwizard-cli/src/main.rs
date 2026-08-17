@@ -529,6 +529,20 @@ struct CreatePadding {
     pad_color: Option<String>,
 }
 
+/// Where a finished build is delivered on top of being written to --output.
+/// Boxed into the Create variant.
+#[derive(Args)]
+struct CreateDelivery {
+    /// Upload the finished package to the theatre management system after a
+    /// successful build. Fails loud up front if the config cannot be read.
+    #[arg(long)]
+    upload_to_tms: bool,
+    /// TMS config TOML holding the protocol, host, path, user and password
+    /// (default: <config dir>/dcpwizard/tms.toml)
+    #[arg(long)]
+    tms_config: Option<String>,
+}
+
 /// Library items joined onto the build as reels of their own, and the folder
 /// they are resolved against. Boxed into the Create variant.
 #[derive(Args)]
@@ -840,6 +854,8 @@ enum Commands {
 
         #[command(flatten)]
         library_items: Box<CreateLibraryItems>,
+        #[command(flatten)]
+        delivery: Box<CreateDelivery>,
 
         /// Run the pre-build check and stop: every refusal and every hint,
         /// without encoding or writing anything under --output.
@@ -1817,6 +1833,16 @@ enum Commands {
         payload: String,
     },
 
+    /// Upload a finished DCP to a theatre management system over ftp or sftp
+    Tms {
+        /// Package directory to upload
+        package: String,
+        /// TMS config TOML holding the protocol, host, path, user and password
+        /// (default: <config dir>/dcpwizard/tms.toml)
+        #[arg(long)]
+        tms_config: Option<String>,
+    },
+
     /// Content version / delivery history tracker (SQLite)
     Version {
         #[command(subcommand)]
@@ -2622,6 +2648,15 @@ fn send_kdm_email(
     dcpwizard_core::email::send_kdms(&cfg, cinema, title, to, files)
 }
 
+fn load_tms_config(
+    cfg_path: Option<&str>,
+) -> Result<dcpwizard_core::tms_upload::TmsConfig, String> {
+    let path = cfg_path
+        .map(PathBuf::from)
+        .unwrap_or_else(dcpwizard_core::tms_upload::default_config_path);
+    dcpwizard_core::tms_upload::TmsConfig::load(&path)
+}
+
 fn sanitize_dir_name(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -3424,8 +3459,13 @@ fn run() {
             isdcf_naming,
             signer_opts,
             library_items,
+            delivery,
             check,
         } => {
+            let CreateDelivery {
+                upload_to_tms,
+                tms_config,
+            } = *delivery;
             let CreateAudioQol {
                 loudness_target,
                 true_peak_ceiling,
@@ -3484,6 +3524,19 @@ fn run() {
                 tracing::error!("{e}");
                 std::process::exit(1);
             }
+            // same for the TMS config: an unreadable one must fail before the
+            // encode, not after it.
+            let tms_target = if upload_to_tms {
+                match load_tms_config(tms_config.as_deref()) {
+                    Ok(config) => Some(config),
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
             // same for the signer: an unusable key or certificate must fail
             // before the encode, not after it.
             let package_signer = package_signer(&signer_opts);
@@ -4694,6 +4747,21 @@ fn run() {
                 let _ = std::fs::remove_dir_all(output_dir.join("j2k_trimmed"));
                 let _ = std::fs::remove_file(output_dir.join("j2k_trimmed.wav"));
                 code
+            };
+
+            // upload to the TMS (dom's upload_after_make_dcp): opt-in, only
+            // after a clean run, and before any power-off.
+            let code = match tms_target {
+                Some(config) if code == 0 => {
+                    match dcpwizard_core::tms_upload::upload_package(&config, &output_dir) {
+                        Ok(()) => 0,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            1
+                        }
+                    }
+                }
+                _ => code,
             };
 
             // shutdown on completion (dom#1394): opt-in, only after a clean run.
@@ -6149,6 +6217,19 @@ fn run() {
                 1
             }
         }
+
+        Commands::Tms {
+            package,
+            tms_config,
+        } => match load_tms_config(tms_config.as_deref()).and_then(|config| {
+            dcpwizard_core::tms_upload::upload_package(&config, Path::new(&package))
+        }) {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!("{e}");
+                1
+            }
+        },
 
         Commands::Version { action } => match action {
             VersionAction::Record {

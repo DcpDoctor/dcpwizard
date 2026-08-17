@@ -681,3 +681,64 @@ fn a_clean_check_passes_with_no_hint_and_writes_nothing() {
         .stdout(predicate::str::contains("hint:").not());
     assert!(!out.exists(), "a check must write nothing under --output");
 }
+
+#[test]
+fn tms_help_lists_the_package_and_the_config() {
+    cmd()
+        .args(["tms", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--tms-config"))
+        .stdout(predicate::str::contains("PACKAGE"));
+}
+
+#[test]
+fn tms_needs_a_package_directory() {
+    cmd()
+        .arg("tms")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "required arguments were not provided",
+        ));
+}
+
+#[test]
+fn tms_refuses_a_config_it_cannot_parse() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("tms.toml");
+    std::fs::write(&config, "protocol = \"carrier-pigeon\"\n").unwrap();
+
+    cmd()
+        .args([
+            "tms",
+            dir.path().to_str().unwrap(),
+            "--tms-config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid tms config"));
+}
+
+#[test]
+fn create_reads_the_tms_config_before_it_encodes() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("flat.mp4");
+    write_test_video(&video, 1998, 1080);
+    let out = dir.path().join("out");
+
+    create_with(
+        &dir,
+        &video,
+        &[
+            "--upload-to-tms",
+            "--tms-config",
+            dir.path().join("absent.toml").to_str().unwrap(),
+        ],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains("cannot read tms config"));
+    assert!(!out.exists(), "the encode must not have started");
+}
