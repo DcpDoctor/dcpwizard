@@ -140,6 +140,16 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         tracing::error!("J2K input directory does not exist: {}", j2k_dir.display());
         return -1;
     }
+    if config.picture_mxf.is_some()
+        && let Some(reason) = crate::overlapped_picture::package_refusal(
+            &crate::overlapped_picture::PackageShape::of(config, true),
+        )
+    {
+        tracing::error!(
+            "this package cannot take a picture MXF wrapped during the encode: {reason}"
+        );
+        return -1;
+    }
     // Reject a bad signer before anything is written, so signing cannot fail
     // once a CPL is on disk and leave a half-signed package.
     if let Some(signer) = config.signer.as_ref()

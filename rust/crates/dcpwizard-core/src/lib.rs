@@ -54,6 +54,7 @@ pub mod mca;
 pub mod multi_cpl;
 pub mod mxf_wrap;
 pub mod otioz_import;
+pub mod overlapped_picture;
 pub mod package_signature;
 pub mod pad;
 pub mod pkl;

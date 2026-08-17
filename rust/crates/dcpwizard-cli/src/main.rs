@@ -4479,6 +4479,8 @@ fn run() {
                     container_height,
                     max_bitrate_mbps: video_bit_rate.unwrap_or(0),
                     j2k_dir: Some(packaged_j2k_dir.clone()),
+                    // create encodes through the resumable encoder, which has no wrap feed
+                    picture_mxf: None,
                     audio_path: audio_path.clone(),
                     audio_input_order,
                     audio_channels,
@@ -4701,6 +4703,8 @@ fn run() {
                     container_height,
                     max_bitrate_mbps: video_bit_rate.unwrap_or(0),
                     j2k_dir: Some(packaged_j2k_dir),
+                    // create encodes through the resumable encoder, which has no wrap feed
+                    picture_mxf: None,
                     audio_path,
                     audio_input_order,
                     audio_channels,

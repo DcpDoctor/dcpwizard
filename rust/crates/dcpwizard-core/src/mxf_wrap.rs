@@ -484,6 +484,16 @@ pub fn wrap_mxf(config: &MxfWrapConfig) -> i32 {
 /// and ColorPrimaries = P3-D65 through asdcplib's `open_write_hdr`. postkit's
 /// `mxf_wrap` has no HDR setter, so this replicates its AS-DCP JP2K wrap and adds
 /// the HDR ULs directly. Returns the track file or None on failure (logged).
+/// The DCI HDR Addendum picture metadata: ST 2084 (PQ) transfer with P3-D65
+/// primaries, written onto the picture essence descriptor.
+pub fn dci_hdr_metadata() -> asdcplib::jp2k::HdrMetadata {
+    asdcplib::jp2k::HdrMetadata {
+        transfer_characteristic: Some(asdcplib::jp2k::TRANSFER_CHARACTERISTIC_ST2084),
+        color_primaries: Some(asdcplib::jp2k::COLOR_PRIMARIES_P3D65),
+        ..Default::default()
+    }
+}
+
 pub fn wrap_j2k_hdr_files(
     input_files: Vec<PathBuf>,
     output_mxf: &std::path::Path,
@@ -491,8 +501,6 @@ pub fn wrap_j2k_hdr_files(
     encryption: Option<postkit::mxf_wrap::MxfEncryption>,
     asset_uuid: Option<[u8; 16]>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
-    use asdcplib::jp2k::{COLOR_PRIMARIES_P3D65, HdrMetadata, TRANSFER_CHARACTERISTIC_ST2084};
-
     if input_files.is_empty() {
         tracing::error!("no essence files to wrap into {}", output_mxf.display());
         return None;
@@ -564,11 +572,7 @@ pub fn wrap_j2k_hdr_files(
         container_duration: frames.len() as u32,
         component_count: header.num_components,
     };
-    let hdr = HdrMetadata {
-        transfer_characteristic: Some(TRANSFER_CHARACTERISTIC_ST2084),
-        color_primaries: Some(COLOR_PRIMARIES_P3D65),
-        ..Default::default()
-    };
+    let hdr = dci_hdr_metadata();
 
     let mut writer = asdcplib::jp2k::MxfWriter::new();
     let output_str = output_mxf.to_string_lossy().to_string();

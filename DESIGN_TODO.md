@@ -188,12 +188,6 @@ should also land there and are noted in its DESIGN_TODO.
   the progress bar, wired to the embedded preview, the Verify view and the file
   manager. The row belongs to the build in front of you, so a job picked out of the
   Jobs list does not bring it back.
-- Overlap the MXF write with the encode, as Storm claims to. The encode log
-  itself is done: `[TIMING]` lines give preflight, encode, audio, packaging,
-  validation and the total, and the encode line is followed by a breakdown of
-  decoder wait, frame prep, J2K and write off postkit's phase clocks. Nothing
-  here overlaps the wrap with the encode yet. imfwizard too.
-
 ### Transkoder survey (2026-08-17)
 
 From colorfront.com/software/transkoder plus the NAB 2026 press release. Colorfront
@@ -219,6 +213,20 @@ breadth, QC detectors, and the render-farm/cloud story. Items worth landing here
 
 ## Done 2026-08-17
 
+- Overlap the MXF write with the encode, as Storm claims to. postkit's
+  `pipeline::run_encode_and_wrap_picture` feeds a picture MXF one codestream at a
+  time as the in-process encoder finishes it, and the GUI's build path takes it
+  wherever the job allows: `overlapped_picture::overlap_refusal` is the one
+  predicate, and it refuses a still hold, an image or J2K sequence, a trim, 3D,
+  head/tail padding, a split composition, versions and encryption, each with the
+  reason. Those builds take the encode-then-wrap path unchanged, and the job log
+  says which one ran and why. `DcpConfig::picture_mxf` is the seam: `create_dcp`
+  declares the MXF the caller already wrote instead of wrapping `j2k_dir`, which it
+  still reads for the coded raster the CPL carries. The CLI's `create` is not on
+  it: it encodes through `grok_encoder::encode_video_pipeline_resumable`, which
+  writes codestreams and has no frame feed to hand a wrap, so overlapping there
+  needs that encoder to grow one in postkit first. imfwizard has the same shape
+  over `Composition::picture_mxf`.
 - TMS upload (postkit's `tms` module, `tms <package> [--tms-config]`, `create
   --upload-to-tms`): every file of a finished package goes into
   `<config path>/<package dir name>/` over sftp (ssh2 0.9.6 over libssh2, the first

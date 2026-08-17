@@ -2143,6 +2143,37 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         picture: resolved_picture.processing.clone(),
     };
 
+    // the picture MXF is written as the frames finish where the job allows it, so
+    // packaging no longer reads the whole J2K directory back to wrap it
+    let overlap_refusal = dcpwizard_core::overlapped_picture::overlap_refusal(
+        &dcpwizard_core::overlapped_picture::PictureSource {
+            input_type: postkit::encode::detect_input_type(&encode_input),
+            still_hold: job.still_length_frames > 0,
+            trims_picture: job.trim_start_frames + job.trim_end_frames > 0,
+        },
+        &dcpwizard_core::overlapped_picture::PackageShape {
+            stereoscopic: job.right_eye.is_some(),
+            pads: job.pad_head.is_some() || job.pad_tail.is_some(),
+            splits_reels: job.reel_length_minutes > 0 || !reel_split_frames.is_empty(),
+            multiple_versions: !job.versions.is_empty(),
+            encrypts: job.encrypt,
+        },
+    );
+    let wrap_target = match overlap_refusal {
+        Some(reason) => {
+            log_to(
+                &log_file,
+                &format!("[ENCODE] Wrapping the picture MXF after the encode: {reason}"),
+            );
+            None
+        }
+        None => Some(dcpwizard_core::overlapped_picture::PictureWrapTarget {
+            dcp_dir: job.output_dir.clone(),
+            fps: fps_num,
+            hdr_dci: job.hdr_dci,
+        }),
+    };
+
     // Encode using shared pipeline. A still never reaches it: it is one encode
     // whose codestream is linked for every frame of the hold.
     let job_id = job.id;
@@ -2151,35 +2182,63 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let encode_breakdown: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let encode_breakdown_ref = encode_breakdown.clone();
     let encode_started = Instant::now();
+    let mut picture_mxf = None;
     let encode_result = if job.still_length_frames > 0 {
         encode_still(job, output, encode_fps, &resolved_picture, |msg| {
             log_to(&log_ref, msg)
         })?
     } else {
-        postkit::pipeline::run_encode_with_options(
-            &encode_input,
-            output,
-            &encode_options,
-            &cancel,
-            &pause,
-            |p| {
-                emit_progress(
-                    &app_ref,
-                    job_id,
-                    &p.stage,
-                    &p.message,
-                    p.frame,
-                    p.total_frames,
-                    p.fps,
-                    p.elapsed_secs,
-                    p.percent,
+        let on_progress = |p: &postkit::pipeline::PipelineProgress| {
+            emit_progress(
+                &app_ref,
+                job_id,
+                &p.stage,
+                &p.message,
+                p.frame,
+                p.total_frames,
+                p.fps,
+                p.elapsed_secs,
+                p.percent,
+            );
+            if let Some(line) = format_encode_breakdown(p) {
+                *encode_breakdown_ref.lock().unwrap() = Some(line);
+            }
+        };
+        let on_log = |msg: &str| log_to(&log_ref, msg);
+        match wrap_target {
+            Some(target) => {
+                let (encode, wrapped) =
+                    dcpwizard_core::overlapped_picture::encode_and_wrap_picture(
+                        &encode_input,
+                        output,
+                        &encode_options,
+                        target,
+                        &cancel,
+                        &pause,
+                        on_progress,
+                        on_log,
+                    )?;
+                log_to(
+                    &log_file,
+                    &format!(
+                        "[ENCODE] Picture MXF written during the encode: {} ({} frames)",
+                        wrapped.mxf_name(),
+                        wrapped.duration
+                    ),
                 );
-                if let Some(line) = format_encode_breakdown(p) {
-                    *encode_breakdown_ref.lock().unwrap() = Some(line);
-                }
-            },
-            |msg| log_to(&log_ref, msg),
-        )?
+                picture_mxf = Some(wrapped);
+                encode
+            }
+            None => postkit::pipeline::run_encode_with_options(
+                &encode_input,
+                output,
+                &encode_options,
+                &cancel,
+                &pause,
+                on_progress,
+                on_log,
+            )?,
+        }
     };
 
     // Stereoscopic 3D: encode the right eye into its own subdir at the same
@@ -2265,7 +2324,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     log_to(&log_file, "[PACKAGE] Creating DCP...");
     let package_started = Instant::now();
 
-    let config = build_dcp_config(
+    let mut config = build_dcp_config(
         job,
         j2k_dir,
         right_eye_dir,
@@ -2273,6 +2332,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         sign_language_main_channels,
         reel_split_frames,
     );
+    config.picture_mxf = picture_mxf;
 
     let rc = if job.versions.is_empty() {
         dcpwizard_core::dcp::create_dcp(&config)

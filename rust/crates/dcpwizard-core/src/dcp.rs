@@ -24,6 +24,12 @@ pub struct DcpConfig {
     pub output_dir: PathBuf,
     /// Directory containing J2K frames to wrap into picture MXF
     pub j2k_dir: Option<PathBuf>,
+    /// A picture MXF the caller already wrote into `output_dir` while the encode
+    /// ran, from [`crate::overlapped_picture::encode_and_wrap_picture`]. When set
+    /// it is taken as the picture track and nothing here wraps `j2k_dir`, which
+    /// is still read for the coded raster the CPL declares.
+    #[serde(default)]
+    pub picture_mxf: Option<crate::overlapped_picture::PreWrappedPicture>,
     /// Audio WAV file to wrap into sound MXF
     pub audio_path: Option<PathBuf>,
     /// Declared channel order for a six-channel input WAV. DCPwizard never
@@ -330,6 +336,19 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         return -1;
     }
 
+    // an already-wrapped picture is one MXF over one composition, so refuse it
+    // rather than wrap a second one from the frames and leave it orphaned
+    if config.picture_mxf.is_some()
+        && let Some(reason) = crate::overlapped_picture::package_refusal(
+            &crate::overlapped_picture::PackageShape::of(config, false),
+        )
+    {
+        tracing::error!(
+            "this package cannot take a picture MXF wrapped during the encode: {reason}"
+        );
+        return -1;
+    }
+
     // Reject a bad signer before anything is written, so signing cannot fail
     // once the CPL is on disk and leave a half-signed package.
     if let Some(signer) = config.signer.as_ref()
@@ -551,10 +570,21 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if progress.cancelled() {
         return -2;
     }
-    progress.stage(15, "wrapping picture");
+    progress.stage(
+        15,
+        match config.picture_mxf {
+            Some(_) => "picture wrapped during the encode",
+            None => "wrapping picture",
+        },
+    );
     // ── Wrap picture MXF ──────────────────────────────────────────────
-    let picture_uuid = uuid::Uuid::new_v4();
-    let picture_mxf_name = format!("picture_{picture_uuid}.mxf");
+    // an overlapped wrap already named its file after the id it wrote into the
+    // MXF, so the package has to declare that id rather than mint a new one
+    let picture_uuid = match config.picture_mxf.as_ref() {
+        Some(wrapped) => uuid::Uuid::from_bytes(wrapped.asset_uuid),
+        None => uuid::Uuid::new_v4(),
+    };
+    let picture_mxf_name = crate::overlapped_picture::picture_mxf_name(&picture_uuid);
     let picture_mxf_path = config.output_dir.join(&picture_mxf_name);
     // set from the (left-eye) frame count in the wrap block below
     let picture_duration: u64;
@@ -585,7 +615,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 key_id: k.key_id,
             });
 
-        if padding {
+        if let Some(wrapped) = config.picture_mxf.as_ref() {
+            picture_duration = wrapped.duration;
+            tracing::info!(
+                "Picture MXF: {picture_mxf_name} ({picture_duration} frames, written during the encode)"
+            );
+        } else if padding {
             // encode one black frame at the content's pixel dimensions, then repeat
             // its codestream for every padded frame (frame-wrapped MXF reuses it)
             let (bw, bh) = match crate::pad::read_j2k_dimensions(&left_frames[0]) {
