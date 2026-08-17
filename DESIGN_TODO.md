@@ -208,13 +208,6 @@ should also land there and are noted in its DESIGN_TODO.
   real J2K with the mpv CLI; frame, fps, buffer depth and dropped frames in the
   metadata poll), the crop overlay and the subtitle/CC render toggles with them.
   Not yet clicked through in the running window. imfwizard too.
-- QC report addition, in CORE report.rs on top of what dcpdoctor verifies:
-  Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
-  <= 82, trailer <= 85). postkit `loudness::measure_leq_m` already measures it
-  (CCIR 468 weighted) and dcpdoctor's `qc-report` prints it, dcpwizard's own
-  report does not yet. Cinema-only. The codestream forensics half is served: `report` runs the verify
-  with `scan_every_frame`, so dcpdoctor's `j2k_codestream_summary` line reaches
-  the report's Info rows.
 - Post-build actions. Done: a finished build shows Play / Inspect / Reveal beside
   the progress bar, wired to the embedded preview, the Verify view and the file
   manager. The row belongs to the build in front of you, so a job picked out of the

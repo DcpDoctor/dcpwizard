@@ -777,7 +777,7 @@ fn find_assetmap(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn extract_xml_value(text: &str, tag: &str) -> Option<String> {
+pub(crate) fn extract_xml_value(text: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
     let start_pos = text.find(&open)?;
