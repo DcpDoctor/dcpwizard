@@ -1,7 +1,8 @@
 //! `--encrypt` covers every essence. Picture, sound, subtitle, closed caption
 //! and Atmos each get their own content key, every CPL asset block declares its
 //! KeyId, the keys file carries all five, and the KDM built from it lists one
-//! key per essence with the ST 430-1 type string that essence uses.
+//! key per essence with the ST 430-1 type string that essence uses. `decrypt`
+//! then round-trips the lot back to cleartext.
 
 use dcpwizard_core::dcp::{DcpConfig, create_dcp};
 use postkit::certificate::{CertOptions, CertType, generate_certificate, generate_chain};
@@ -287,8 +288,8 @@ fn an_encrypted_dcp_keys_every_essence_and_the_kdm_carries_them_all() {
             scan_every_frame: false,
             strict_smpte: false,
             ov: None,
-            kdm: Some(kdm_path),
-            recipient_key: Some(recipient_key),
+            kdm: Some(kdm_path.clone()),
+            recipient_key: Some(recipient_key.clone()),
         },
     );
     let errors: Vec<String> = report
@@ -310,6 +311,95 @@ fn an_encrypted_dcp_keys_every_essence_and_the_kdm_carries_them_all() {
             .any(|n| n.code == dcpdoctor_core::Code::PartiallyEncrypted),
         "an all-encrypted package must not look partially encrypted"
     );
+
+    // 6. decrypt round-trips every track, timed text and Atmos included
+    let clear = root.join("decrypted");
+    assert_eq!(
+        dcpwizard_core::decrypt::decrypt_dcp(&dcpwizard_core::decrypt::DcpDecryptConfig {
+            input_dir: out.clone(),
+            output_dir: clear.clone(),
+            kdm: Some(kdm_path),
+            recipient_key: Some(recipient_key),
+            keys: None,
+        }),
+        0,
+        "decrypt must handle timed text and Atmos"
+    );
+
+    let clear_verify = dcpwizard_core::verify::verify_dcp(&clear);
+    assert!(
+        clear_verify.errors.is_empty(),
+        "the decrypted package must verify clean: {:?}",
+        clear_verify.errors
+    );
+
+    let clear_cpl_path = std::fs::read_dir(&clear)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("CPL_"))
+        })
+        .expect("decrypted CPL");
+    let clear_cpl = std::fs::read_to_string(&clear_cpl_path).unwrap();
+    assert!(
+        !clear_cpl.contains("KeyId"),
+        "a decrypted CPL declares no KeyId:\n{clear_cpl}"
+    );
+
+    for prefix in ["picture", "sound", "subtitle", "ccap", "atmos"] {
+        let mxf =
+            mxf_with_prefix(&clear, prefix).unwrap_or_else(|| panic!("decrypted {prefix} MXF"));
+        assert!(
+            !essence_is_encrypted(&mxf, prefix),
+            "{prefix} must come back in the clear"
+        );
+    }
+
+    // timed text and Atmos keep the id the source declared, so a KDM or a
+    // supplemental package still names the same asset
+    for prefix in ["subtitle", "ccap", "atmos"] {
+        let source = mxf_with_prefix(&out, prefix).unwrap();
+        let decrypted = mxf_with_prefix(&clear, prefix).unwrap();
+        assert_eq!(
+            source.file_name(),
+            decrypted.file_name(),
+            "{prefix} must keep its asset id"
+        );
+    }
+
+    for track in [
+        dcpwizard_core::subtitle_extract::PackagedTrack::Subtitle,
+        dcpwizard_core::subtitle_extract::PackagedTrack::ClosedCaption,
+    ] {
+        let cues = dcpwizard_core::subtitle_extract::extract_track_cues(&clear, track)
+            .unwrap_or_else(|e| panic!("read back {track:?}: {e}"));
+        assert_eq!(cues.len(), 1, "{track:?} carries the source's one cue");
+        assert_eq!(
+            cues[0].text, "Hello",
+            "{track:?} text survives the round trip"
+        );
+    }
+
+    assert_eq!(
+        atmos_frame_count(&mxf_with_prefix(&clear, "atmos").unwrap()),
+        atmos_frame_count(&mxf_with_prefix(&out, "atmos").unwrap()),
+        "the Atmos track keeps its frame count"
+    );
+}
+
+/// Frames the Atmos MXF declares, which a rewrap has to preserve.
+fn atmos_frame_count(mxf: &Path) -> u32 {
+    let mut reader = asdcplib::atmos::MxfReader::new();
+    reader
+        .open_read(&mxf.to_string_lossy())
+        .expect("open atmos");
+    reader
+        .atmos_descriptor()
+        .expect("atmos descriptor")
+        .container_duration
 }
 
 #[test]

@@ -65,11 +65,6 @@ user-facing surface is here.
   references collapse onto the submodule this workspace already builds. The
   edit-the-submodule-and-rebuild loop is unchanged and `cargo tree -d` reports no
   postkit duplicate. imfwizard has the same shape.
-- Decrypting timed text and Atmos (CORE/decrypt.rs `process_cleartext_copy`):
-  `create --encrypt` keys the subtitle, closed-caption and Atmos tracks now, but
-  `decrypt` and `transcode-dcp` still refuse an encrypted timed-text or aux-data
-  MXF rather than rewrapping it in the clear, so an all-encrypted package with any
-  of those tracks cannot be round-tripped back to cleartext.
 - Source fitting from the GUI without a crop (GUI pipeline.rs `job_geometry`): the
   create panel names a container, never a raster, so it forces a raster only when
   Fill container is ticked. A letterboxed HD source with 2K Scope selected and the

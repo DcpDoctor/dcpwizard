@@ -142,9 +142,9 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             return -1;
         };
 
-        // sound/subtitle: cleartext tracks copy verbatim (asset id preserved);
-        // with a key source, an encrypted sound is decrypted and rewrapped so the
-        // cleartext output stays coherent (an encrypted subtitle fails loud).
+        // every non-picture track: cleartext copies verbatim (asset id preserved);
+        // with a key source, an encrypted one is decrypted and rewrapped so the
+        // cleartext output stays coherent.
         let fps_snd = (pic.edit_rate_num as f64 / pic.edit_rate_den as f64).round() as u32;
         let sound = match sound_track(
             &entry.sound_file,
@@ -159,13 +159,34 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
                 return -1;
             }
         };
-        let subtitle = match subtitle_track(
+        let subtitle = match timed_text_track(
             &entry.subtitle_file,
             &entry.subtitle_asset_id,
-            key_source.is_some(),
+            "subtitle",
+            key_source.as_ref(),
             &config.output_dir,
         ) {
             Ok(s) => s,
+            Err(e) => {
+                tracing::error!("{e}");
+                return -1;
+            }
+        };
+        let ccap = match timed_text_track(
+            &entry.ccap_file,
+            &entry.ccap_asset_id,
+            "ccap",
+            key_source.as_ref(),
+            &config.output_dir,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("{e}");
+                return -1;
+            }
+        };
+        let aux = match aux_data_track(entry, key_source.as_ref(), &config.output_dir) {
+            Ok(a) => a,
             Err(e) => {
                 tracing::error!("{e}");
                 return -1;
@@ -176,6 +197,11 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             None
         } else {
             Some(entry.subtitle_language.clone())
+        };
+        let ccap_lang = if entry.ccap_language.is_empty() {
+            None
+        } else {
+            Some(entry.ccap_language.clone())
         };
 
         cpl_reels.push(crate::cpl::CplReel {
@@ -194,14 +220,20 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             sound_duration: if sound.is_some() { pic.duration } else { 0 },
             sound_entry_point: 0,
             sound_key_id: None,
-            subtitle_id: subtitle.as_ref().map(|s| s.id.clone()),
+            subtitle_id: subtitle.as_ref().map(|(s, _)| s.id.clone()),
             subtitle_edit_rate_num: pic.edit_rate_num,
             subtitle_edit_rate_den: pic.edit_rate_den,
-            subtitle_duration: if subtitle.is_some() { pic.duration } else { 0 },
+            subtitle_duration: subtitle.as_ref().map(|(_, d)| *d).unwrap_or(0),
             subtitle_entry_point: 0,
             subtitle_language: subtitle_lang,
+            ccap_id: ccap.as_ref().map(|(s, _)| s.id.clone()),
+            ccap_edit_rate_num: pic.edit_rate_num,
+            ccap_edit_rate_den: pic.edit_rate_den,
+            ccap_duration: ccap.as_ref().map(|(_, d)| *d).unwrap_or(0),
+            ccap_entry_point: 0,
+            ccap_language: ccap_lang,
             stereoscopic: false,
-            aux_data: None,
+            aux_data: aux.as_ref().map(|(_, a)| a.clone()),
             markers: source_markers.get(reel_index).cloned().unwrap_or_default(),
             ..Default::default()
         });
@@ -215,7 +247,13 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         if let Some(s) = sound {
             shipped.push(s);
         }
-        if let Some(s) = subtitle {
+        if let Some((s, _)) = subtitle {
+            shipped.push(s);
+        }
+        if let Some((s, _)) = ccap {
+            shipped.push(s);
+        }
+        if let Some((s, _)) = aux {
             shipped.push(s);
         }
     }
@@ -542,22 +580,39 @@ fn sound_track(
     }
 }
 
-/// Resolve the subtitle track: copy verbatim (asset id preserved). With a key
-/// source, an encrypted timed-text track fails loud rather than copying encrypted.
-fn subtitle_track(
+/// Resolve a timed-text track (subtitle or closed caption) for the output, with
+/// the frame count the essence declares: a cleartext track copies verbatim
+/// (asset id preserved), an encrypted one is decrypted and rewrapped as
+/// cleartext.
+fn timed_text_track(
     src_file: &str,
     asset_id: &str,
-    have_keys: bool,
+    prefix: &str,
+    key_source: Option<&crate::decrypt::KeySource>,
     out_dir: &Path,
-) -> Result<Option<ShippedAsset>, String> {
-    if have_keys {
-        Ok(
-            crate::decrypt::process_cleartext_copy(src_file, asset_id, "subtitle", out_dir)?
-                .map(from_decrypt),
-        )
-    } else {
-        copy_track(src_file, asset_id, "subtitle", out_dir)
-    }
+) -> Result<Option<(ShippedAsset, u64)>, String> {
+    Ok(
+        crate::decrypt::process_timed_text(src_file, asset_id, prefix, key_source, out_dir)?
+            .map(|(asset, duration)| (from_decrypt(asset), duration)),
+    )
+}
+
+/// Resolve the Atmos / DCData auxiliary track, decrypting it when the source is
+/// encrypted. A cleartext copy still goes through the decrypt path, since the
+/// rebuilt reel declares the track's edit rate and duration off its descriptor.
+fn aux_data_track(
+    entry: &crate::multi_cpl::TimelineEntry,
+    key_source: Option<&crate::decrypt::KeySource>,
+    out_dir: &Path,
+) -> Result<Option<(ShippedAsset, crate::cpl::AuxData)>, String> {
+    Ok(crate::decrypt::process_aux_data(
+        &entry.aux_data_file,
+        &entry.aux_data_asset_id,
+        &entry.aux_data_type,
+        key_source,
+        out_dir,
+    )?
+    .map(|(s, a)| (from_decrypt(s), a)))
 }
 
 /// Map a shared decrypt-path asset onto this module's ShippedAsset.

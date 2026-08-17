@@ -1,11 +1,13 @@
 //! Decrypt an encrypted DCP into a cleartext DCP with the same structure.
 //!
-//! Each encrypted essence MXF is read frame by frame through asdcplib's AES
-//! decrypt + HMAC context (keyed by the MXF's own cryptographic_key_id, i.e. the
-//! CPL KeyId) and re-wrapped as cleartext; a bad content key fails the per-frame
-//! MIC. Non-encrypted assets copy byte-identical. The output CPL keeps the reel
-//! structure and durations but drops all KeyId/encryption elements, so it gets a
-//! new CPL id, and PKL/ASSETMAP/VOLINDEX are regenerated with fresh hashes.
+//! Each encrypted essence MXF is read through asdcplib's AES decrypt + HMAC
+//! context (keyed by the MXF's own cryptographic_key_id, i.e. the CPL KeyId) and
+//! re-wrapped as cleartext; a bad content key fails the per-frame MIC. Picture,
+//! sound and Atmos go frame by frame, timed text by document plus ancillary
+//! resources. Non-encrypted assets copy byte-identical. The output CPL keeps the
+//! reel structure and durations but drops all KeyId/encryption elements, so it
+//! gets a new CPL id, and PKL/ASSETMAP/VOLINDEX are regenerated with fresh
+//! hashes.
 //!
 //! Key material lives only in memory: an UnwrappedKdm (recipient-key path, keys
 //! zeroed on drop) or a dcpwizard KEYS.json. Keys never reach logs, errors, or
@@ -125,8 +127,7 @@ struct PicInfo {
 
 /// Decrypt an encrypted DCP: rewrap every encrypted essence as cleartext, copy
 /// non-encrypted assets byte-identical, drop CPL encryption, and regenerate
-/// PKL/ASSETMAP/VOLINDEX. Fails loud on a missing key, a MIC mismatch, or an
-/// encrypted essence type it cannot decrypt.
+/// PKL/ASSETMAP/VOLINDEX. Fails loud on a missing key or a MIC mismatch.
 pub fn decrypt_dcp(config: &DcpDecryptConfig) -> i32 {
     match decrypt_dcp_inner(config) {
         Ok(reels) => {
@@ -199,17 +200,31 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
             &config.output_dir,
         )?;
 
-        // timed text is not frame-wrapped; a cleartext subtitle copies byte-for-byte,
-        // an encrypted one is refused loud until this path can rewrap it.
-        let subtitle = process_cleartext_copy(
+        let subtitle = process_timed_text(
             &entry.subtitle_file,
             &entry.subtitle_asset_id,
             "subtitle",
+            Some(&keys),
+            &config.output_dir,
+        )?;
+        let ccap = process_timed_text(
+            &entry.ccap_file,
+            &entry.ccap_asset_id,
+            "ccap",
+            Some(&keys),
+            &config.output_dir,
+        )?;
+        let aux = process_aux_data(
+            &entry.aux_data_file,
+            &entry.aux_data_asset_id,
+            &entry.aux_data_type,
+            Some(&keys),
             &config.output_dir,
         )?;
 
         let subtitle_lang =
             (!entry.subtitle_language.is_empty()).then(|| entry.subtitle_language.clone());
+        let ccap_lang = (!entry.ccap_language.is_empty()).then(|| entry.ccap_language.clone());
 
         cpl_reels.push(crate::cpl::CplReel {
             reel_id: uuid::Uuid::new_v4().to_string(),
@@ -227,14 +242,20 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
             sound_duration: if sound.is_some() { pic.duration } else { 0 },
             sound_entry_point: 0,
             sound_key_id: None,
-            subtitle_id: subtitle.as_ref().map(|s| s.id.clone()),
+            subtitle_id: subtitle.as_ref().map(|(s, _)| s.id.clone()),
             subtitle_edit_rate_num: pic.edit_num,
             subtitle_edit_rate_den: pic.edit_den,
-            subtitle_duration: if subtitle.is_some() { pic.duration } else { 0 },
+            subtitle_duration: subtitle.as_ref().map(|(_, d)| *d).unwrap_or(0),
             subtitle_entry_point: 0,
             subtitle_language: subtitle_lang,
+            ccap_id: ccap.as_ref().map(|(c, _)| c.id.clone()),
+            ccap_edit_rate_num: pic.edit_num,
+            ccap_edit_rate_den: pic.edit_den,
+            ccap_duration: ccap.as_ref().map(|(_, d)| *d).unwrap_or(0),
+            ccap_entry_point: 0,
+            ccap_language: ccap_lang,
             stereoscopic: false,
-            aux_data: None,
+            aux_data: aux.as_ref().map(|(_, a)| a.clone()),
             markers: source_markers.get(reel_index).cloned().unwrap_or_default(),
             ..Default::default()
         });
@@ -248,7 +269,13 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
         if let Some(s) = sound {
             shipped.push(s);
         }
-        if let Some(s) = subtitle {
+        if let Some((s, _)) = subtitle {
+            shipped.push(s);
+        }
+        if let Some((s, _)) = ccap {
+            shipped.push(s);
+        }
+        if let Some((s, _)) = aux {
             shipped.push(s);
         }
     }
@@ -479,15 +506,18 @@ pub(crate) fn process_sound(
     Ok(Some(ship(&out_mxf, track.uuid, filename)?))
 }
 
-/// Copy a non-encrypted essence track byte-identical, keeping its asset id.
-/// Refuses loud if the essence is actually encrypted (its type is undecryptable
-/// on this path). `None` when there is no such track.
-pub(crate) fn process_cleartext_copy(
+/// Decrypt+rewrap or byte-copy a timed-text MXF (subtitle or closed caption),
+/// with the frame count the essence declares, which is what the rebuilt reel has
+/// to declare for it. The rewrap keeps the asset id, the document (so its
+/// ResourceID survives), the duration and every ancillary resource under its own
+/// id. `None` when there is no such track.
+pub(crate) fn process_timed_text(
     src_file: &str,
     asset_id: &str,
     prefix: &str,
+    keys: Option<&KeySource>,
     out_dir: &Path,
-) -> Result<Option<ShippedAsset>, String> {
+) -> Result<Option<(ShippedAsset, u64)>, String> {
     if src_file.is_empty() || asset_id.is_empty() {
         return Ok(None);
     }
@@ -495,16 +525,209 @@ pub(crate) fn process_cleartext_copy(
     if !src.exists() {
         return Err(format!("{prefix} MXF not found: {src_file}"));
     }
+
     let mut reader = asdcplib::timed_text::MxfReader::new();
-    if reader.open_read(&src.to_string_lossy()).is_ok()
-        && let Ok(info) = reader.writer_info()
-        && info.encrypted_essence
-    {
-        return Err(format!(
-            "encrypted {prefix} essence: decrypt of encrypted timed text is not supported"
-        ));
+    reader
+        .open_read(&src.to_string_lossy())
+        .map_err(|e| format!("open {prefix} MXF {}: {e}", src.display()))?;
+    let info = reader
+        .writer_info()
+        .map_err(|e| format!("read {prefix} writer info: {e}"))?;
+    let desc = reader
+        .descriptor()
+        .map_err(|e| format!("read {prefix} descriptor: {e}"))?;
+    let duration = desc.container_duration as u64;
+
+    if !info.encrypted_essence {
+        return Ok(Some((
+            copy_cleartext(&src, asset_id, prefix, out_dir)?,
+            duration,
+        )));
     }
-    Ok(Some(copy_cleartext(&src, asset_id, prefix, out_dir)?))
+
+    let asset_uuid = uuid::Uuid::parse_str(asset_id)
+        .map_err(|e| format!("{prefix} asset id '{asset_id}' is not a UUID: {e}"))?;
+    let keys = keys.ok_or_else(|| {
+        format!("{prefix} asset {asset_id} is encrypted and no key material was supplied")
+    })?;
+    let (mut dec, mut hmac) = keys.contexts(&info, prefix)?;
+
+    // no resource is bigger than the file carrying it, so one buffer this size
+    // always holds whichever the reader hands back
+    let capacity = std::fs::metadata(&src)
+        .map(|m| m.len() as usize)
+        .map_err(|e| format!("cannot size {prefix} MXF {}: {e}", src.display()))?;
+    let mut buf = vec![0u8; capacity];
+
+    let work = out_dir.join(format!(".decrypt_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&work).map_err(|e| format!("cannot create work dir: {e}"))?;
+    let outcome = write_decrypted_timed_text(&mut reader, &mut dec, &mut hmac, &mut buf, &work);
+    let decrypted = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(format!("decrypt {prefix} essence: {e}"));
+        }
+    };
+
+    let fps = (desc.edit_rate.numerator.max(1) as f64 / desc.edit_rate.denominator.max(1) as f64)
+        .round() as u32;
+    let filename = format!("{prefix}_{asset_id}.mxf");
+    let out_mxf = out_dir.join(&filename);
+    let track = crate::mxf_wrap::wrap_timed_text_resources(
+        &decrypted.document,
+        &decrypted.resources,
+        &out_mxf,
+        fps,
+        Some(*asset_uuid.as_bytes()),
+        Some(desc.container_duration),
+        None,
+    );
+    let _ = std::fs::remove_dir_all(&work);
+    track.ok_or_else(|| format!("rewrap of decrypted {prefix} failed"))?;
+
+    Ok(Some((
+        ship(&out_mxf, asset_id.to_string(), filename)?,
+        duration,
+    )))
+}
+
+/// A decrypted timed-text track on disk: the document, plus each ancillary
+/// resource paired with the id it was stored under, which is what the rewrap
+/// has to write them back as.
+struct DecryptedTimedText {
+    document: PathBuf,
+    resources: Vec<(PathBuf, [u8; 16])>,
+}
+
+/// Decrypt the timed-text document and every ancillary resource into `work`.
+fn write_decrypted_timed_text(
+    reader: &mut asdcplib::timed_text::MxfReader,
+    dec: &mut AesDecContext,
+    hmac: &mut HmacContext,
+    buf: &mut [u8],
+    work: &Path,
+) -> Result<DecryptedTimedText, String> {
+    let n = reader
+        .read_timed_text_resource(buf, Some(dec), Some(hmac))
+        .map_err(|e| format!("wrong key or MIC mismatch: {e}"))?;
+    let document = work.join("document.xml");
+    std::fs::write(&document, &buf[..n]).map_err(|e| format!("write decrypted document: {e}"))?;
+
+    let count = reader
+        .ancillary_resource_count()
+        .map_err(|e| format!("read ancillary resource count: {e}"))?;
+    let mut resources = Vec::with_capacity(count);
+    for index in 0..count {
+        let resource = reader
+            .ancillary_resource_info(index)
+            .map_err(|e| format!("read ancillary resource {index}: {e}"))?;
+        let n = reader
+            .read_ancillary_resource(&resource.uuid, buf, Some(dec), Some(hmac))
+            .map_err(|e| format!("decrypt ancillary resource {index}: {e}"))?;
+        // the rewrap picks the stored MIME type off the extension, so the file
+        // has to be named for the type it was embedded under
+        let extension = match resource.mime_type {
+            asdcplib::timed_text::MimeType::OpenType => "ttf",
+            asdcplib::timed_text::MimeType::Png => "png",
+            asdcplib::timed_text::MimeType::Binary => "bin",
+        };
+        let path = work.join(format!("resource_{index:03}.{extension}"));
+        std::fs::write(&path, &buf[..n])
+            .map_err(|e| format!("write decrypted ancillary resource {index}: {e}"))?;
+        resources.push((path, resource.uuid));
+    }
+    Ok(DecryptedTimedText {
+        document,
+        resources,
+    })
+}
+
+/// Decrypt+rewrap or byte-copy an auxiliary-data (Atmos / ST 429-18) MXF,
+/// keeping its asset id, and describe it for the rebuilt reel. `None` when there
+/// is no such track.
+pub(crate) fn process_aux_data(
+    src_file: &str,
+    asset_id: &str,
+    data_type: &str,
+    keys: Option<&KeySource>,
+    out_dir: &Path,
+) -> Result<Option<(ShippedAsset, crate::cpl::AuxData)>, String> {
+    if src_file.is_empty() || asset_id.is_empty() {
+        return Ok(None);
+    }
+    let src = PathBuf::from(src_file);
+    if !src.exists() {
+        return Err(format!("aux data MXF not found: {src_file}"));
+    }
+
+    let mut reader = asdcplib::atmos::MxfReader::new();
+    reader
+        .open_read(&src.to_string_lossy())
+        .map_err(|e| format!("open aux data MXF {}: {e}", src.display()))?;
+    let info = reader
+        .writer_info()
+        .map_err(|e| format!("read aux data writer info: {e}"))?;
+    let desc = reader
+        .atmos_descriptor()
+        .map_err(|e| format!("read aux data descriptor: {e}"))?;
+
+    let aux = crate::cpl::AuxData {
+        id: asset_id.to_string(),
+        edit_rate_num: desc.edit_rate.numerator.max(1) as u32,
+        edit_rate_den: desc.edit_rate.denominator.max(1) as u32,
+        duration: desc.container_duration as u64,
+        entry_point: 0,
+        key_id: None,
+        data_type: data_type.to_string(),
+    };
+
+    if !info.encrypted_essence {
+        return Ok(Some((
+            copy_cleartext(&src, asset_id, "atmos", out_dir)?,
+            aux,
+        )));
+    }
+
+    let asset_uuid = uuid::Uuid::parse_str(asset_id)
+        .map_err(|e| format!("aux data asset id '{asset_id}' is not a UUID: {e}"))?;
+    let keys = keys.ok_or_else(|| {
+        format!("aux data asset {asset_id} is encrypted and no key material was supplied")
+    })?;
+    let (mut dec, mut hmac) = keys.contexts(&info, "aux data")?;
+
+    let work = out_dir.join(format!(".decrypt_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&work).map_err(|e| format!("cannot create work dir: {e}"))?;
+
+    let mut buf = vec![0u8; MAX_FRAME_BUF];
+    for i in 0..desc.container_duration {
+        let n = reader
+            .read_frame(i, &mut buf, Some(&mut dec), Some(&mut hmac))
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&work);
+                format!("decrypt aux data frame {i} (wrong key or MIC mismatch): {e}")
+            })?;
+        if let Err(e) = std::fs::write(work.join(format!("atmos_{i:07}.bin")), &buf[..n]) {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(format!("write decrypted aux data frame {i}: {e}"));
+        }
+    }
+
+    let filename = format!("atmos_{asset_id}.mxf");
+    let out_mxf = out_dir.join(&filename);
+    let track = crate::mxf_wrap::wrap_mxf_files(
+        sorted_files(&work),
+        &out_mxf,
+        crate::mxf_wrap::MxfType::Atmos,
+        aux.edit_rate_num,
+        None,
+        None,
+        Some(*asset_uuid.as_bytes()),
+    );
+    let _ = std::fs::remove_dir_all(&work);
+    track.ok_or("rewrap of decrypted aux data failed")?;
+
+    Ok(Some((ship(&out_mxf, asset_id.to_string(), filename)?, aux)))
 }
 
 /// Copy an MXF into the output DCP unchanged, keeping its asset id.

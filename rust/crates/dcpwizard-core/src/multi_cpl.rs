@@ -25,10 +25,24 @@ pub struct TimelineEntry {
     pub picture_asset_id: String,
     pub sound_asset_id: String,
     pub subtitle_asset_id: String,
+    #[serde(default)]
+    pub ccap_asset_id: String,
+    /// Atmos / DCData auxiliary track (ST 429-18), the reel's AuxData asset.
+    #[serde(default)]
+    pub aux_data_asset_id: String,
     pub picture_file: String,
     pub sound_file: String,
     pub subtitle_file: String,
+    #[serde(default)]
+    pub ccap_file: String,
+    #[serde(default)]
+    pub aux_data_file: String,
     pub subtitle_language: String,
+    #[serde(default)]
+    pub ccap_language: String,
+    /// SMPTE data-essence UL the AuxData asset declares as its DataType.
+    #[serde(default)]
+    pub aux_data_type: String,
 }
 
 /// List all CPLs in a DCP by parsing the ASSETMAP.
@@ -126,9 +140,15 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
     let mut sound_id = String::new();
     let mut subtitle_id = String::new();
     let mut subtitle_lang = String::new();
+    let mut ccap_id = String::new();
+    let mut ccap_lang = String::new();
+    let mut aux_data_id = String::new();
+    let mut aux_data_type = String::new();
     let mut in_picture = false;
     let mut in_sound = false;
     let mut in_subtitle = false;
+    let mut in_ccap = false;
+    let mut in_aux_data = false;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -144,9 +164,15 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
             sound_id.clear();
             subtitle_id.clear();
             subtitle_lang.clear();
+            ccap_id.clear();
+            ccap_lang.clear();
+            aux_data_id.clear();
+            aux_data_type.clear();
             in_picture = false;
             in_sound = false;
             in_subtitle = false;
+            in_ccap = false;
+            in_aux_data = false;
         } else if trimmed.contains("</Reel>") {
             if in_reel {
                 let picture_file = asset_map
@@ -161,6 +187,14 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
                     .get(&subtitle_id)
                     .map(|p| dcp_dir.join(p).to_string_lossy().into_owned())
                     .unwrap_or_default();
+                let ccap_file = asset_map
+                    .get(&ccap_id)
+                    .map(|p| dcp_dir.join(p).to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let aux_data_file = asset_map
+                    .get(&aux_data_id)
+                    .map(|p| dcp_dir.join(p).to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 entries.push(TimelineEntry {
                     reel_id: reel_id.clone(),
                     reel_number,
@@ -170,10 +204,16 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
                     picture_asset_id: picture_id.clone(),
                     sound_asset_id: sound_id.clone(),
                     subtitle_asset_id: subtitle_id.clone(),
+                    ccap_asset_id: ccap_id.clone(),
+                    aux_data_asset_id: aux_data_id.clone(),
                     picture_file,
                     sound_file,
                     subtitle_file,
+                    ccap_file,
+                    aux_data_file,
                     subtitle_language: subtitle_lang.clone(),
+                    ccap_language: ccap_lang.clone(),
+                    aux_data_type: aux_data_type.clone(),
                 });
             }
             in_reel = false;
@@ -196,17 +236,37 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
                 in_subtitle = true;
                 in_picture = false;
                 in_sound = false;
+            } else if is_closed_caption(trimmed, opens_local_element) {
+                in_ccap = true;
+                in_picture = false;
+                in_sound = false;
+                in_subtitle = false;
+            } else if opens_local_element(trimmed, "AuxData") {
+                in_aux_data = true;
+                in_picture = false;
+                in_sound = false;
+                in_subtitle = false;
             } else if trimmed.contains("</MainPicture>") {
                 in_picture = false;
             } else if trimmed.contains("</MainSound>") {
                 in_sound = false;
             } else if trimmed.contains("</MainSubtitle>") {
                 in_subtitle = false;
+            } else if is_closed_caption(trimmed, closes_local_element) {
+                in_ccap = false;
+            } else if closes_local_element(trimmed, "AuxData") {
+                in_aux_data = false;
             }
 
             if let Some(id) = extract_xml_value(trimmed, "Id") {
                 let clean_id = id.replace("urn:uuid:", "");
-                if reel_id.is_empty() && !in_picture && !in_sound && !in_subtitle {
+                if reel_id.is_empty()
+                    && !in_picture
+                    && !in_sound
+                    && !in_subtitle
+                    && !in_ccap
+                    && !in_aux_data
+                {
                     reel_id = clean_id;
                 } else if in_picture && picture_id.is_empty() {
                     picture_id = clean_id;
@@ -214,10 +274,20 @@ pub fn get_timeline(cpl_path: &Path) -> Vec<TimelineEntry> {
                     sound_id = clean_id;
                 } else if in_subtitle && subtitle_id.is_empty() {
                     subtitle_id = clean_id;
+                } else if in_ccap && ccap_id.is_empty() {
+                    ccap_id = clean_id;
+                } else if in_aux_data && aux_data_id.is_empty() {
+                    aux_data_id = clean_id;
                 }
             }
             if in_subtitle && let Some(lang) = extract_xml_value(trimmed, "Language") {
                 subtitle_lang = lang;
+            }
+            if in_ccap && let Some(lang) = extract_local_xml_value(trimmed, "Language") {
+                ccap_lang = lang;
+            }
+            if in_aux_data && let Some(ul) = extract_local_xml_value(trimmed, "DataType") {
+                aux_data_type = ul;
             }
             if let Some(d) = extract_xml_value(trimmed, "Duration")
                 && let Ok(v) = d.parse::<u64>()
@@ -787,4 +857,48 @@ pub(crate) fn extract_xml_value(text: &str, tag: &str) -> Option<String> {
     let end_pos = content.find(&close)?;
     let value = content[..end_pos].trim().to_string();
     if value.is_empty() { None } else { Some(value) }
+}
+
+/// `extract_xml_value` matching the element's local name, so a prefixed
+/// `<tt:Language>` or `<axd:DataType>` reads the same as a bare one. Closed
+/// captions and aux data sit in their own namespace, and so do their children
+/// that the namespace declares.
+fn extract_local_xml_value(text: &str, tag: &str) -> Option<String> {
+    if let Some(value) = extract_xml_value(text, tag) {
+        return Some(value);
+    }
+    let colon = text.find(&format!(":{tag}>"))?;
+    let open = text[..colon].rfind('<')?;
+    extract_xml_value(text, &text[open + 1..colon + 1 + tag.len()])
+}
+
+/// A SMPTE closed caption is `ClosedCaption` in the ST 429-12 namespace, but
+/// Interop and older writers name the same track MainClosedCaption.
+fn is_closed_caption(trimmed: &str, matches: fn(&str, &str) -> bool) -> bool {
+    matches(trimmed, "ClosedCaption") || matches(trimmed, "MainClosedCaption")
+}
+
+/// Whether a trimmed CPL line opens `element`, with or without a namespace
+/// prefix.
+fn opens_local_element(trimmed: &str, element: &str) -> bool {
+    let Some(after) = trimmed.strip_prefix('<') else {
+        return false;
+    };
+    let name = after
+        .split([' ', '\t', '>', '/'])
+        .next()
+        .unwrap_or_default();
+    local_name(name) == element
+}
+
+/// Whether a trimmed CPL line closes `element`, with or without a prefix.
+fn closes_local_element(trimmed: &str, element: &str) -> bool {
+    let Some(after) = trimmed.strip_prefix("</") else {
+        return false;
+    };
+    local_name(after.trim_end_matches('>')) == element
+}
+
+fn local_name(qualified: &str) -> &str {
+    qualified.rsplit(':').next().unwrap_or(qualified)
 }

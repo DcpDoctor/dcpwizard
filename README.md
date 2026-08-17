@@ -39,7 +39,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Multi-composition packages** via `create-multi --compositions <manifest>`: one CPL per manifest entry, each with its own picture/sound/subtitle, over one shared PKL/ASSETMAP
 - **Assemble** a new OV from existing DCPs via `assemble --input <dcp>... --output --title` (reels in order, essence copied byte-identical by UUID)
 - **Edit** CPL metadata (title/annotation/content-kind/issuer) without re-wrapping essence via `edit --input`
-- **Decrypt** an encrypted DCP to cleartext via `decrypt --input --output` with `--kdm --recipient-key` or `--keys`
+- **Decrypt** an encrypted DCP to cleartext via `decrypt --input --output` with `--kdm --recipient-key` or `--keys`. Every essence round-trips: picture, sound, subtitle, closed caption and Atmos
 - **Sign-language video** track via `create --sign-language-video <file> --sign-language-lang <rfc5646>` (ISDCF Doc 13, SLVS on sound channel 15)
 - **ISDCF content titles** via `create --isdcf-name`: the title is rebuilt to the ISDCF naming convention from what the package actually carries (content type, container aspect, audio and text languages, channel ladder, territory and rating, resolution, studio, date, facility, standard). `--audio-lang`, `--rating AGENCY=LABEL` (repeatable), `--content-version` (repeatable), `--studio`, `--territory-type`, `--isdcf-date`, `--temp-version`, `--pre-release`, `--red-band`, `--two-d-version-of-three-d` and `--version-file` feed it, and the metadata among them lands in the CPL with or without the naming flag
 - **Ratings and content version in the CPL**: `--rating` fills the `RatingList` and the first `--content-version` is the `ContentVersion` LabelText
