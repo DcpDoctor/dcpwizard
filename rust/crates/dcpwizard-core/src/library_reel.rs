@@ -144,6 +144,13 @@ fn build_one_item_reel(
     let mut sound_id = None;
     let mut sound_key_id = None;
     let mut sound_hash = None;
+    // a reel cannot carry sound the rest of the composition has no track for
+    if format.sound.is_none() && item.item.has_audio {
+        tracing::warn!(
+            "library item '{name}' carries sound, and this composition has no sound track for it \
+             to sit in: its reel is picture only"
+        );
+    }
     if let Some(sound) = format.sound {
         let wav = work.join("sound.wav");
         build_item_sound(item, &sound, format.fps, frames, work, &wav)?;
