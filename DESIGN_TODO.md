@@ -213,9 +213,8 @@ should also land there and are noted in its DESIGN_TODO.
   (safe area 95/90%, aspect mask 1.85/1.90/2.39, centre cross, thirds grid as one
   mpv `vf` chain; full/half/quarter through the J2K decoder's `lowres`, proven on
   real J2K with the mpv CLI; frame, fps, buffer depth and dropped frames in the
-  metadata poll). Not yet clicked through in the running window. Still open:
-  render toggles for subtitles and closed captions, which the DCP loader does not
-  load. imfwizard too.
+  metadata poll), the crop overlay and the subtitle/CC render toggles with them.
+  Not yet clicked through in the running window. imfwizard too.
 - QC report addition, in CORE report.rs on top of what dcpdoctor verifies:
   Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
   <= 82, trailer <= 85). PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
@@ -223,11 +222,6 @@ should also land there and are noted in its DESIGN_TODO.
   Cinema-only. The codestream forensics half is served: `report` runs the verify
   with `scan_every_frame`, so dcpdoctor's `j2k_codestream_summary` line reaches
   the report's Info rows.
-- Crop indicator in the preview. Their preview stamps "+-275px top/bottom cropped"
-  on the frame. `create` now logs the picture plan ("crop 0/0/138/138 to 1920x804,
-  ... pad to 2048x1080 at (0,112)") in both the CLI and the GUI job log, and the
-  GUI's auto-crop button shows it beside the crop fields, so what is left is
-  drawing it over the preview frame itself. imfwizard too.
 - Post-build actions. Done: a finished build shows Play / Inspect / Reveal beside
   the progress bar, wired to the embedded preview, the Verify view and the file
   manager. The row belongs to the build in front of you, so a job picked out of the

@@ -70,6 +70,7 @@ pub mod store;
 pub mod subtitle;
 pub mod subtitle_edit;
 pub mod subtitle_extract;
+pub mod subtitle_preview;
 pub mod subtitle_retime;
 #[cfg(test)]
 pub(crate) mod test_wav;

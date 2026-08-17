@@ -1095,6 +1095,35 @@ pub async fn detect_source_crop(
     })
 }
 
+/// Where the preview's SRT copies of the timed text are written, inside the
+/// app's cache folder.
+const PREVIEW_SUBTITLE_DIRECTORY: &str = "preview-subtitles";
+
+/// A subtitle file the preview player can render, converting the job's timed
+/// text to SRT when mpv cannot read it as it stands. `source_path` is a subtitle
+/// file the job packages or a built DCP directory, and `track` picks which
+/// timed-text track of a DCP is read.
+#[tauri::command]
+pub async fn subtitle_file_for_preview(
+    app: AppHandle,
+    source_path: String,
+    track: dcpwizard_core::subtitle_extract::PackagedTrack,
+    fps: u32,
+) -> Result<String, String> {
+    let work_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache folder to write the preview subtitles into: {e}"))?
+        .join(PREVIEW_SUBTITLE_DIRECTORY);
+    let playable = dcpwizard_core::subtitle_preview::playable_subtitle_file(
+        &PathBuf::from(&source_path),
+        track,
+        fps,
+        &work_dir,
+    )?;
+    Ok(playable.to_string_lossy().into_owned())
+}
+
 /// The audio mapping grid the panel draws: one row per source channel, one
 /// column per DCP lane.
 #[derive(Serialize)]

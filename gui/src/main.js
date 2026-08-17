@@ -5,7 +5,7 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as _open, save, confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
 import { documentDir, join } from "@tauri-apps/api/path";
-import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible } from "../../extern/guikit/src/preview.js";
+import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible, setPreviewCrop, setPreviewSubtitleFile, setPreviewCaptionFile } from "../../extern/guikit/src/preview.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
 import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
 
@@ -482,10 +482,11 @@ document.getElementById("prop-auto-crop")?.addEventListener("click", async () =>
       threshold: Number.isNaN(threshold) ? null : threshold,
       resolution: document.getElementById("prop-resolution")?.value || null,
     });
-    for (const edge of ["left", "right", "top", "bottom"]) {
-      const field = document.getElementById(`prop-crop-${edge}`);
-      if (field) field.value = crop[edge];
+    for (const side of CROP_SIDES) {
+      const field = document.getElementById(`prop-crop-${side}`);
+      if (field) field.value = crop[side];
     }
+    refreshPreviewCrop();
     if (plan) plan.textContent = crop.description;
   } catch (e) {
     if (plan) plan.textContent = "";
@@ -649,7 +650,7 @@ document.getElementById("btn-open-project")?.addEventListener("click", async () 
     document.getElementById("prop-title").value = name;
     addRecentProject(dir, name);
     setStatus(`Opened: ${dir}`);
-    previewDcp(dir);
+    previewPackage(dir);
 
     // Load timeline from the first CPL found
     try {
@@ -1158,17 +1159,101 @@ document.getElementById("progress-cancel")?.addEventListener("click", async () =
 });
 
 // === Preview ===
+const CROP_SIDES = ["left", "right", "top", "bottom"];
+
+// mpv refuses a subtitle track until the clip it goes on has loaded, and the
+// load command only asks for the load, so a duration is the signal it landed.
+const PREVIEW_LOAD_POLL_MILLISECONDS = 100;
+const PREVIEW_LOAD_POLL_ATTEMPTS = 30;
+
+// A preview opened while an earlier one's subtitles are still converting must
+// not be given those tracks.
+let previewGeneration = 0;
+let previewShowsJobPicture = false;
+
 document.getElementById("btn-preview")?.addEventListener("click", async () => {
   const output = document.getElementById("prop-output")?.value;
   if (output) {
     // Try to preview the built DCP
-    previewDcp(output);
+    previewPackage(output);
   } else {
     // Preview the first video asset
     const reel = project.reels[0];
-    if (reel?.picture) previewFile(reel.picture.path);
+    if (reel?.picture) previewSourcePicture(reel.picture.path);
   }
 });
+
+// The preview shows what the build will do to the picture, so a file a reel
+// takes as its picture carries the crop and that reel's timed text, and any
+// other file plays plain.
+function previewSourcePicture(path) {
+  previewGeneration += 1;
+  const generation = previewGeneration;
+  previewFile(path);
+  const reel = project.reels.find(r => r.picture?.path === path);
+  previewShowsJobPicture = Boolean(reel);
+  setPreviewCrop(reel ? currentCrop() : null);
+  if (!reel) return;
+  showPreviewTrack(reel.subtitle?.path, "subtitle", generation);
+  showPreviewTrack(document.getElementById("prop-ccap")?.value, "closed-caption", generation);
+}
+
+// A built DCP carries the crop in its pictures already, and its timed text is
+// read back out of the package rather than off the source files.
+function previewPackage(dirPath) {
+  previewGeneration += 1;
+  const generation = previewGeneration;
+  previewShowsJobPicture = false;
+  previewDcp(dirPath);
+  setPreviewCrop(null);
+  showPreviewTrack(dirPath, "subtitle", generation);
+  showPreviewTrack(dirPath, "closed-caption", generation);
+}
+
+function currentCrop() {
+  const crop = {};
+  for (const side of CROP_SIDES) {
+    crop[side] = parseInt(document.getElementById(`prop-crop-${side}`)?.value) || 0;
+  }
+  return CROP_SIDES.some(side => crop[side] > 0) ? crop : null;
+}
+
+function refreshPreviewCrop() {
+  if (previewShowsJobPicture && isPreviewVisible()) setPreviewCrop(currentCrop());
+}
+
+for (const side of CROP_SIDES) {
+  document.getElementById(`prop-crop-${side}`)?.addEventListener("input", refreshPreviewCrop);
+}
+
+async function showPreviewTrack(sourcePath, track, generation) {
+  if (!sourcePath) return;
+  let playable;
+  try {
+    playable = await invoke("subtitle_file_for_preview", {
+      sourcePath,
+      track,
+      fps: parseInt(document.getElementById("prop-framerate")?.value) || DEFAULT_FRAMERATE,
+    });
+  } catch (e) {
+    console.error(`[preview] ${track} not shown:`, e);
+    setStatus(`Preview ${track}: ${e}`);
+    return;
+  }
+  const loaded = await previewClipLoaded();
+  if (!loaded || generation !== previewGeneration) return;
+  if (track === "subtitle") setPreviewSubtitleFile(playable);
+  else setPreviewCaptionFile(playable);
+}
+
+async function previewClipLoaded() {
+  for (let attempt = 0; attempt < PREVIEW_LOAD_POLL_ATTEMPTS; attempt++) {
+    const duration = await invoke("preview_get_duration").catch(() => 0);
+    if (duration > 0) return true;
+    await new Promise(resolve => setTimeout(resolve, PREVIEW_LOAD_POLL_MILLISECONDS));
+  }
+  return false;
+}
 
 // === Post-build actions ===
 function finishedOutputDir() {
@@ -1189,7 +1274,7 @@ function hidePostBuildActions() {
 
 document.getElementById("post-build-play")?.addEventListener("click", () => {
   const output = finishedOutputDir();
-  if (output) previewDcp(output);
+  if (output) previewPackage(output);
 });
 
 document.getElementById("post-build-inspect")?.addEventListener("click", () => {
@@ -1809,7 +1894,7 @@ function renderRecentProjects() {
       project.title = name;
       document.getElementById("prop-title").value = name;
       setStatus(`Opened: ${dir}`);
-      previewDcp(dir);
+      previewPackage(dir);
     });
   });
 }
@@ -1933,7 +2018,7 @@ ctxMenu?.querySelectorAll("button").forEach(btn => {
     const asset = project.assets.find(a => a.id === ctxAssetId);
     if (!asset) return;
     if (action === "preview") {
-      previewFile(asset.path);
+      previewSourcePicture(asset.path);
     } else if (action === "remove") {
       removeAsset(ctxAssetId);
     } else if (action === "reveal") {

@@ -39,18 +39,33 @@ pub fn extract(input: &Path, output: &Path) -> Result<(), String> {
     std::fs::write(output, body).map_err(|e| format!("failed to write {}: {e}", output.display()))
 }
 
-/// Resolve `input` to a flat list of cues on the composition timeline.
+/// Which timed-text track of a packaged DCP is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackagedTrack {
+    #[default]
+    Subtitle,
+    ClosedCaption,
+}
+
+/// Resolve `input` to a flat list of subtitle cues on the composition timeline.
 pub fn extract_cues(input: &Path) -> Result<Vec<Cue>, String> {
+    extract_track_cues(input, PackagedTrack::Subtitle)
+}
+
+/// The same for either timed-text track a DCP carries. A loose asset is read as
+/// it stands, whichever track it was named for.
+pub fn extract_track_cues(input: &Path, track: PackagedTrack) -> Result<Vec<Cue>, String> {
     if input.is_dir() {
-        extract_from_dcp(input)
+        extract_from_dcp(input, track)
     } else {
         read_subtitle_asset(input)
     }
 }
 
-/// Resolve every reel's subtitle asset via the CPL and concatenate them with the
-/// per-reel timeline offset applied.
-fn extract_from_dcp(dcp_dir: &Path) -> Result<Vec<Cue>, String> {
+/// Resolve every reel's timed-text asset via the CPL and concatenate them with
+/// the per-reel timeline offset applied.
+fn extract_from_dcp(dcp_dir: &Path, track: PackagedTrack) -> Result<Vec<Cue>, String> {
     let dcp = dcpdoctor_core::dcp::open_dcp(dcp_dir).map_err(|notes| {
         notes
             .iter()
@@ -65,21 +80,27 @@ fn extract_from_dcp(dcp_dir: &Path) -> Result<Vec<Cue>, String> {
         for reel in &cpl.reels {
             let reel_ms =
                 frames_to_ms(reel.picture.duration.max(0) as u64, &reel.picture.edit_rate);
-            let sub = &reel.subtitle;
-            if !sub.id.is_empty()
-                && let Some(rel) = dcp.assetmap.assets.iter().find(|a| a.id == sub.id)
-            {
-                let asset_path = dcp_dir.join(&rel.path);
-                let entry_ms =
-                    frames_to_ms(sub.entry_point.unwrap_or(0).max(0) as u64, &sub.edit_rate);
-                for mut cue in read_subtitle_asset(&asset_path)? {
-                    // rebase asset-absolute cue onto reel-local playback, then the
-                    // reel's place on the composition timeline
-                    let start = cue.start_ms.saturating_sub(entry_ms);
-                    let end = cue.end_ms.saturating_sub(entry_ms);
-                    cue.start_ms = reel_start_ms + start;
-                    cue.end_ms = reel_start_ms + end;
-                    out.push(cue);
+            let mut assets = Vec::new();
+            match track {
+                PackagedTrack::Subtitle => assets.push(&reel.subtitle),
+                PackagedTrack::ClosedCaption => assets.extend(reel.closed_captions.iter()),
+            }
+            for sub in assets {
+                if !sub.id.is_empty()
+                    && let Some(rel) = dcp.assetmap.assets.iter().find(|a| a.id == sub.id)
+                {
+                    let asset_path = dcp_dir.join(&rel.path);
+                    let entry_ms =
+                        frames_to_ms(sub.entry_point.unwrap_or(0).max(0) as u64, &sub.edit_rate);
+                    for mut cue in read_subtitle_asset(&asset_path)? {
+                        // rebase asset-absolute cue onto reel-local playback, then the
+                        // reel's place on the composition timeline
+                        let start = cue.start_ms.saturating_sub(entry_ms);
+                        let end = cue.end_ms.saturating_sub(entry_ms);
+                        cue.start_ms = reel_start_ms + start;
+                        cue.end_ms = reel_start_ms + end;
+                        out.push(cue);
+                    }
                 }
             }
             reel_start_ms += reel_ms;
@@ -301,7 +322,7 @@ fn edit_rate_num(xml: &str) -> Option<u32> {
     xml[start..end].split_whitespace().next()?.parse().ok()
 }
 
-fn to_srt(cues: &[Cue]) -> String {
+pub(crate) fn to_srt(cues: &[Cue]) -> String {
     let mut out = String::new();
     for (i, cue) in cues.iter().enumerate() {
         out.push_str(&format!(

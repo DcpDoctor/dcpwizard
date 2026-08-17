@@ -229,7 +229,7 @@ The GUI uses [Tauri 2](https://tauri.app/) (Rust backend + web frontend) with a 
 - Progress in title bar (visible in taskbar during builds)
 - Desktop notifications on build complete/fail
 - Conditional button enabling (Build disabled until ready)
-- Built-in mpv preview player with timeline scrubber (click-to-seek, drag-to-scrub, timecode display)
+- Built-in mpv preview player with timeline scrubber (click-to-seek, drag-to-scrub, timecode display). The header strip carries the QC controls: safe area, aspect mask, centre cross, thirds grid, the crop the build will apply, decode resolution and the subtitle and closed-caption tracks
 - Multi-CPL composition tabs, switch, add, remove compositions
 - SRT → SMPTE subtitle conversion panel
 - Subtitle extraction panel (DCP/asset → SRT or text)
