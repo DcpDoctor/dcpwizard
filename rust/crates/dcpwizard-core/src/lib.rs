@@ -3,6 +3,7 @@ pub mod accessibility;
 pub mod assemble;
 pub mod assetmap;
 pub mod audio_adjust;
+pub mod audio_fallback;
 pub mod audio_map;
 pub mod audio_route;
 pub mod burnin;

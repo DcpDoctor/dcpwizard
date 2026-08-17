@@ -1787,6 +1787,17 @@ fn prepare_audio(
         .filter(|a| !a.is_empty())
         .map(PathBuf::from);
 
+    // no sound named: the picture source's own track is the sound, and enters
+    // here so everything below applies to it as it would to a named WAV
+    if audio_path.is_none() && job.audio_channel_dir.is_none() {
+        if let Some(extracted) =
+            dcpwizard_core::audio_fallback::extract_embedded_audio(&job.video_path, &work_dir)?
+        {
+            log("[AUDIO] No sound file named: using the source's own audio");
+            audio_path = Some(extracted);
+        }
+    }
+
     // the map places every channel by hand, so it runs before anything that
     // moves channels for it
     if let (Some(spec), Some(input)) = (job.audio_map.as_deref(), &audio_path) {
@@ -2709,6 +2720,66 @@ mod tests {
                 full_scale / 2,
                 (full_scale / 3) * 2,
             ]
+        );
+    }
+
+    /// A short clip with a sine track, or None when ffmpeg cannot build one.
+    fn clip_with_sound(path: &std::path::Path) -> bool {
+        std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=320x240:rate=24",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-ac",
+                "2",
+                "-frames:v",
+                "24",
+                "-shortest",
+            ])
+            .arg(path)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+            && path.exists()
+    }
+
+    #[test]
+    fn the_sources_own_audio_becomes_the_sound_when_none_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("movie.mp4");
+        if !clip_with_sound(&clip) {
+            eprintln!("skipping: ffmpeg could not build the source clip");
+            return;
+        }
+
+        let mut job = test_job();
+        job.video_path = clip;
+        job.upmix = Some(postkit::upmix::Upmixer::A);
+
+        let lines = std::sync::Mutex::new(Vec::new());
+        let prepared = prepare_audio(&job, SourceConform::default(), dir.path(), |msg| {
+            lines.lock().unwrap().push(msg.to_string())
+        })
+        .unwrap()
+        .expect("the source's own audio");
+        let lines = lines.into_inner().unwrap();
+
+        // the extracted sound goes through the rest of the chain, so the upmix
+        // that follows it is what the job actually packages
+        assert_eq!(prepared, dir.path().join("audio_work").join("upmix.wav"));
+        let reader = WavReader::open(&prepared).unwrap();
+        assert_eq!(reader.spec().channels, 6, "the upmix ran on the extraction");
+        assert!(
+            lines.iter().any(|line| line.contains("source's own audio")),
+            "{lines:?}"
         );
     }
 
