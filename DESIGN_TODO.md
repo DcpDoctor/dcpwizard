@@ -65,13 +65,6 @@ user-facing surface is here.
   references collapse onto the submodule this workspace already builds. The
   edit-the-submodule-and-rebuild loop is unchanged and `cargo tree -d` reports no
   postkit duplicate. imfwizard has the same shape.
-- Source fitting from the GUI without a crop (GUI pipeline.rs `job_geometry`): the
-  create panel names a container, never a raster, so it forces a raster only when
-  Fill container is ticked. A letterboxed HD source with 2K Scope selected and the
-  box clear therefore still encodes at its own raster and the package is refused
-  for declaring an active area wider than the frames, as it was before fitting
-  landed. It needs a raster control of its own, or the container select split into
-  raster plus active area the way the CLI's `--twok` and `--container` are.
 - Distributed encoding across machines (dom#155, dom#1635, dom#2605). Out of scope
   (user-excluded). The job queue is single-machine and its create path wraps
   pre-encoded J2K rather than running postkit::pipeline, so job progress is

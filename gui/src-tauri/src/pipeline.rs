@@ -1069,7 +1069,6 @@ pub async fn detect_source_crop(
     let source = PathBuf::from(&video_path);
     let info = dcpwizard_core::probe::probe_video(&source)
         .ok_or_else(|| format!("cannot read the size of {video_path}"))?;
-    let container = container_of(resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION));
     let resolved = dcpwizard_core::source_picture::resolve_picture(
         &dcpwizard_core::source_picture::SourcePictureOptions {
             auto_crop: true,
@@ -1080,10 +1079,7 @@ pub async fn detect_source_crop(
         &source,
         info.width,
         info.height,
-        &dcpwizard_core::source_picture::EncodeGeometry {
-            forced_raster: None,
-            container: (container != NO_CONTAINER).then_some(container),
-        },
+        &geometry_for_resolution(resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION)),
         postkit::encode::detect_input_type(&source) == postkit::encode::InputType::ImageSequence,
     )?;
     Ok(DetectedCrop {
@@ -1501,18 +1497,23 @@ fn container_of(resolution: &str) -> (u32, u32) {
         .unwrap_or(NO_CONTAINER)
 }
 
-/// The rasters a job's picture has to land on. The panel names a container, not
-/// a raster, so only a container fill asks for the picture to be scaled onto the
-/// DCI raster around that container.
+/// The rasters a job's picture has to land on. Choosing a container in the panel
+/// is choosing the DCI raster around it, so the picture is always scaled onto
+/// that raster; the container fill only decides whether the source is cropped to
+/// the container's aspect or letterboxed inside it.
 fn job_geometry(job: &JobConfig) -> dcpwizard_core::source_picture::EncodeGeometry {
-    let container = container_of(&job.resolution);
-    let raster = if job.resolution.contains("4k") {
+    geometry_for_resolution(&job.resolution)
+}
+
+fn geometry_for_resolution(resolution: &str) -> dcpwizard_core::source_picture::EncodeGeometry {
+    let container = container_of(resolution);
+    let raster = if resolution.contains("4k") {
         FOUR_K_RASTER
     } else {
         TWO_K_RASTER
     };
     dcpwizard_core::source_picture::EncodeGeometry {
-        forced_raster: (job.picture.fill_crop && container != NO_CONTAINER).then_some(raster),
+        forced_raster: (container != NO_CONTAINER).then_some(raster),
         container: (container != NO_CONTAINER).then_some(container),
     }
 }
@@ -2404,7 +2405,9 @@ mod tests {
         };
         assert_eq!(
             format_encode_breakdown(&measured).as_deref(),
-            Some("[TIMING] encode breakdown: decoder wait 12s, frame prep 30s, j2k 4m10s, write 8s")
+            Some(
+                "[TIMING] encode breakdown: decoder wait 12s, frame prep 30s, j2k 4m10s, write 8s"
+            )
         );
 
         let unmeasured = postkit::pipeline::PipelineProgress {
