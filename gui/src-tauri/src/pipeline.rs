@@ -2723,7 +2723,7 @@ mod tests {
         );
     }
 
-    /// A short clip with a sine track, or None when ffmpeg cannot build one.
+    /// A short clip with a sine track, false when ffmpeg cannot build one.
     fn clip_with_sound(path: &std::path::Path) -> bool {
         std::process::Command::new("ffmpeg")
             .args([
