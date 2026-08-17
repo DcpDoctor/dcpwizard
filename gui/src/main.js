@@ -6,6 +6,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as _open, save, confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
 import { documentDir, join } from "@tauri-apps/api/path";
 import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible, setPreviewCrop, setPreviewSubtitleFile, setPreviewCaptionFile } from "../../extern/guikit/src/preview.js";
+import { initPlaylist, addToPlaylist } from "../../extern/guikit/src/playlist.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
 import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
 
@@ -1279,6 +1280,11 @@ document.getElementById("post-build-play")?.addEventListener("click", () => {
   if (output) previewPackage(output);
 });
 
+document.getElementById("post-build-queue")?.addEventListener("click", () => {
+  const output = finishedOutputDir();
+  if (output) addToPlaylist(output);
+});
+
 document.getElementById("post-build-inspect")?.addEventListener("click", () => {
   const output = finishedOutputDir();
   if (!output) return;
@@ -1864,10 +1870,18 @@ function renderRecentProjects() {
         <span class="recent-title">${r.title || r.path.split(/[/\\]/).pop()}</span>
         <span class="recent-path">${r.path}</span>
       </div>
+      <button class="recent-queue" data-path="${r.path}" title="Add this DCP to the playlist">+</button>
       <button class="recent-retitle" data-path="${r.path}" title="Give this DCP a new content title">✎</button>
       <button class="recent-delete" data-path="${r.path}" title="Delete this DCP from disk">✕</button>
     </div>
   `).join('');
+  list.querySelectorAll('.recent-queue').forEach(el => {
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      addToPlaylist(el.dataset.path);
+      setStatus(`Queued: ${el.dataset.path}`);
+    });
+  });
   list.querySelectorAll('.recent-retitle').forEach(el => {
     el.addEventListener('click', async (event) => {
       event.stopPropagation();
@@ -2269,6 +2283,7 @@ refreshLibrary();
 updateStatusStats();
 initPreview();
 initTimeline();
+initPlaylist(document.getElementById("playlist"), { loadPackage: previewPackage });
 setStatus("Ready");
 
 // === SRT → SMPTE Subtitle Conversion ===

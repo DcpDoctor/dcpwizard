@@ -1298,6 +1298,10 @@
         <span id="timeline-duration" class="timecode" data-raw="0">00:00:00:00</span>
       </div>
 
+      <!-- Queued packages. guikit renders the rows in here, and they stay when
+           the preview panel above is closed. -->
+      <div id="playlist"></div>
+
       <!-- Bottom bar: Progress + Status -->
       <footer class="bottom-bar">
         <div class="progress-section" id="progress-section" style="display:none;">
@@ -1306,6 +1310,7 @@
           <span id="progress-stats" class="progress-stats"></span>
           <div class="post-build-actions" id="post-build-actions" hidden>
             <button id="post-build-play" class="btn-sm primary">Play</button>
+            <button id="post-build-queue" class="btn-sm" title="Add to playlist">Queue</button>
             <button id="post-build-inspect" class="btn-sm">Inspect</button>
             <button id="post-build-reveal" class="btn-sm">Reveal</button>
           </div>
