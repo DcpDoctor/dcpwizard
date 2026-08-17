@@ -77,11 +77,6 @@ user-facing surface is here.
   lacks is the list, since `PlaybackOptions` names one `input` and one `cpl_uuid`,
   so this needs a queue above it plus GUI ordering. Nothing about package
   correctness depends on it.
-- MPEG2 picture essence (DCP-o-matic 2.18 `VideoEncoding`, an alternative to J2K for
-  legacy Interop gear). Every encode path here is grok J2K (postkit `pipeline` and
-  `grok_encoder`) and the CPL and MXF writers assume a J2K picture descriptor, so
-  this is a second essence type end to end rather than a flag. Only worth it if a
-  customer actually has gear that needs it.
 - Live playback decodes J2K with libavcodec, not grok. Two decode paths exist: the
   frame-accurate preview (PK preview.rs) resolves the CPL, decrypts and decodes
   through grok, but live playback (PK mpv.rs, and the embedded surface through PK
@@ -198,6 +193,29 @@ should also land there and are noted in its DESIGN_TODO.
   validation and the total, and the encode line is followed by a breakdown of
   decoder wait, frame prep, J2K and write off postkit's phase clocks. Nothing
   here overlaps the wrap with the encode yet. imfwizard too.
+
+### Transkoder survey (2026-08-17)
+
+From colorfront.com/software/transkoder plus the NAB 2026 press release. Colorfront
+publishes no spec sheet, release notes, manual or price; the most detailed feature
+list is a reseller page pinned to Transkoder 2022, so their column mixes "verified
+current" with "true in 2022, probably still". Confirmed absent or undocumented on
+their side: TMS upload, Interop DCPs, watch folders, published pricing, and any
+named scope types. Their clear leads are GPU J2K speed with 8K SDI output, camera
+RAW ingest, Dolby Vision cinema authoring (DV2, eCMU, licensed), IMF App4/App5/RDD45
+breadth, QC detectors, and the render-farm/cloud story. Items worth landing here:
+
+- Two-pass J2K encoding with PSNR/bitrate targeting. We enforce
+  `codestream_byte_cap`; nothing targets quality. postkit's encode path. imfwizard
+  too.
+- Black-frame and repeated/freeze-frame detection. Cheap passes over frames postkit
+  already decodes, surfaced in the QC report. imfwizard too.
+- Side-by-side / wipe / difference compare in the preview. `frame_compare` has the
+  metrics (PSNR/SSIM/VMAF); nothing shows two compositions ganged. guikit, so both
+  wizards. Transkoder 2026 adds semantic composition diffing on top; metrics plus a
+  visual compare is the part worth matching.
+- Waveform and vectorscope in the preview. Transkoder implies scopes ("HDR
+  analyzer") but never enumerates them. guikit, both wizards.
 
 ## Done 2026-08-17
 
