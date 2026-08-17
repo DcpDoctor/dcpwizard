@@ -201,7 +201,7 @@ should also land there and are noted in its DESIGN_TODO.
 
 ## Done 2026-08-17
 
-- TMS upload (CORE/tms_upload.rs, `tms <package> [--tms-config]`, `create
+- TMS upload (postkit's `tms` module, `tms <package> [--tms-config]`, `create
   --upload-to-tms`): every file of a finished package goes into
   `<config path>/<package dir name>/` over sftp (ssh2 0.9.6 over libssh2, the first
   release whose vendored copy carries the CVE-2026-55200 fix) or ftp (suppaftp 10,

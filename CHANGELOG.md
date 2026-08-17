@@ -115,6 +115,8 @@
 - **`watch --webhook-url`** — POST a JSON notification when a new DCP is detected
 
 ### Changed
+- **`edit` is postkit's package edit**: the rewrite moved to `postkit::package_edit::edit_package`, which does the same job for an IMF composition, so a DCP and an IMP are retitled by one piece of code instead of two that can drift. `edit`'s flags, exit code and log lines are unchanged, as is the GUI's retitle. Four things now behave differently. Asking for a field the CPL does not carry is an error instead of a silent no-op, so `--issuer` on a CPL with no `<Issuer>` says so rather than reporting success over an unchanged document. A CPL that cannot be hashed is an error instead of a PKL entry written with an empty `<Hash>`. An ASSETMAP that does not list the composition is an error instead of a rewrite that leaves the package inconsistent. And `--output` copies subdirectories, where it used to copy only the files at the top of the package and quietly drop anything nested.
+- **TMS upload lives in postkit**: the config type, the `TmsTransport` trait, both transports and the upload itself moved to `postkit::tms` behind a feature, so imfwizard can deliver an IMP the same way. Nothing about `tms` or `create --upload-to-tms` changes: the config file is still `~/.config/dcpwizard/tms.toml` unless `--tms-config` points elsewhere, and reading it stays here because the path carries this app's name.
 - **Encode bandwidth** — the GUI now maps the target Mbps to the J2K compression ratio (was hardcoded)
 - **`colour --target xyz`** — routes through the real DCDM Rec.709/P3/Rec.2020 → X'Y'Z' transform (fails loud on an unsupported source)
 - **PCM wrap** — rejects non-DCP audio sample rates (48/96 kHz only) instead of mislabeling
