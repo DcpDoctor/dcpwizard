@@ -3882,12 +3882,15 @@ fn run() {
                         std::process::exit(1);
                     }
                 }
-                let (source_fps, source_needs_audio_pull_up) = video_info
+                let source_fps = video_info
                     .as_ref()
-                    .map(|v| dcpwizard_core::hfr::source_rate_to_dcp(v.fps_num, v.fps_den))
-                    .unwrap_or((24, false));
+                    .map(|v| dcpwizard_core::hfr::source_rate_to_dcp(v.fps_num, v.fps_den).0)
+                    .unwrap_or(24);
                 let fps = frame_rate.unwrap_or(source_fps);
-                let needs_audio_pull_up = source_needs_audio_pull_up && fps == 24;
+                let conform = video_info
+                    .as_ref()
+                    .map(|v| dcpwizard_core::hfr::conform_source_to_dcp(v.fps_num, v.fps_den, fps))
+                    .unwrap_or_default();
                 let (mut width, mut height, total_frames) = video_info
                     .as_ref()
                     .map(|v| (v.width, v.height, v.total_frames))
@@ -4139,39 +4142,17 @@ fn run() {
                     }
                 };
 
-                let audio_path = if needs_audio_pull_up {
-                    audio_path.map(|input| {
+                let audio_path = match (conform.audio_pull_up, audio_path) {
+                    (true, Some(input)) => {
                         let output = output_dir.join("audio_pullup.wav");
-                        let result = std::process::Command::new("ffmpeg")
-                            .arg("-y")
-                            .arg("-i")
-                            .arg(&input)
-                            .arg("-af")
-                            .arg("asetrate=48048,aresample=48000")
-                            .arg("-c:a")
-                            .arg("pcm_s24le")
-                            .arg(&output)
-                            .output();
-                        match result {
-                            Ok(result) if result.status.success() => {
-                                tracing::info!("Applied 23.976-to-24 audio pull-up");
-                                output
-                            }
-                            Ok(result) => {
-                                tracing::error!(
-                                    "23.976-to-24 audio pull-up failed: {}",
-                                    String::from_utf8_lossy(&result.stderr)
-                                );
-                                std::process::exit(1);
-                            }
-                            Err(error) => {
-                                tracing::error!("failed to run ffmpeg for audio pull-up: {error}");
-                                std::process::exit(1);
-                            }
+                        if let Err(error) = dcpwizard_core::hfr::audio_pull_up(&input, &output) {
+                            tracing::error!("{error}");
+                            std::process::exit(1);
                         }
-                    })
-                } else {
-                    audio_path
+                        tracing::info!("Applied 23.976-to-24 audio pull-up");
+                        Some(output)
+                    }
+                    (_, audio_path) => audio_path,
                 };
 
                 // trim after the pull-up, whose resample changes what a frame of
@@ -4621,6 +4602,12 @@ fn run() {
                     PathBuf::from(home).join("bin/grok/bin/grk_compress")
                 });
 
+            let conform = dcpwizard_core::probe::probe_video(&encode_input)
+                .map(|info| {
+                    dcpwizard_core::hfr::conform_source_to_dcp(info.fps_num, info.fps_den, fps)
+                })
+                .unwrap_or_default();
+
             let opts = StreamEncodeOptions {
                 input: encode_input.clone(),
                 output_dir: j2k_dir.clone(),
@@ -4629,6 +4616,7 @@ fn run() {
                 codeblock_size: 32,
                 progression: "CPRL".to_string(),
                 fps: postkit::encode::FrameRate::whole(fps),
+                read_source_at: conform.read_source_at,
                 compressor_path: grk_bin,
                 lib_dir: None,
                 ..StreamEncodeOptions::default()
@@ -4693,6 +4681,19 @@ fn run() {
                     }
                 };
 
+                let audio_path = match (conform.audio_pull_up, audio_path) {
+                    (true, Some(input)) => {
+                        let pulled_up = output_dir.join("audio_pullup.wav");
+                        if let Err(error) = dcpwizard_core::hfr::audio_pull_up(&input, &pulled_up) {
+                            tracing::error!("{error}");
+                            std::process::exit(1);
+                        }
+                        tracing::info!("Applied 23.976-to-24 audio pull-up");
+                        Some(pulled_up)
+                    }
+                    (_, audio_path) => audio_path,
+                };
+
                 // Package
                 let config = dcpwizard_core::dcp::DcpConfig {
                     title,
@@ -4710,11 +4711,10 @@ fn run() {
 
                 // Clean up intermediate files
                 let _ = std::fs::remove_dir_all(&j2k_dir);
-                if let Some(ref wav) = audio_path
-                    && wav.file_name().and_then(|f| f.to_str()) == Some("audio_demux.wav")
-                {
-                    let _ = std::fs::remove_file(wav);
-                }
+                // both are ours whenever they exist, and the pull-up may have
+                // moved audio_path off the demux, so remove them by name
+                let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
+                let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
                 let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
                 code
             }

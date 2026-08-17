@@ -75,6 +75,9 @@ pub struct HintFacts {
     pub fps: u32,
     /// The frame rate the source runs at, when the picture is a video.
     pub source_fps: Option<f64>,
+    /// Whether the job conforms the source by playing it faster with the sound
+    /// pulled up to match, which is what a 23.976 source at 24 fps gets.
+    pub conforms_with_pull_up: bool,
     pub four_k: bool,
     pub stereo_3d: bool,
     pub video_bit_rate_mbps: u32,
@@ -138,6 +141,7 @@ fn hints_from(facts: &HintFacts) -> Vec<Hint> {
     hints.extend(frame_rate_hint(facts));
     hints.extend(four_k_stereo_hint(facts));
     hints.extend(source_rate_hint(facts));
+    hints.extend(pull_up_hint(facts));
     hints.extend(audio_level_hint(facts));
     hints.extend(audio_language_hint(facts));
     hints.extend(marker_hints(facts));
@@ -271,6 +275,16 @@ fn source_rate_hint(facts: &HintFacts) -> Option<Hint> {
         text: format!(
             "The source runs at {source_fps:.3} fps and the DCP at {} fps, so the sound plays \
              back at a noticeably wrong pitch. Pick a DCP rate closer to the source.",
+            facts.fps
+        ),
+    })
+}
+
+fn pull_up_hint(facts: &HintFacts) -> Option<Hint> {
+    facts.conforms_with_pull_up.then(|| Hint {
+        text: format!(
+            "The 23.976 source will play at {} fps, 0.1% faster, and the sound is pulled up by \
+             the same amount to stay in sync. No frame is duplicated or dropped.",
             facts.fps
         ),
     })
@@ -564,6 +578,13 @@ fn probe_hint_facts(plan: &CreatePlan) -> HintFacts {
             .then_some(source)
             .flatten()
             .map(|info| f64::from(info.fps_num) / f64::from(info.fps_den.max(1))),
+        conforms_with_pull_up: (plan.picture_kind == PictureKind::Video)
+            .then_some(source)
+            .flatten()
+            .is_some_and(|info| {
+                crate::hfr::conform_source_to_dcp(info.fps_num, info.fps_den, plan.fps)
+                    .audio_pull_up
+            }),
         four_k: plan.four_k,
         stereo_3d: plan.right_eye.is_some(),
         video_bit_rate_mbps: plan.video_bit_rate_mbps,
@@ -882,6 +903,28 @@ mod tests {
             ..fast.clone()
         };
         assert!(!mentions(&near, "wrong pitch"), "{:?}", texts(&near));
+    }
+
+    #[test]
+    fn the_23_976_conform_is_spelled_out_and_a_matched_rate_says_nothing() {
+        let pulled_up = HintFacts {
+            fps: 24,
+            source_fps: Some(24000.0 / 1001.0),
+            conforms_with_pull_up: true,
+            ..facts()
+        };
+        assert!(
+            mentions(&pulled_up, "0.1% faster"),
+            "{:?}",
+            texts(&pulled_up)
+        );
+        assert!(mentions(&pulled_up, "pulled up"));
+
+        let matched = HintFacts {
+            conforms_with_pull_up: false,
+            ..pulled_up.clone()
+        };
+        assert!(!mentions(&matched, "0.1% faster"));
     }
 
     #[test]

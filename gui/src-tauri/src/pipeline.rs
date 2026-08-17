@@ -1743,9 +1743,11 @@ fn count_frames(j2k_dir: &std::path::Path) -> u64 {
 
 /// Create-time audio processing: filename channel routing from a directory of
 /// mono WAVs, then stereo-to-5.1 upmix, then the picture/sound delay, then
-/// loudness normalization. Same order as the CLI create path. Intermediates go under `<output>/audio_work`.
+/// loudness normalization, then the 23.976-to-24 pull-up the conform asks for.
+/// Same order as the CLI create path. Intermediates go under `<output>/audio_work`.
 fn prepare_audio(
     job: &JobConfig,
+    conform: dcpwizard_core::hfr::SourceConform,
     output: &std::path::Path,
     log: impl Fn(&str),
 ) -> Result<Option<PathBuf>, String> {
@@ -1827,6 +1829,14 @@ fn prepare_audio(
             "[AUDIO] loudness {:.1} -> {:.1} dB (gain {:+.2} dB, peak {:.2} dBTP)",
             plan.measured_db, plan.target_db, plan.gain_db, plan.resulting_true_peak_dbtp
         ));
+        audio_path = Some(out);
+    }
+
+    if let (true, Some(input)) = (conform.audio_pull_up, &audio_path) {
+        std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
+        let out = work_dir.join("pullup.wav");
+        dcpwizard_core::hfr::audio_pull_up(input, &out)?;
+        log("[AUDIO] Applied 23.976-to-24 audio pull-up");
         audio_path = Some(out);
     }
 
@@ -2018,6 +2028,11 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     let (fps_num, fps_den) = frame_rate_of(&job.framerate);
     let encode_fps = postkit::encode::FrameRate::new(fps_num, fps_den);
+    let conform = job
+        .source
+        .as_ref()
+        .map(|info| dcpwizard_core::hfr::conform_source_to_dcp(info.fps_num, info.fps_den, fps_num))
+        .unwrap_or_default();
     let preflight_started = Instant::now();
 
     // reel boundaries before the encode: a source with no chapter marks should
@@ -2075,6 +2090,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
         fps: encode_fps,
+        read_source_at: conform.read_source_at,
         source_colour: job.source_colour.clone(),
         codestream_byte_cap: job
             .hdr_dci
@@ -2149,7 +2165,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     );
 
     let audio_started = Instant::now();
-    let audio_path = prepare_audio(job, output, |msg| log_to(&log_file, msg))?;
+    let audio_path = prepare_audio(job, conform, output, |msg| log_to(&log_file, msg))?;
     log_to(
         &log_file,
         &format_stage_timing("audio", audio_started.elapsed()),
@@ -2331,6 +2347,7 @@ fn emit_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dcpwizard_core::hfr::SourceConform;
     use dcpwizard_core::mxf_wrap::AudioInputOrder;
     use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
     use std::time::Duration;
@@ -2557,7 +2574,9 @@ mod tests {
         let mut job = test_job();
         job.audio_channel_dir = Some(channels.to_string_lossy().into_owned());
 
-        let routed = prepare_audio(&job, dir.path(), |_| {}).unwrap().unwrap();
+        let routed = prepare_audio(&job, SourceConform::default(), dir.path(), |_| {})
+            .unwrap()
+            .unwrap();
         assert_eq!(routed, dir.path().join("audio_work").join("routed.wav"));
 
         let mut reader = WavReader::open(&routed).unwrap();
@@ -2585,7 +2604,7 @@ mod tests {
         let mut job = test_job();
         job.audio_path = Some(wav.to_string_lossy().into_owned());
 
-        let prepared = prepare_audio(&job, dir.path(), |_| {}).unwrap();
+        let prepared = prepare_audio(&job, SourceConform::default(), dir.path(), |_| {}).unwrap();
         assert_eq!(prepared, Some(wav));
         assert!(!dir.path().join("audio_work").exists());
     }
@@ -2600,13 +2619,38 @@ mod tests {
         job.audio_path = Some(wav.to_string_lossy().into_owned());
         job.audio_delay_ms = 100;
 
-        let delayed = prepare_audio(&job, dir.path(), |_| {}).unwrap().unwrap();
+        let delayed = prepare_audio(&job, SourceConform::default(), dir.path(), |_| {})
+            .unwrap()
+            .unwrap();
         assert_eq!(delayed, dir.path().join("audio_work").join("delayed.wav"));
         let reader = WavReader::open(&delayed).unwrap();
         assert_eq!(
             reader.duration(),
             48_000,
             "a delay must not change the running time"
+        );
+    }
+
+    #[test]
+    fn the_conform_pulls_the_sound_up_by_one_part_in_1001() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("sound.wav");
+        write_mono(&wav, 1234, 48_000);
+
+        let mut job = test_job();
+        job.audio_path = Some(wav.to_string_lossy().into_owned());
+        let conform = dcpwizard_core::hfr::conform_source_to_dcp(24_000, 1_001, 24);
+
+        let pulled_up = prepare_audio(&job, conform, dir.path(), |_| {})
+            .unwrap()
+            .unwrap();
+        assert_eq!(pulled_up, dir.path().join("audio_work").join("pullup.wav"));
+        let reader = WavReader::open(&pulled_up).unwrap();
+        let expected = 48_000 * 1_000 / 1_001;
+        assert!(
+            reader.duration().abs_diff(expected) <= 1,
+            "{} samples, expected about {expected}",
+            reader.duration()
         );
     }
 
@@ -2750,7 +2794,9 @@ mod tests {
         job.audio_path = Some(stereo.to_string_lossy().into_owned());
         job.upmix = Some(postkit::upmix::Upmixer::B);
 
-        let upmixed = prepare_audio(&job, dir.path(), |_| {}).unwrap().unwrap();
+        let upmixed = prepare_audio(&job, SourceConform::default(), dir.path(), |_| {})
+            .unwrap()
+            .unwrap();
         assert_eq!(upmixed, dir.path().join("audio_work").join("upmix.wav"));
         let reader = WavReader::open(&upmixed).unwrap();
         assert_eq!(reader.spec().channels, 6);

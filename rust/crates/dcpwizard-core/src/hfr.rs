@@ -62,6 +62,55 @@ pub fn source_rate_to_dcp(fps_num: u32, fps_den: u32) -> (u32, bool) {
     (fps_num / fps_den.max(1), false)
 }
 
+/// How a source is conformed to the DCP edit rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceConform {
+    /// Read the picture as if it ran at this rate, ignoring the source's own
+    /// timestamps, so every frame is packaged once. None reads it as it is.
+    pub read_source_at: Option<postkit::encode::FrameRate>,
+    /// Whether the sound has to be pulled up by the same 1000/1001 to stay in
+    /// sync with a picture that now plays 0.1% faster.
+    pub audio_pull_up: bool,
+}
+
+/// What it takes to package a source at the requested DCP edit rate: today only
+/// a 24000/1001 source at 24 fps needs anything, and it plays 0.1% faster with
+/// the sound pulled up to match, the way DCP-o-matic conforms it.
+pub fn conform_source_to_dcp(fps_num: u32, fps_den: u32, dcp_fps: u32) -> SourceConform {
+    let (source_dcp_fps, needs_pull_up) = source_rate_to_dcp(fps_num, fps_den);
+    if !needs_pull_up || dcp_fps != source_dcp_fps {
+        return SourceConform::default();
+    }
+    SourceConform {
+        read_source_at: Some(postkit::encode::FrameRate::whole(dcp_fps)),
+        audio_pull_up: true,
+    }
+}
+
+/// Speed the sound up by 1000/1001 to match a 23.976 picture packaged at 24 fps:
+/// reinterpret the samples at 48048 Hz, then resample back to the 48 kHz a DCP
+/// sound track carries.
+pub fn audio_pull_up(input: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
+    let result = std::process::Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .arg("-af")
+        .arg("asetrate=48048,aresample=48000")
+        // the wrap wants the same PCM it would have had, only faster
+        .args(["-c:a", "pcm_s24le"])
+        .arg(output)
+        .output()
+        .map_err(|error| format!("failed to run ffmpeg for audio pull-up: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "23.976-to-24 audio pull-up failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
+    }
+    Ok(())
+}
+
 /// Check whether a frame rate is valid for the given DCP standard, ignoring the
 /// resolution constraint. Use [`validate_fps_resolution`] to also reject an
 /// illegal fps/resolution combination.
@@ -176,6 +225,30 @@ mod tests {
     fn ntsc_film_maps_to_24_with_audio_pull_up() {
         assert_eq!(source_rate_to_dcp(24_000, 1_001), (24, true));
         assert_eq!(source_rate_to_dcp(24, 1), (24, false));
+    }
+
+    #[test]
+    fn only_ntsc_film_at_24_is_conformed() {
+        let conform = conform_source_to_dcp(24_000, 1_001, 24);
+        assert_eq!(
+            conform.read_source_at,
+            Some(postkit::encode::FrameRate::whole(24))
+        );
+        assert!(conform.audio_pull_up);
+
+        for (fps_num, fps_den, dcp_fps) in [
+            (24_000, 1_001, 25),
+            (24_000, 1_001, 48),
+            (24, 1, 24),
+            (25, 1, 24),
+            (30_000, 1_001, 30),
+        ] {
+            assert_eq!(
+                conform_source_to_dcp(fps_num, fps_den, dcp_fps),
+                SourceConform::default(),
+                "{fps_num}/{fps_den} at {dcp_fps} fps needs no conform"
+            );
+        }
     }
 
     #[test]
