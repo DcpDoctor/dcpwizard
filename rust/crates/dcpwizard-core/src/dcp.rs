@@ -262,6 +262,38 @@ impl ProgressSink for NoProgress {
     }
 }
 
+/// A SMPTE composition carries a sound track and the ST 429-16 metadata asset
+/// that declares its layout, so a job that brought no audio at all packages
+/// silence as long as the picture. Interop asks for neither and stays picture
+/// only. Returns the silent WAV, or None when the standard or the picture leaves
+/// nothing to fill.
+fn silent_sound_fill(config: &DcpConfig, fps: u32) -> Result<Option<PathBuf>, String> {
+    if config.standard != crate::Standard::Smpte {
+        return Ok(None);
+    }
+    let frames = config
+        .j2k_dir
+        .as_ref()
+        .map(|dir| crate::reel::collect_frames(dir).len() as u64)
+        .unwrap_or(0);
+    if frames == 0 {
+        return Ok(None);
+    }
+    let channels = config
+        .audio_channels
+        .unwrap_or(crate::mxf_wrap::CANONICAL_51_CHANNELS);
+    crate::mxf_wrap::check_packaged_channel_count(channels)?;
+    let output = config
+        .output_dir
+        .join(format!(".dcpwizard_silence_{}.wav", uuid::Uuid::new_v4()));
+    crate::audio_fallback::write_silent_wav(&output, channels, frames, fps)?;
+    tracing::info!(
+        "No sound supplied: packaging {frames} frames of {channels}-channel silence so the \
+         composition has a sound track"
+    );
+    Ok(Some(output))
+}
+
 /// Create a complete DCP from the given configuration.
 ///
 /// This orchestrates the full DCP creation pipeline:
@@ -476,7 +508,15 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 }
             }
         }
-        None => None,
+        // a build that brought no sound can still ship without one, so a fill
+        // that cannot be written is worth a warning and nothing more
+        None => match silent_sound_fill(config, fps) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!("no silent sound track: {e}");
+                None
+            }
+        },
     };
 
     // multi-reel path is opt-in; the single-reel path below is unchanged
