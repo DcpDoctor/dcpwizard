@@ -2654,7 +2654,7 @@ fn load_tms_config(
     let path = cfg_path
         .map(PathBuf::from)
         .unwrap_or_else(dcpwizard_core::tms_upload::default_config_path);
-    dcpwizard_core::tms_upload::TmsConfig::load(&path)
+    dcpwizard_core::tms_upload::load_config(&path)
 }
 
 fn sanitize_dir_name(name: &str) -> String {

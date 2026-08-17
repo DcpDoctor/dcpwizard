@@ -783,8 +783,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1 0.10.6",
- "ssh2",
- "suppaftp",
  "tempfile",
  "thiserror 2.0.18",
  "time",

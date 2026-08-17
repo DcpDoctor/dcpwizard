@@ -21,10 +21,6 @@ roxmltree = "0.20"
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
-# sftp for tms upload. 0.9.6 is the first release whose vendored libssh2 carries
-# the CVE-2026-55200 fix, so do not float below it.
-ssh2 = "0.9.6"
-suppaftp = "10"
 tempfile = "3"
 thiserror.workspace = true
 time = "0.3"
