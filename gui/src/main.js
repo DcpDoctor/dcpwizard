@@ -1125,6 +1125,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       allowGenericHdrTonemap: document.getElementById("prop-hdr-generic-tonemap")?.checked || false,
       facility: getPrefs().facility || null,
       naming: namingMetadata(),
+      headItems: joinedItems.head,
+      tailItems: joinedItems.tail,
     });
     let result = await submit(!getPrefs().showHintsBeforeBuild);
     if (result.jobId === null) {
@@ -2068,10 +2070,179 @@ async function probeVideo(path) {
   } catch { return null; }
 }
 
+
+// === Ident library ===
+// The library itself lives in the app data dir; this holds only what the panel
+// draws and which items the next build joins on, in the order they were dropped.
+let libraryItems = [];
+const joinedItems = { head: [], tail: [] };
+const LIBRARY_KIND_LABELS = {
+  "head-ident": "Head ident",
+  "tail-ident": "Tail ident",
+  "rating-card": "Rating card",
+  "anti-piracy": "Anti-piracy",
+};
+
+async function refreshLibrary() {
+  try {
+    libraryItems = await invoke("library_list");
+  } catch (e) {
+    setStatus(`Library: ${e}`);
+    libraryItems = [];
+  }
+  // an item removed from the library cannot stay attached to the next build
+  const names = new Set(libraryItems.map(i => i.name));
+  for (const placement of ["head", "tail"]) {
+    joinedItems[placement] = joinedItems[placement].filter(n => names.has(n));
+  }
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const list = document.getElementById("library-list");
+  if (!list) return;
+  if (libraryItems.length === 0) {
+    list.innerHTML = '<div class="asset-empty"><p>No idents yet. Import a clip or a card,<br>then drag it into Head or Tail.</p></div>';
+  } else {
+    list.innerHTML = libraryItems.map(item => `
+      <div class="asset-item" data-library-name="${item.name}" draggable="true">
+        <span class="asset-icon">\u{1F39E}</span>
+        <span class="asset-name" title="${LIBRARY_KIND_LABELS[item.kind] || item.kind}">${item.name}</span>
+        <span class="asset-meta">${item.width}\u00d7${item.height} \u00b7 ${item.seconds.toFixed(1)}s \u00b7 ${item.has_audio ? "sound" : "silent"}</span>
+        <button class="asset-remove" data-library-remove="${item.name}" title="Remove from the library">\u2715</button>
+      </div>
+    `).join("");
+    list.querySelectorAll(".asset-item").forEach(el => {
+      el.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", `library:${el.dataset.libraryName}`);
+      });
+    });
+    list.querySelectorAll("[data-library-remove]").forEach(el => {
+      el.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const name = el.dataset.libraryRemove;
+        if (!await tauriConfirm(`Remove "${name}" from the library?`, { title: "Ident library" })) return;
+        try {
+          await invoke("library_remove", { name });
+          setStatus(`Removed ${name} from the library`);
+        } catch (err) {
+          setStatus(`Library: ${err}`);
+        }
+        await refreshLibrary();
+      });
+    });
+  }
+  renderJoinedItems();
+}
+
+function renderJoinedItems() {
+  for (const placement of ["head", "tail"]) {
+    const box = document.getElementById(`library-${placement}-items`);
+    if (!box) continue;
+    const names = joinedItems[placement];
+    box.innerHTML = names.length === 0
+      ? '<div class="library-join-empty">Drop items here</div>'
+      : names.map((name, index) => `
+        <div class="library-chip" draggable="true" data-placement="${placement}" data-index="${index}">
+          <span class="library-chip-name">${index + 1}. ${name}</span>
+          <button class="asset-remove" data-detach="${placement}:${index}" title="Take off the build">\u2715</button>
+        </div>
+      `).join("");
+    box.querySelectorAll("[data-detach]").forEach(el => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const [from, index] = el.dataset.detach.split(":");
+        joinedItems[from].splice(parseInt(index), 1);
+        renderJoinedItems();
+      });
+    });
+    box.querySelectorAll(".library-chip").forEach(chip => {
+      chip.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", `joined:${chip.dataset.placement}:${chip.dataset.index}`);
+      });
+      // dropping onto a chip puts the dragged item in front of it, which is how
+      // a run is reordered
+      chip.addEventListener("dragover", (e) => e.preventDefault());
+      chip.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropIntoJoin(e.dataTransfer.getData("text/plain"), placement, parseInt(chip.dataset.index));
+      });
+    });
+  }
+}
+
+// Move or add whatever was dragged into `placement` at `at`, or at its end when
+// `at` is null.
+function dropIntoJoin(payload, placement, at) {
+  const target = joinedItems[placement];
+  let name = null;
+  if (payload.startsWith("library:")) {
+    name = payload.slice("library:".length);
+  } else if (payload.startsWith("joined:")) {
+    const [, from, index] = payload.split(":");
+    const removed = joinedItems[from].splice(parseInt(index), 1);
+    if (removed.length === 0) return;
+    name = removed[0];
+    // taking it out of this same run shifts everything after it back one
+    if (from === placement && at !== null && at > parseInt(index)) at -= 1;
+  }
+  if (!name) return;
+  if (at === null || at > target.length) target.push(name);
+  else target.splice(at, 0, name);
+  renderJoinedItems();
+}
+
+document.querySelectorAll(".library-join-items").forEach(box => {
+  box.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    box.classList.add("drop-target");
+  });
+  box.addEventListener("dragleave", () => box.classList.remove("drop-target"));
+  box.addEventListener("drop", (e) => {
+    e.preventDefault();
+    box.classList.remove("drop-target");
+    dropIntoJoin(e.dataTransfer.getData("text/plain"), box.dataset.placement, null);
+  });
+});
+
+document.getElementById("library-import")?.addEventListener("click", async () => {
+  const file = await open({
+    filters: [{ name: "Video or image", extensions: ["mov", "mp4", "mkv", "mxf", "avi", "png", "jpg", "jpeg", "tif", "tiff"] }],
+  });
+  if (!file) return;
+  const kind = document.getElementById("library-kind")?.value || "head-ident";
+  const hold = parseFloat(document.getElementById("library-hold")?.value);
+  const still = await invoke("library_needs_duration", { file });
+  if (still && !(hold > 0)) {
+    setStatus("A still image has no length of its own: set Hold s before importing it");
+    return;
+  }
+  const name = libraryNameFor(file);
+  try {
+    const row = await invoke("library_add", { file, name, kind, durationSeconds: still ? hold : null });
+    setStatus(`Added ${row.name} to the library`);
+  } catch (e) {
+    setStatus(`Library: ${e}`);
+  }
+  await refreshLibrary();
+});
+
+// The library names an item by its file, minus the folder, the extension and
+// anything a name is not allowed to carry.
+function libraryNameFor(path) {
+  return path
+    .replace(/^.*[/\\]/, "")
+    .replace(/\.[^.]*$/, "")
+    .replace(/[^A-Za-z0-9 ._-]/g, "-")
+    .replace(/^\.+/, "");
+}
+
 // === Init ===
 renderAssets();
 renderReels();
 renderRecentProjects();
+refreshLibrary();
 updateStatusStats();
 initPreview();
 initTimeline();

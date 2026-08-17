@@ -357,6 +357,10 @@ struct JobConfig {
     /// What the pre-build check found, carried through so the job log lists it
     /// without measuring the source a second time.
     hints: Vec<String>,
+    /// Library items joined onto the build as reels before the feature's, in
+    /// the order the panel put them in, and after it for the tail.
+    head_items: Vec<dcpwizard_core::library::AttachedItem>,
+    tail_items: Vec<dcpwizard_core::library::AttachedItem>,
 }
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
@@ -527,6 +531,8 @@ pub async fn submit_job(
     allow_generic_hdr_tonemap: Option<bool>,
     facility: Option<String>,
     naming: Option<NamingMetadata>,
+    head_items: Option<Vec<String>>,
+    tail_items: Option<Vec<String>>,
     hints_accepted: Option<bool>,
 ) -> Result<SubmitResult, String> {
     let queue = app.state::<JobQueue>();
@@ -536,6 +542,14 @@ pub async fn submit_job(
     if encrypt.unwrap_or(false) && key_out.as_deref().unwrap_or("").is_empty() {
         return Err("Key Output File is required when encrypting".into());
     }
+
+    // a name the library no longer holds, or media it has lost, fails here
+    // rather than after the encode
+    let library = dcpwizard_core::library::Library::open();
+    let head_items =
+        dcpwizard_core::library_reel::attach_by_name(&library, &head_items.unwrap_or_default())?;
+    let tail_items =
+        dcpwizard_core::library_reel::attach_by_name(&library, &tail_items.unwrap_or_default())?;
 
     let framerate = framerate.unwrap_or_else(|| DEFAULT_FRAME_RATE.0.into());
     let naming = naming.unwrap_or_default();
@@ -896,6 +910,8 @@ pub async fn submit_job(
         naming,
         source: probe_job_source(&video, still_input),
         hints: Vec::new(),
+        head_items,
+        tail_items,
     };
 
     let plan = job_plan(&job);
@@ -1003,6 +1019,7 @@ fn job_plan(job: &JobConfig) -> dcpwizard_core::preflight::CreatePlan {
         four_k: job.resolution.contains("4k"),
         reel_length_minutes: job.reel_length_minutes,
         reel_split_frames: job.reel_split_frames.clone(),
+        library_items: job.head_items.len() + job.tail_items.len(),
     }
 }
 
@@ -2010,6 +2027,8 @@ fn build_dcp_config(
             .filter(|tag| !tag.is_empty()),
         ratings: ratings_of(&job.naming.ratings),
         content_versions: content_versions_of(job.naming.content_versions.as_deref()),
+        head_items: job.head_items.clone(),
+        tail_items: job.tail_items.clone(),
         ..Default::default()
     }
 }
@@ -2478,7 +2497,51 @@ mod tests {
             naming: NamingMetadata::default(),
             source: None,
             hints: Vec::new(),
+            head_items: Vec::new(),
+            tail_items: Vec::new(),
         }
+    }
+
+    fn attached(name: &str) -> dcpwizard_core::library::AttachedItem {
+        dcpwizard_core::library::AttachedItem {
+            item: dcpwizard_core::library::LibraryItem {
+                name: name.into(),
+                kind: dcpwizard_core::library::LibraryItemKind::HeadIdent,
+                file: format!("{name}.mov"),
+                seconds: 8.0,
+                width: 1920,
+                height: 1080,
+                has_audio: true,
+            },
+            media: PathBuf::from(format!("/library/media/{name}.mov")),
+        }
+    }
+
+    #[test]
+    fn the_panels_library_items_reach_the_build_in_order() {
+        let job = JobConfig {
+            head_items: vec![attached("Ident"), attached("Rating")],
+            tail_items: vec![attached("Anti Piracy")],
+            ..test_job()
+        };
+        let config = build_dcp_config(
+            &job,
+            PathBuf::from("/out/j2k"),
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        let head: Vec<&str> = config
+            .head_items
+            .iter()
+            .map(|a| a.item.name.as_str())
+            .collect();
+        assert_eq!(head, ["Ident", "Rating"]);
+        assert_eq!(config.tail_items.len(), 1);
+        assert_eq!(config.tail_items[0].item.name, "Anti Piracy");
+        // and the pre-build check counts them, so the refusals fire before the encode
+        assert_eq!(job_plan(&job).library_items, 3);
     }
 
     #[test]

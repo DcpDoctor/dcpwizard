@@ -200,9 +200,6 @@ should also land there and are noted in its DESIGN_TODO.
   the progress bar, wired to the embedded preview, the Verify view and the file
   manager. The row belongs to the build in front of you, so a job picked out of the
   Jobs list does not bring it back.
-- Ident and rating-card library. A drag-drop library of head idents, tail idents,
-  rating cards and anti-piracy clips joined onto the build. Real ad and trailer
-  workflow, but it is conform/concatenation work, so a real lift. DCP-only.
 - Overlap the MXF write with the encode, as Storm claims to. The encode log
   itself is done: `[TIMING]` lines give preflight, encode, audio, packaging,
   validation and the total, and the encode line is followed by a breakdown of

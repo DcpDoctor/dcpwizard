@@ -158,3 +158,55 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Ident library: the items, and the head/tail runs they are dropped into */
+.library-hold {
+  width: 70px;
+}
+.library-list {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.library-joins {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px;
+}
+.library-join-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.library-join-items {
+  min-height: 52px;
+  padding: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+.library-join-items.drop-target {
+  background: var(--surface-hover);
+}
+.library-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 6px;
+  margin-bottom: 3px;
+  border-radius: 3px;
+  background: var(--surface-hover);
+  cursor: grab;
+}
+.library-chip-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-join-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 4px;
+}

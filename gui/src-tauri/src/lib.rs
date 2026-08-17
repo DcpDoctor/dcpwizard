@@ -18,6 +18,7 @@ const MAIN_WINDOW_MINIMUM_HEIGHT: f64 = 500.0;
 #[cfg(target_os = "linux")]
 const MAIN_WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 255);
 
+mod library;
 mod pipeline;
 mod timeline;
 
@@ -119,6 +120,10 @@ pub fn run() {
             pipeline::probe_audio_map,
             pipeline::isdcf_name_preview,
             pipeline::create_vf,
+            library::library_list,
+            library::library_add,
+            library::library_remove,
+            library::library_needs_duration,
             timeline::list_cpls,
             timeline::get_timeline,
         ])

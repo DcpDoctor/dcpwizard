@@ -115,6 +115,33 @@
                 </div>
               </section>
 
+              <section class="panel library-panel">
+                <div class="panel-header">
+                  <h2>Ident Library</h2>
+                  <div class="panel-actions">
+                    <select id="library-kind" title="What the next import is filed under">
+                      <option value="head-ident">Head ident</option>
+                      <option value="tail-ident">Tail ident</option>
+                      <option value="rating-card">Rating card</option>
+                      <option value="anti-piracy">Anti-piracy</option>
+                    </select>
+                    <input id="library-hold" type="number" min="0.1" step="0.5" class="library-hold" placeholder="Hold s" title="How long a still image is held, in seconds. A video carries its own length.">
+                    <button id="library-import" class="btn-sm">+ Import</button>
+                  </div>
+                </div>
+                <div id="library-list" class="asset-list library-list"></div>
+                <div class="library-joins">
+                  <div class="library-join" data-placement="head">
+                    <span class="library-join-label">Head: plays before the feature</span>
+                    <div id="library-head-items" class="library-join-items" data-placement="head"></div>
+                  </div>
+                  <div class="library-join" data-placement="tail">
+                    <span class="library-join-label">Tail: plays after the feature</span>
+                    <div id="library-tail-items" class="library-join-items" data-placement="tail"></div>
+                  </div>
+                </div>
+              </section>
+
               <section class="panel compositions-panel">
                 <div class="panel-header">
                   <h2>Compositions (CPLs)</h2>
