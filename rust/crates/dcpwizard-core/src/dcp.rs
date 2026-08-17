@@ -365,20 +365,20 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // Fail early if the essence won't fit: the wrapped MXFs are ~the size of the
     // J2K frames plus audio/atmos, so check that against the output filesystem.
-    let mut required = crate::free_space::path_size(j2k_dir);
+    let mut required = postkit::free_space::path_size(j2k_dir);
     if let Some(dir) = config.right_eye_dir.as_ref() {
-        required += crate::free_space::path_size(dir);
+        required += postkit::free_space::path_size(dir);
     }
     for extra in [config.audio_path.as_ref(), config.atmos_path.as_ref()]
         .into_iter()
         .flatten()
     {
-        required += crate::free_space::path_size(extra);
+        required += postkit::free_space::path_size(extra);
     }
     for item in config.head_items.iter().chain(&config.tail_items) {
-        required += crate::free_space::path_size(&item.media);
+        required += postkit::free_space::path_size(&item.media);
     }
-    if let Err(e) = crate::free_space::check_destination_space(&config.output_dir, required) {
+    if let Err(e) = postkit::free_space::check_destination_space(&config.output_dir, required) {
         tracing::error!("{e}");
         return -1;
     }

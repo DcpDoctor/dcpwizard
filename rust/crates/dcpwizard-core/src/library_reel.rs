@@ -269,17 +269,16 @@ fn encode_item_picture(
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
 
     let rate = postkit::encode::FrameRate::whole(format.fps);
-    if crate::still::is_still(&item.media) {
-        let picture_filter =
-            (!resolved.plan.filters.is_empty()).then(|| resolved.plan.filters.join(","));
-        crate::still::build_still_frames(&crate::still::StillHold {
+    if postkit::still::is_still_image(&item.media) {
+        postkit::still::build_still_frames(&postkit::still::StillHold {
             image: &item.media,
             frames,
             fps: rate,
             width,
             height,
-            picture_filter: picture_filter.as_deref(),
-            route: ITEM_COLOUR_ROUTE,
+            filters: &resolved.plan.filters,
+            apply_xyz_transform: ITEM_COLOUR_ROUTE.compressor_transform(),
+            colour_transform: ITEM_COLOUR_ROUTE.frame_transform()?,
             burn: None,
             out_dir,
         })?;

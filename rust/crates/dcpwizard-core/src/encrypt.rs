@@ -82,7 +82,7 @@ impl KeyBundle {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("cannot serialize keys: {e}"))?;
         // holds raw content keys: atomic_write's tempfile gives it mode 0600
-        crate::store::atomic_write(path, json.as_bytes())
+        postkit::fs::write_atomic(path, json.as_bytes())
     }
 
     pub fn read(path: &Path) -> Result<Self, String> {

@@ -32,9 +32,6 @@ tauri-plugin-opener = "2"
 hound = "3.5"
 tempfile = "3"
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 # dcpwizard-core pulls dcpdoctor-core, which depends on postkit by git. pointing
 # that at the submodule this build already compiles keeps postkit to one compile.
 [patch."https://github.com/PostPerfection/postkit.git"]

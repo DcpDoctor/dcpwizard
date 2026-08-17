@@ -79,7 +79,7 @@ pub fn parse(xml: &str) -> Result<FlmCinema, String> {
                     if b64.split_whitespace().next().is_none() {
                         None
                     } else {
-                        Some(crate::store::der_base64_to_pem(&b64))
+                        Some(postkit::certificate::der_base64_to_pem(&b64))
                     }
                 })
                 .collect();

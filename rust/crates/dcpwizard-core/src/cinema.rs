@@ -4,7 +4,6 @@
 //! so screens can be searched by name or by server certificate serial without
 //! re-parsing every cert. no private key material is ever stored.
 
-use crate::store;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -71,8 +70,8 @@ pub struct Recipient {
 /// read the certificate behind a screen, wherever it lives.
 fn cert_info(cert: &CertSource) -> Result<postkit::certificate::CertInfo, String> {
     match cert {
-        CertSource::Path(p) => store::cert_info_from_file(p),
-        CertSource::Inline(pem) => store::cert_info_from_pem(pem),
+        CertSource::Path(p) => postkit::certificate::cert_info_from_file(p),
+        CertSource::Inline(pem) => postkit::certificate::cert_info_from_pem(pem),
     }
 }
 
@@ -130,7 +129,7 @@ impl CinemaDb {
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_vec_pretty(self).map_err(|e| format!("serialize db: {e}"))?;
-        store::atomic_write(path, &json)
+        postkit::fs::write_atomic(path, &json)
     }
 
     pub fn find(&self, name: &str) -> Option<&Cinema> {
@@ -255,7 +254,7 @@ impl CinemaDb {
             let mut leaf: Option<Screen> = None;
             // skip CA certs in the chain; the recipient is the leaf (non-CA)
             for pem in &fs.cert_pems {
-                if let Ok(info) = store::cert_info_from_pem(pem)
+                if let Ok(info) = postkit::certificate::cert_info_from_pem(pem)
                     && !info.is_ca
                 {
                     leaf = Some(Screen {
@@ -362,7 +361,7 @@ mod tests {
     fn add_search_and_persist_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let cert = leaf_cert(dir.path(), "screen1");
-        let info = store::cert_info_from_file(&cert).unwrap();
+        let info = postkit::certificate::cert_info_from_file(&cert).unwrap();
 
         let db_path = dir.path().join("cinemas.json");
         let mut db = CinemaDb::default();
@@ -445,7 +444,7 @@ mod tests {
         let c = db.find("Real Cinema").unwrap();
         assert_eq!(c.emails, vec!["a@real.test"]);
         assert_eq!(c.screens.len(), 1);
-        let info = store::cert_info_from_file(&cert).unwrap();
+        let info = postkit::certificate::cert_info_from_file(&cert).unwrap();
         // the leaf's cached serial matches the source cert, and it is stored inline
         assert_eq!(c.screens[0].cert_serial, info.serial);
         assert!(matches!(c.screens[0].cert, CertSource::Inline(_)));
@@ -499,7 +498,7 @@ mod tests {
     fn loading_an_old_db_recomputes_the_cached_certificate_fields() {
         let dir = tempfile::tempdir().unwrap();
         let cert = leaf_cert(dir.path(), "screen1");
-        let info = store::cert_info_from_file(&cert).unwrap();
+        let info = postkit::certificate::cert_info_from_file(&cert).unwrap();
         let db_path = dir.path().join("cinemas.json");
         db_with_stale_cache(CertSource::Path(cert))
             .save(&db_path)
@@ -563,7 +562,7 @@ mod tests {
     fn an_unwritable_store_still_loads_and_searches() {
         let dir = tempfile::tempdir().unwrap();
         let cert = leaf_cert(dir.path(), "screen1");
-        let info = store::cert_info_from_file(&cert).unwrap();
+        let info = postkit::certificate::cert_info_from_file(&cert).unwrap();
         let store_dir = dir.path().join("readonly");
         std::fs::create_dir(&store_dir).unwrap();
         let db_path = store_dir.join("cinemas.json");

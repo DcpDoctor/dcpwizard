@@ -633,7 +633,7 @@ pub async fn submit_job(
     let still_length_frames = duration_frames(still_length.as_deref(), "Still length")?;
 
     let video = PathBuf::from(&video_path);
-    let still_input = dcpwizard_core::still::is_still(&video);
+    let still_input = postkit::still::is_still_image(&video);
     if still_input && still_length_frames == 0 {
         return Err("The video is a single image and has no length: set a still length".into());
     }
@@ -661,7 +661,7 @@ pub async fn submit_job(
     let upmix = parse_upmixer(upmix.as_deref())?;
 
     let (flip_horizontal, flip_vertical) =
-        dcpwizard_core::source_picture::parse_flip(flip.as_deref().unwrap_or_default())?;
+        postkit::picture_processing::parse_flip(flip.as_deref().unwrap_or_default())?;
     let picture = dcpwizard_core::source_picture::SourcePictureOptions {
         crop: postkit::picture_processing::Crop {
             left: crop_left.unwrap_or(0),
@@ -672,7 +672,7 @@ pub async fn submit_job(
         fill_crop: fill_crop.unwrap_or(false),
         deinterlace: deinterlace.unwrap_or(false),
         denoise: denoise.unwrap_or(false),
-        rotation: dcpwizard_core::source_picture::parse_rotation(
+        rotation: postkit::picture_processing::parse_rotation(
             rotate.as_deref().unwrap_or_default(),
         )?,
         flip_horizontal,
@@ -1090,7 +1090,7 @@ pub async fn detect_source_crop(
         &dcpwizard_core::source_picture::SourcePictureOptions {
             auto_crop: true,
             auto_crop_threshold: threshold
-                .unwrap_or(dcpwizard_core::source_picture::DEFAULT_AUTO_CROP_THRESHOLD),
+                .unwrap_or(postkit::picture_processing::DEFAULT_AUTO_CROP_THRESHOLD),
             ..dcpwizard_core::source_picture::SourcePictureOptions::default()
         },
         &source,
@@ -1178,7 +1178,7 @@ pub async fn disk_space(path: String) -> Result<DiskSpace, String> {
             None => return Err(format!("no existing folder above {path}")),
         }
     }
-    let (free, total) = dcpwizard_core::free_space::volume_bytes(&dir)
+    let (free, total) = postkit::free_space::volume_bytes(&dir)
         .map_err(|e| format!("Could not read free space: {e}"))?;
     Ok(DiskSpace {
         free_bytes: free,
@@ -1913,15 +1913,16 @@ fn encode_still(
 ) -> Result<postkit::pipeline::EncodeResult, String> {
     let started = std::time::Instant::now();
     let j2k_dir = output.join("j2k");
-    let filter = (!picture.plan.filters.is_empty()).then(|| picture.plan.filters.join(","));
-    dcpwizard_core::still::build_still_frames(&dcpwizard_core::still::StillHold {
+    let route = dcpwizard_core::encode::xyz_route(job.source_colourspace)?;
+    postkit::still::build_still_frames(&postkit::still::StillHold {
         image: &job.video_path,
         frames: job.still_length_frames,
         fps,
         width: picture.encode_width,
         height: picture.encode_height,
-        picture_filter: filter.as_deref(),
-        route: dcpwizard_core::encode::xyz_route(job.source_colourspace)?,
+        filters: &picture.plan.filters,
+        apply_xyz_transform: route.compressor_transform(),
+        colour_transform: route.frame_transform()?,
         burn: job_subtitle_burn(job, fps)?,
         out_dir: &j2k_dir,
     })?;

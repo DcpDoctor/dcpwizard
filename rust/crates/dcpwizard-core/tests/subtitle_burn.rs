@@ -7,9 +7,9 @@
 //! package, and that the appearance flags reach the pixels.
 
 use dcpwizard_core::dcp::{DcpConfig, create_dcp};
-use dcpwizard_core::still::StillHold;
 use dcpwizard_core::subtitle::{check_burn_supported, prepare_subtitle_burn};
 use postkit::encode::FrameRate;
+use postkit::still::StillHold;
 use postkit::subtitle_raster::BurnStyleOverrides;
 use std::path::Path;
 
@@ -140,14 +140,15 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
     // frames 24, 48 and 72, so four distinct frames are encoded.
     let held_frames = 3 * FPS.numerator as u64;
     let j2k = dir.path().join("j2k");
-    dcpwizard_core::still::build_still_frames(&StillHold {
+    postkit::still::build_still_frames(&StillHold {
         image: &card,
         frames: held_frames,
         fps: FPS,
         width: W,
         height: H,
-        picture_filter: None,
-        route: dcpwizard_core::encode::XyzRoute::CompressorTransform,
+        filters: &[],
+        apply_xyz_transform: true,
+        colour_transform: None,
         burn: Some(burn),
         out_dir: &j2k,
     })
@@ -318,14 +319,15 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
 
     // the first cue runs 0-1s, so every frame of this hold carries it
     let j2k = dir.path().join("j2k");
-    dcpwizard_core::still::build_still_frames(&StillHold {
+    postkit::still::build_still_frames(&StillHold {
         image: &card,
         frames: 2,
         fps: FPS,
         width: W,
         height: H,
-        picture_filter: None,
-        route: dcpwizard_core::encode::XyzRoute::CompressorTransform,
+        filters: &[],
+        apply_xyz_transform: true,
+        colour_transform: None,
         burn: Some(burn),
         out_dir: &j2k,
     })

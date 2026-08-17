@@ -4,7 +4,6 @@
 //! expansion yields absolute ISO timestamps that flow through kdm::generate_kdm
 //! unchanged, keeping the same utc-offset behaviour as the kdm module.
 
-use crate::store;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -69,7 +68,7 @@ impl TemplateStore {
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_vec_pretty(self).map_err(|e| format!("serialize: {e}"))?;
-        store::atomic_write(path, &json)
+        postkit::fs::write_atomic(path, &json)
     }
 
     pub fn get(&self, name: &str) -> Option<&Template> {

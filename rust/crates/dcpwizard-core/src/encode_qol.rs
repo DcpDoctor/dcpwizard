@@ -173,7 +173,7 @@ impl EncodeState {
     /// Write the state next to the encode output (atomic).
     pub fn save(&self, output_dir: &Path) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        crate::store::atomic_write(&Self::path(output_dir), &bytes)
+        postkit::fs::write_atomic(&Self::path(output_dir), &bytes)
     }
 
     /// Load a previously saved state, if any.

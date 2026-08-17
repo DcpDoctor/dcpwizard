@@ -603,8 +603,9 @@ struct CreatePictureOpts {
 
 impl CreatePictureOpts {
     fn resolve(&self) -> Result<dcpwizard_core::source_picture::SourcePictureOptions, String> {
-        use dcpwizard_core::source_picture::{
-            DEFAULT_AUTO_CROP_THRESHOLD, SourcePictureOptions, parse_flip, parse_rotation,
+        use dcpwizard_core::source_picture::SourcePictureOptions;
+        use postkit::picture_processing::{
+            DEFAULT_AUTO_CROP_THRESHOLD, parse_flip, parse_rotation,
         };
         let (flip_horizontal, flip_vertical) =
             parse_flip(self.flip.as_deref().unwrap_or_default())?;
@@ -2349,7 +2350,7 @@ fn still_picture(
     image: &Path,
     picture_options: &dcpwizard_core::source_picture::SourcePictureOptions,
     geometry: &dcpwizard_core::source_picture::EncodeGeometry,
-) -> Result<(u32, u32, Option<String>), String> {
+) -> Result<(u32, u32, Vec<String>), String> {
     let info = dcpwizard_core::probe::probe_video(image)
         .ok_or_else(|| format!("cannot read the size of {}", image.display()))?;
     let resolved = dcpwizard_core::source_picture::resolve_picture(
@@ -2364,7 +2365,7 @@ fn still_picture(
     Ok((
         resolved.encode_width,
         resolved.encode_height,
-        join_decode_filters(&resolved.plan.filters, None),
+        resolved.plan.filters,
     ))
 }
 
@@ -3750,7 +3751,7 @@ fn run() {
             // codestream directory, and it is the only one with no length of its
             // own, so the hold has to be asked for and cannot be asked for
             // anywhere else.
-            let still_input = dcpwizard_core::still::is_still(&video_path);
+            let still_input = postkit::still::is_still_image(&video_path);
             // a codestream directory is picture that is already encoded: no
             // transform runs over it, so a colour space here would be ignored
             if !is_video_file && !still_input {
@@ -4570,7 +4571,7 @@ fn run() {
 
                 // a still becomes a codestream directory here: one encode, then
                 // the codestream linked for every frame of the hold
-                let still_j2k_dir = output_dir.join("j2k_still");
+                let still_j2k_dir = output_dir.join(postkit::still::HELD_PICTURE_DIR);
                 let source_j2k_dir = if still_input {
                     let spec = still_length.as_deref().unwrap_or_default();
                     let frames = match dcpwizard_core::pad::parse_pad_frames(spec, fps) {
@@ -4586,7 +4587,7 @@ fn run() {
                             std::process::exit(1);
                         }
                     };
-                    let (width, height, picture_filter) = match still_picture(
+                    let (width, height, still_filters) = match still_picture(
                         &video_path,
                         &picture_options,
                         &encode_geometry(twok, fourk, (container_width, container_height)),
@@ -4598,19 +4599,25 @@ fn run() {
                         }
                     };
                     let _ = std::fs::create_dir_all(&output_dir);
-                    if let Err(e) = dcpwizard_core::still::build_still_frames(
-                        &dcpwizard_core::still::StillHold {
-                            image: &video_path,
-                            frames,
-                            fps: postkit::encode::FrameRate::whole(fps),
-                            width,
-                            height,
-                            picture_filter: picture_filter.as_deref(),
-                            route: xyz_route,
-                            burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
-                            out_dir: &still_j2k_dir,
-                        },
-                    ) {
+                    let colour_transform = match xyz_route.frame_transform() {
+                        Ok(transform) => transform,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    if let Err(e) = postkit::still::build_still_frames(&postkit::still::StillHold {
+                        image: &video_path,
+                        frames,
+                        fps: postkit::encode::FrameRate::whole(fps),
+                        width,
+                        height,
+                        filters: &still_filters,
+                        apply_xyz_transform: xyz_route.compressor_transform(),
+                        colour_transform,
+                        burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
+                        out_dir: &still_j2k_dir,
+                    }) {
                         tracing::error!("{e}");
                         std::process::exit(1);
                     }

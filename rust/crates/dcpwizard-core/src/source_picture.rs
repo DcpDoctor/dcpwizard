@@ -2,38 +2,17 @@
 //! crop, black-border detection, deinterlace, denoise, rotate, flip, and fitting
 //! the result onto the raster the CPL will declare.
 //!
-//! The arithmetic and the ffmpeg filters live in postkit. This resolves the
-//! flags a caller was given into one [`postkit::picture_processing::PictureProcessing`],
-//! so the CLI and the GUI cannot disagree about what a crop means.
+//! The arithmetic, the ffmpeg filters and the crop resolution live in postkit.
+//! This resolves the flags a caller was given into one
+//! [`postkit::picture_processing::PictureProcessing`], so the CLI and the GUI
+//! cannot disagree about what a crop means.
 
 use std::path::Path;
 
-use postkit::encode::DecodeSource;
 use postkit::picture_processing::{
-    Crop, Fit, PicturePlan, PictureProcessing, Rotation, detect_black_borders,
+    Crop, DEFAULT_AUTO_CROP_THRESHOLD, Fit, PicturePlan, PictureProcessing, Rotation, detect_crop,
+    fill_crop, require_one_crop_decider,
 };
-
-/// Black level auto-crop reads as border, as a fraction of full scale. This is
-/// DCP-o-matic's default.
-pub const DEFAULT_AUTO_CROP_THRESHOLD: f32 = 0.1;
-
-/// Frames spread over the content that auto-crop measures. Enough that one dark
-/// shot cannot crop away picture the rest of the reel has.
-const AUTO_CROP_SAMPLE_COUNT: u32 = 8;
-
-/// Frame rate written into the concat list auto-crop hands ffmpeg for an image
-/// sequence. It only spreads the samples over the list, so any rate serves.
-const IMAGE_LIST_FRAME_RATE: u32 = 24;
-
-const ROTATION_NONE: &str = "none";
-const ROTATION_CLOCKWISE_90: &str = "90";
-const ROTATION_HALF: &str = "180";
-const ROTATION_COUNTER_CLOCKWISE_90: &str = "270";
-
-const FLIP_NONE: &str = "none";
-const FLIP_HORIZONTAL: &str = "horizontal";
-const FLIP_VERTICAL: &str = "vertical";
-const FLIP_BOTH: &str = "both";
 
 /// What the caller asked for. Crops are source pixels, taken before any
 /// rotation, which is the orientation the source is stored in.
@@ -113,31 +92,21 @@ pub fn resolve_picture(
     geometry: &EncodeGeometry,
     is_image_sequence: bool,
 ) -> Result<ResolvedPicture, String> {
-    if options.auto_crop && options.fill_crop {
-        return Err(
-            "--auto-crop cuts off the source's own black borders and --fill-crop cuts \
-                    it to the container aspect: pass one or the other"
-                .to_string(),
-        );
-    }
-    if !options.crop.is_none() && options.auto_crop {
-        return Err(
-            "--crop-left/--crop-right/--crop-top/--crop-bottom and --auto-crop both \
-                    decide what to cut off: pass one or the other"
-                .to_string(),
-        );
-    }
-    if !options.crop.is_none() && options.fill_crop {
-        return Err(
-            "--crop-left/--crop-right/--crop-top/--crop-bottom and --fill-crop both \
-                    decide what to cut off: pass one or the other"
-                .to_string(),
-        );
-    }
+    require_one_crop_decider(
+        !options.crop.is_none(),
+        options.auto_crop,
+        options.fill_crop,
+    )?;
 
     let fit_box = geometry.container.or(geometry.forced_raster);
     let crop = match (options.auto_crop, options.fill_crop, fit_box) {
-        (true, _, _) => detect_crop(source, options.auto_crop_threshold, is_image_sequence)?,
+        (true, _, _) => detect_crop(
+            source,
+            options.auto_crop_threshold,
+            is_image_sequence,
+            source_width,
+            source_height,
+        )?,
         (_, true, Some(box_size)) => {
             fill_crop(source_width, source_height, box_size, options.rotation)
         }
@@ -189,88 +158,6 @@ pub fn check_precompressed_picture(options: &SourcePictureOptions) -> Result<(),
         "J2K input is already compressed, so there are no frames to crop, rotate or fit: \
          encode from the source picture instead"
             .to_string(),
-    )
-}
-
-/// Parse a clockwise rotation: `none`, `90`, `180` or `270`.
-pub fn parse_rotation(spec: &str) -> Result<Rotation, String> {
-    match spec.trim().to_lowercase().as_str() {
-        "" | ROTATION_NONE => Ok(Rotation::None),
-        ROTATION_CLOCKWISE_90 => Ok(Rotation::Clockwise90),
-        ROTATION_HALF => Ok(Rotation::Half),
-        ROTATION_COUNTER_CLOCKWISE_90 => Ok(Rotation::CounterClockwise90),
-        other => Err(format!(
-            "unknown rotation '{other}' (use {ROTATION_CLOCKWISE_90}, {ROTATION_HALF} or \
-             {ROTATION_COUNTER_CLOCKWISE_90} degrees clockwise)"
-        )),
-    }
-}
-
-/// Parse a flip into (horizontal, vertical): `none`, `horizontal`, `vertical`
-/// or `both`.
-pub fn parse_flip(spec: &str) -> Result<(bool, bool), String> {
-    match spec.trim().to_lowercase().as_str() {
-        "" | FLIP_NONE => Ok((false, false)),
-        FLIP_HORIZONTAL => Ok((true, false)),
-        FLIP_VERTICAL => Ok((false, true)),
-        FLIP_BOTH => Ok((true, true)),
-        other => Err(format!(
-            "unknown flip '{other}' (use {FLIP_HORIZONTAL}, {FLIP_VERTICAL} or {FLIP_BOTH})"
-        )),
-    }
-}
-
-/// The centred crop that brings the source to the fit box's aspect. A quarter
-/// turn happens after the crop, so the box's aspect is wanted the other way
-/// round.
-fn fill_crop(
-    source_width: u32,
-    source_height: u32,
-    (box_width, box_height): (u32, u32),
-    rotation: Rotation,
-) -> Crop {
-    let (aspect_width, aspect_height) = match rotation {
-        Rotation::Clockwise90 | Rotation::CounterClockwise90 => (box_height, box_width),
-        Rotation::None | Rotation::Half => (box_width, box_height),
-    };
-    Crop::to_aspect(source_width, source_height, aspect_width, aspect_height)
-}
-
-/// Measure the black borders around the content. An image sequence has no
-/// container ffmpeg can seek, so it is measured through a concat list, the same
-/// way the encode decodes one.
-fn detect_crop(source: &Path, threshold: f32, is_image_sequence: bool) -> Result<Crop, String> {
-    if !is_image_sequence {
-        return detect_black_borders(
-            source,
-            DecodeSource::Video,
-            threshold,
-            AUTO_CROP_SAMPLE_COUNT,
-        );
-    }
-    let directory = if source.is_dir() {
-        source.to_path_buf()
-    } else {
-        source.parent().unwrap_or(source).to_path_buf()
-    };
-    let frames = postkit::encode::find_source_frames(&directory)
-        .map_err(|e| format!("cannot list {}: {e}", directory.display()))?;
-    if frames.is_empty() {
-        return Err(format!("no images in {}", directory.display()));
-    }
-    let list_dir = tempfile::tempdir()
-        .map_err(|e| format!("cannot create a working directory for auto-crop: {e}"))?;
-    let list = list_dir.path().join("frames.ffconcat");
-    postkit::encode::write_image_concat_list(
-        &frames,
-        postkit::encode::FrameRate::whole(IMAGE_LIST_FRAME_RATE),
-        &list,
-    )?;
-    detect_black_borders(
-        &list,
-        DecodeSource::ImageList,
-        threshold,
-        AUTO_CROP_SAMPLE_COUNT,
     )
 }
 
@@ -465,7 +352,7 @@ mod tests {
         ] {
             let error = resolve(&options, &geometry).unwrap_err();
             assert!(
-                error.contains("one or the other"),
+                error.contains("give only one of them"),
                 "{label} must be refused by name: {error}"
             );
         }
@@ -516,20 +403,5 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.contains("already compressed"), "{error}");
-    }
-
-    #[test]
-    fn every_rotation_and_flip_has_a_spelling_and_a_typo_does_not() {
-        assert_eq!(parse_rotation("none").unwrap(), Rotation::None);
-        assert_eq!(parse_rotation("90").unwrap(), Rotation::Clockwise90);
-        assert_eq!(parse_rotation("180").unwrap(), Rotation::Half);
-        assert_eq!(parse_rotation("270").unwrap(), Rotation::CounterClockwise90);
-        assert!(parse_rotation("45").is_err());
-
-        assert_eq!(parse_flip("none").unwrap(), (false, false));
-        assert_eq!(parse_flip("horizontal").unwrap(), (true, false));
-        assert_eq!(parse_flip("vertical").unwrap(), (false, true));
-        assert_eq!(parse_flip("both").unwrap(), (true, true));
-        assert!(parse_flip("sideways").is_err());
     }
 }

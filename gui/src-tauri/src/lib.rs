@@ -22,63 +22,10 @@ mod library;
 mod pipeline;
 mod timeline;
 
-#[cfg(unix)]
-fn fork_terminal_guard() {
-    unsafe {
-        if libc::isatty(libc::STDIN_FILENO) == 0 {
-            return;
-        }
-
-        let mut saved: libc::termios = std::mem::zeroed();
-        libc::tcgetattr(libc::STDIN_FILENO, &mut saved);
-
-        let pid = libc::fork();
-        if pid < 0 {
-            return;
-        }
-        if pid > 0 {
-            let mut status: libc::c_int = 0;
-            libc::waitpid(pid, &mut status, 0);
-            libc::usleep(100_000);
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &saved);
-            libc::system(c"stty sane 2>/dev/null".as_ptr());
-            let exit_code = if libc::WIFEXITED(status) {
-                libc::WEXITSTATUS(status)
-            } else {
-                1
-            };
-            std::process::exit(exit_code);
-        }
-        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
-        if devnull >= 0 {
-            libc::dup2(devnull, libc::STDIN_FILENO);
-            libc::close(devnull);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
-    let window = tauri::window::WindowBuilder::new(app, MAIN_WINDOW_LABEL)
-        .title(MAIN_WINDOW_TITLE)
-        .inner_size(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
-        .min_inner_size(MAIN_WINDOW_MINIMUM_WIDTH, MAIN_WINDOW_MINIMUM_HEIGHT)
-        .background_color(MAIN_WINDOW_BACKGROUND)
-        .build()?;
-    let size = window.inner_size()?;
-    let webview = tauri::webview::WebviewBuilder::new(
-        MAIN_WEBVIEW_LABEL,
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .background_color(MAIN_WINDOW_BACKGROUND);
-    window.add_child(webview, tauri::LogicalPosition::new(0, 0), size)?;
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(unix)]
-    fork_terminal_guard();
+    guikit::startup::fork_terminal_guard();
 
     let job_queue = pipeline::JobQueue::new();
 
@@ -129,7 +76,19 @@ pub fn run() {
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
-            create_main_window(app)?;
+            guikit::startup::create_main_window(
+                app,
+                &guikit::startup::MainWindow {
+                    label: MAIN_WINDOW_LABEL,
+                    webview_label: MAIN_WEBVIEW_LABEL,
+                    title: MAIN_WINDOW_TITLE,
+                    width: MAIN_WINDOW_WIDTH,
+                    height: MAIN_WINDOW_HEIGHT,
+                    minimum_width: MAIN_WINDOW_MINIMUM_WIDTH,
+                    minimum_height: MAIN_WINDOW_MINIMUM_HEIGHT,
+                    background: MAIN_WINDOW_BACKGROUND,
+                },
+            )?;
             app.manage(guikit::preview::create_player(app, MAIN_WINDOW_LABEL));
             Ok(())
         })

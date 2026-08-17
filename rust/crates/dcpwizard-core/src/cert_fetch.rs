@@ -16,7 +16,6 @@
 //!   gdc:      ftp://ftp.gdc-tech.com/SHA256/<serial>.crt.pem
 //!   barco:    sftp://certificates.barco.com/<serial[0:7]>xxx/<serial>/Barco-ICMP...
 
-use crate::store;
 use std::path::Path;
 use std::process::Command;
 
@@ -288,8 +287,8 @@ pub fn fetch(
             "this vendor needs a vendor account; pass --user and --password".to_string()
         })?;
         let pem = fetch_credentialed(vendor, serial, creds)?;
-        let info = store::cert_info_from_pem(&pem)?;
-        store::atomic_write(out, pem.as_bytes())?;
+        let info = postkit::certificate::cert_info_from_pem(&pem)?;
+        postkit::fs::write_atomic(out, pem.as_bytes())?;
         return Ok(format!("{} / {}", info.subject_cn, info.serial));
     }
 
@@ -329,8 +328,8 @@ pub fn fetch(
     let bytes = curl(&format!("{dir_url}{file}"), false)?;
     let pem = String::from_utf8_lossy(&bytes).to_string();
     // untrusted download: must parse as X.509 before we store it.
-    let info = store::cert_info_from_pem(&pem)?;
-    store::atomic_write(out, pem.as_bytes())?;
+    let info = postkit::certificate::cert_info_from_pem(&pem)?;
+    postkit::fs::write_atomic(out, pem.as_bytes())?;
     Ok(format!("{} / {}", info.subject_cn, info.serial))
 }
 

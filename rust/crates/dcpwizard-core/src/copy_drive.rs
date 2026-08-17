@@ -45,7 +45,7 @@ pub fn copy_to_drive(dcp_dir: &Path, target_dir: &Path) -> i32 {
         .filter_map(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .sum();
-    if let Err(e) = crate::free_space::check_destination_space(&dest, required) {
+    if let Err(e) = postkit::free_space::check_destination_space(&dest, required) {
         tracing::error!("{e}");
         return -1;
     }

@@ -66,7 +66,7 @@ pub async fn library_remove(name: String) -> Result<(), String> {
 /// Whether a file the panel is about to import needs a hold duration asked for.
 #[tauri::command]
 pub async fn library_needs_duration(file: String) -> bool {
-    dcpwizard_core::still::is_still(std::path::Path::new(&file))
+    postkit::still::is_still_image(std::path::Path::new(&file))
 }
 
 #[cfg(test)]

@@ -201,7 +201,7 @@ impl Library {
         };
         let json = serde_json::to_string_pretty(&index)
             .map_err(|e| format!("cannot serialise the library index: {e}"))?;
-        crate::store::atomic_write(&self.index_path(), json.as_bytes())
+        postkit::fs::write_atomic(&self.index_path(), json.as_bytes())
     }
 
     /// Copy `source` into the library under `name`.
@@ -237,7 +237,7 @@ impl Library {
                 )
             })?;
 
-        let still = crate::still::is_still(source);
+        let still = postkit::still::is_still_image(source);
         if !still && hold_seconds.is_some() {
             return Err(format!(
                 "{} is a video and carries its own length: a hold applies to a still image",

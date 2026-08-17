@@ -402,7 +402,7 @@ fn create_refuses_two_ways_of_choosing_a_crop() {
     create_with(&dir, &video, &["--twok", "--fill-crop", "--auto-crop"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("one or the other"));
+        .stdout(predicate::str::contains("give only one of them"));
     create_with(
         &dir,
         &video,
@@ -410,7 +410,7 @@ fn create_refuses_two_ways_of_choosing_a_crop() {
     )
     .assert()
     .failure()
-    .stdout(predicate::str::contains("one or the other"));
+    .stdout(predicate::str::contains("give only one of them"));
 }
 
 #[test]
