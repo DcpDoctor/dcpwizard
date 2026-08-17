@@ -471,6 +471,7 @@ fn encode_tiffs(tiff_dir: &Path, out_dir: &Path, ratio: f64, fps: u32) -> bool {
         &params,
         total,
         &cancel,
+        &Arc::new(grok_encoder::PhaseClocks::default()),
         || {
             let (idx, path) = iter.next()?;
             match crate::grok::load_tiff(&path) {

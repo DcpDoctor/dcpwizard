@@ -137,6 +137,7 @@ pub fn generate_solid_frame(
         &params,
         1,
         &cancel,
+        &Arc::new(grok_encoder::PhaseClocks::default()),
         || {
             if produced {
                 return None;

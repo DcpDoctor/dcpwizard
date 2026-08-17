@@ -191,6 +191,7 @@ pub fn encode_j2k(config: &EncodeConfig) -> i32 {
         &params,
         total_frames,
         &cancel,
+        &Arc::new(grok_encoder::PhaseClocks::default()),
         || {
             let (idx, path) = frame_iter.next()?;
             match grok::load_tiff(&path) {
