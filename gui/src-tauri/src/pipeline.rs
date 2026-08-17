@@ -2104,9 +2104,11 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         fps: encode_fps,
         read_source_at: conform.read_source_at,
         source_colour: job.source_colour.clone(),
-        codestream_byte_cap: job
-            .hdr_dci
-            .then(|| dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)),
+        codestream_byte_cap: Some(if job.hdr_dci {
+            dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)
+        } else {
+            postkit::j2k::dci_codestream_byte_cap(fps_num)
+        }),
         subtitle_burn: job_subtitle_burn(job, encode_fps)?,
         picture: resolved_picture.processing.clone(),
     };

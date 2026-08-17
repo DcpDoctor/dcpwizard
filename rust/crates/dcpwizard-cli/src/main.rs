@@ -4674,6 +4674,25 @@ fn run() {
             } else {
                 tracing::info!("Encoded {} frames", result.frames_encoded);
 
+                let cap = postkit::j2k::dci_codestream_byte_cap(fps);
+                let over_cap: Vec<(String, u64)> = std::fs::read_dir(&j2k_dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter_map(|entry| {
+                        let len = entry.metadata().ok()?.len();
+                        (len > cap).then(|| (entry.file_name().to_string_lossy().into_owned(), len))
+                    })
+                    .collect();
+                if !over_cap.is_empty() {
+                    let worst = over_cap.iter().map(|(_, len)| *len).max().unwrap_or(0);
+                    tracing::error!(
+                        "{} frames exceed the DCI cap of {cap} bytes at {fps} fps (largest {worst}); the package would fail QC",
+                        over_cap.len()
+                    );
+                    std::process::exit(1);
+                }
+
                 // Auto-demux audio from video if --audio not provided
                 let audio_path = if let Some(a) = audio {
                     Some(PathBuf::from(a))
