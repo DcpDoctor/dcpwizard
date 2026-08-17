@@ -364,7 +364,8 @@ dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav \
 # Closed captions (ST 429-12): an accessibility track with a MainClosedCaption
 # CPL role, distinct from open --subtitle. Same input formats. Carried through
 # every CPL path: single-reel, reel splitting, versions (a `ccap` manifest field),
-# and VF (--add-ccap/--replace-ccap REEL=PATH).
+# and VF (--add-ccap/--replace-ccap REEL=PATH). Written as ST 429-12
+# <tt:ClosedCaption>, the element that namespace declares.
 dcpwizard create --title "My Film" --video movie.mov \
     --output ./dcp --ccap captions.srt --ccap-language en
 

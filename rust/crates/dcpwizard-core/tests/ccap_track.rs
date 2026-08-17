@@ -1,4 +1,4 @@
-//! Closed-caption (ST 429-12, MainClosedCaption CPL role) across the multi-reel,
+//! Closed-caption (ST 429-12 ClosedCaption CPL role) across the multi-reel,
 //! versions, and VF packaging paths. Mirrors the subtitle-path tests: build small
 //! real packages and assert the CCAP track lands in the CPL and ships an MXF.
 
@@ -10,6 +10,12 @@ use std::path::Path;
 const FPS: u32 = 24;
 const W: u32 = 2048;
 const H: u32 = 1080;
+
+/// The opening tag a SMPTE closed caption is written with: ST 429-12 declares
+/// the element in its own namespace, which is the only thing 429-7's AssetList
+/// accepts after MainSubtitle.
+const CCAP_OPEN_TAG: &str =
+    "<tt:ClosedCaption xmlns:tt=\"http://www.smpte-ra.org/schemas/429-12/2008/TT\">";
 
 fn make_content_frames(dir: &Path, count: usize) {
     std::fs::create_dir_all(dir).unwrap();
@@ -74,7 +80,7 @@ fn mxf_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-// Reel splitting must emit a MainClosedCaption per reel, alongside the picture.
+// Reel splitting must emit a ClosedCaption per reel, alongside the picture.
 #[test]
 fn multi_reel_carries_closed_captions() {
     let root = tempfile::tempdir().unwrap();
@@ -114,18 +120,35 @@ fn multi_reel_carries_closed_captions() {
     let reels = cpl.matches("<Reel>").count();
     assert_eq!(reels, 2, "split into two reels");
     assert_eq!(
-        cpl.matches("<MainClosedCaption>").count(),
+        cpl.matches(CCAP_OPEN_TAG).count(),
         2,
-        "each reel carries a MainClosedCaption"
+        "each reel carries a ClosedCaption in the 429-12 namespace:\n{cpl}"
+    );
+    assert!(
+        cpl.contains("<tt:Language>en</tt:Language>"),
+        "ST 429-12 qualifies the caption Language:\n{cpl}"
     );
     let ccap_mxfs = mxf_names(&out)
         .into_iter()
         .filter(|n| n.starts_with("ccap_"))
         .count();
     assert_eq!(ccap_mxfs, 2, "one ccap MXF per reel");
+
+    // the 429-7 AssetList only allows a foreign-namespace element there, so the
+    // caption in the CPL's own namespace used to be a schema violation
+    let verified = dcpwizard_core::verify::verify_dcp(&out);
+    let schema_errors: Vec<&String> = verified
+        .errors
+        .iter()
+        .filter(|e| e.contains("xml_schema_violation"))
+        .collect();
+    assert!(
+        schema_errors.is_empty(),
+        "a captioned CPL must validate: {schema_errors:?}"
+    );
 }
 
-// A version with a ccap track emits MainClosedCaption in its CPL.
+// A version with a ccap track emits a ClosedCaption in its CPL.
 #[test]
 fn version_carries_closed_captions() {
     let root = tempfile::tempdir().unwrap();
@@ -159,8 +182,8 @@ fn version_carries_closed_captions() {
 
     let cpl = read_cpls(&out).pop().expect("one version CPL");
     assert!(
-        cpl.contains("<MainClosedCaption>"),
-        "version CPL carries a MainClosedCaption"
+        cpl.contains(CCAP_OPEN_TAG),
+        "version CPL carries a ClosedCaption:\n{cpl}"
     );
 }
 
@@ -207,8 +230,8 @@ fn vf_adds_closed_caption_track() {
 
     let cpl = read_cpls(&vf).pop().expect("VF CPL");
     assert!(
-        cpl.contains("<MainClosedCaption>"),
-        "VF CPL carries a MainClosedCaption"
+        cpl.contains(CCAP_OPEN_TAG),
+        "VF CPL carries a ClosedCaption:\n{cpl}"
     );
     let ccap_mxfs: Vec<String> = mxf_names(&vf)
         .into_iter()

@@ -321,7 +321,7 @@ struct CreateSubtitleOpts {
     /// whole frames (default a twelfth of a second)
     #[arg(long)]
     subtitle_fade_down: Option<u64>,
-    /// Closed-caption (ST 429-12) input, wrapped with a MainClosedCaption role
+    /// Closed-caption (ST 429-12) input, wrapped with a ClosedCaption role
     /// (accessibility track, distinct from --subtitle). SRT/styled or SMPTE DCST.
     #[arg(long, conflicts_with = "versions")]
     ccap: Option<String>,

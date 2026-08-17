@@ -29,7 +29,7 @@ pub struct ReplacementReel {
     /// unchanged). Both --add-subtitle and --replace-subtitle land here.
     pub subtitle: Option<PathBuf>,
     /// Closed caption to add or replace on this reel. Same input formats as
-    /// `subtitle`; emitted under the MainClosedCaption CPL role.
+    /// `subtitle`; emitted under the ST 429-12 ClosedCaption role.
     #[serde(default)]
     pub ccap: Option<PathBuf>,
 }
@@ -193,7 +193,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
             None => None,
         };
 
-        // Closed caption: same handling, emitted under the MainClosedCaption role.
+        // Closed caption: same handling, emitted under the ST 429-12 ClosedCaption role.
         let ccap = match rep.and_then(|r| r.ccap.as_ref()) {
             Some(input) => {
                 let Some(a) = prepare_timed_text(

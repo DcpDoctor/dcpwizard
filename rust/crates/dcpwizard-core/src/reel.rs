@@ -395,7 +395,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     };
 
     // closed captions: same timed-text machinery as the open subtitle, but each
-    // reel's track is emitted under the MainClosedCaption CPL role.
+    // reel's track is emitted under the ST 429-12 ClosedCaption role.
     let ccap_plan = match config.ccap_path.as_ref().filter(|p| p.exists()) {
         Some(path) => match crate::subtitle::plan_reel_subtitles(
             path,

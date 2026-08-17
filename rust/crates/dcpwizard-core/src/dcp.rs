@@ -44,7 +44,7 @@ pub struct DcpConfig {
     #[serde(default)]
     pub subtitle_opts: crate::subtitle::SubtitleOptions,
     /// Closed-caption (ST 429-12) input, wrapped as timed text with a
-    /// MainClosedCaption CPL role. Distinct from the open `subtitle_path`; same
+    /// ST 429-12 ClosedCaption CPL role. Distinct from the open `subtitle_path`; same
     /// input formats (SRT/styled -> DCST, or a supplied SMPTE DCST passthrough).
     #[serde(default)]
     pub ccap_path: Option<PathBuf>,

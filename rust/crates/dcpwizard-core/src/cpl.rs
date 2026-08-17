@@ -146,7 +146,7 @@ pub struct CplReel {
     #[serde(default)]
     pub subtitle_key_id: Option<String>,
     /// Bare UUID of the closed-caption (ST 429-12) timed-text track, when present.
-    /// Distinct from the open subtitle: emitted as MainClosedCaption.
+    /// Distinct from the open subtitle: emitted as ST 429-12 ClosedCaption.
     #[serde(default)]
     pub ccap_id: Option<String>,
     #[serde(default)]
@@ -382,6 +382,9 @@ const NS_STEREO_429_10: &str =
     "http://www.smpte-ra.org/schemas/429-10/2008/Main-Stereo-Picture-CPL";
 /// Dolby auxiliary-data (ST 429-18) namespace used by real Atmos DCPs.
 const NS_AUX_DATA: &str = "http://www.dolby.com/schemas/2012/AD";
+/// ST 429-12 (2008) timed-text namespace, which is where a SMPTE closed caption
+/// sits.
+const NS_TIMED_TEXT_429_12: &str = "http://www.smpte-ra.org/schemas/429-12/2008/TT";
 
 /// Rewrite each reel's picture element and add the extra AssetList entries
 /// (markers, subtitle, aux data, first-reel metadata) that postkit's writer does
@@ -804,9 +807,17 @@ fn main_subtitle_block(reel: &CplReel, subtitle_id: &str) -> String {
 
 /// ST 429-12 closed-caption asset. Same timed-text structure as MainSubtitle but
 /// a distinct accessibility role, so validators and playback treat it as CCAP.
+///
+/// prefixed form: 429-7's AssetList only accepts a foreign-namespace element
+/// after MainSubtitle, and ST 429-12 declares the element as ClosedCaption with
+/// its Language qualified (elementFormDefault="qualified"). The other children
+/// come from 429-7's TrackFileAssetType, so they stay in the CPL default
+/// namespace.
 fn main_closed_caption_block(reel: &CplReel, ccap_id: &str) -> String {
     let mut b = String::new();
-    b.push_str("        <MainClosedCaption>\n");
+    b.push_str(&format!(
+        "        <tt:ClosedCaption xmlns:tt=\"{NS_TIMED_TEXT_429_12}\">\n"
+    ));
     b.push_str(&format!("          <Id>urn:uuid:{ccap_id}</Id>\n"));
     b.push_str(&format!(
         "          <EditRate>{} {}</EditRate>\n",
@@ -831,9 +842,9 @@ fn main_closed_caption_block(reel: &CplReel, ccap_id: &str) -> String {
         b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
     }
     if let Some(ref lang) = reel.ccap_language {
-        b.push_str(&format!("          <Language>{lang}</Language>\n"));
+        b.push_str(&format!("          <tt:Language>{lang}</tt:Language>\n"));
     }
-    b.push_str("        </MainClosedCaption>\n");
+    b.push_str("        </tt:ClosedCaption>\n");
     b
 }
 
@@ -958,13 +969,15 @@ mod tests {
         };
         assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
         let xml = std::fs::read_to_string(&path).unwrap();
-        assert!(xml.contains("<MainClosedCaption>"));
+        assert!(xml.contains(&format!(
+            "<tt:ClosedCaption xmlns:tt=\"{NS_TIMED_TEXT_429_12}\">"
+        )));
         assert!(xml.contains("<Id>urn:uuid:ccap-uuid-1</Id>"));
-        assert!(xml.contains("<Language>en</Language>"));
+        assert!(xml.contains("<tt:Language>en</tt:Language>"));
         // closed caption is distinct from the open subtitle role
         assert!(!xml.contains("<MainSubtitle>"));
         // and it sits inside a reel AssetList
-        let cc_pos = xml.find("<MainClosedCaption>").unwrap();
+        let cc_pos = xml.find("<tt:ClosedCaption").unwrap();
         let close_pos = xml.find("</AssetList>").unwrap();
         assert!(cc_pos < close_pos);
     }
@@ -1018,10 +1031,10 @@ mod tests {
         );
 
         let ccap = xml
-            .split("<MainClosedCaption>")
+            .split("<tt:ClosedCaption")
             .nth(1)
-            .and_then(|s| s.split("</MainClosedCaption>").next())
-            .expect("a MainClosedCaption");
+            .and_then(|s| s.split("</tt:ClosedCaption>").next())
+            .expect("a ClosedCaption");
         assert!(ccap.contains("<Hash>Y2NhcC1oYXNo</Hash>"), "{ccap}");
     }
 

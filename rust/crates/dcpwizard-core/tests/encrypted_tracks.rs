@@ -13,13 +13,9 @@ const HEIGHT: u32 = 1080;
 const FRAMES: usize = 4;
 const SRT: &str = "1\n00:00:00,100 --> 00:00:00,150\nHello\n\n";
 
-/// Schema faults this package has with or without encryption: postkit's KDM
-/// omits NonCriticalExtensions, and MainClosedCaption is written in the 429-7
-/// namespace rather than the digicine closed-caption one.
-const KNOWN_SCHEMA_VIOLATIONS: [&str; 2] = [
-    "}AuthenticatedPublic': Missing child element(s)",
-    "}MainClosedCaption': This element is not expected",
-];
+/// Schema fault this package has with or without encryption: postkit's KDM
+/// omits NonCriticalExtensions.
+const KNOWN_SCHEMA_VIOLATIONS: [&str; 1] = ["}AuthenticatedPublic': Missing child element(s)"];
 
 fn make_frames(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
@@ -215,7 +211,7 @@ fn an_encrypted_dcp_keys_every_essence_and_the_kdm_carries_them_all() {
         "MainPicture",
         "MainSound",
         "MainSubtitle",
-        "MainClosedCaption",
+        "tt:ClosedCaption",
         "axd:AuxData",
     ] {
         let block = cpl_asset_block(&cpl, element);

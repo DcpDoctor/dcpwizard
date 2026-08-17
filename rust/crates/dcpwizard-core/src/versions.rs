@@ -30,7 +30,7 @@ pub struct VersionSpec {
     #[serde(default)]
     pub subtitle_language: Option<String>,
     /// Closed-caption track for this version (SRT or supplied SMPTE XML). Same
-    /// input formats as `subtitle`; emitted under the MainClosedCaption CPL role.
+    /// input formats as `subtitle`; emitted under the ST 429-12 ClosedCaption role.
     #[serde(default)]
     pub ccap: Option<PathBuf>,
     /// Additional sound MXF for this version; replaces the base sound in its CPL.
@@ -548,7 +548,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 None
             };
 
-            // closed caption for this reel (MainClosedCaption role)
+            // closed caption for this reel (ST 429-12 ClosedCaption role)
             let ccap = if ccap_is_xml && i == 0 {
                 match wrap_subtitle_xml(
                     "ccap",
