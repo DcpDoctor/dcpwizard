@@ -94,8 +94,11 @@
           <div class="workspace">
             <!-- Left: Asset browser + reels -->
             <div class="workspace-main">
-              <section id="recent-projects" class="panel recent-panel" hidden>
-                <div class="panel-header"><h2>Recent Projects</h2></div>
+              <section id="recent-projects" class="panel recent-panel collapsed" hidden>
+                <div id="recent-header" class="panel-header recent-header" title="Show or hide recent projects">
+                  <h2>Recent Projects</h2>
+                  <button id="recent-toggle" class="recent-toggle" aria-expanded="false">▶</button>
+                </div>
                 <div id="recent-list" class="recent-list"></div>
               </section>
               <section class="panel assets-panel">

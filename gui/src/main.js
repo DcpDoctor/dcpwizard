@@ -1807,7 +1807,29 @@ document.getElementById("report-start")?.addEventListener("click", async () => {
 
 // === Recent Projects ===
 const RECENT_KEY = "dcpwizard-recent-projects";
+const RECENT_COLLAPSED_KEY = "dcpwizard-recent-projects-collapsed";
 const MAX_RECENT = 20;
+
+function recentProjectsCollapsed() {
+  return localStorage.getItem(RECENT_COLLAPSED_KEY) !== "false";
+}
+
+function applyRecentProjectsCollapsed() {
+  const section = document.getElementById("recent-projects");
+  const toggle = document.getElementById("recent-toggle");
+  if (!section) return;
+  const collapsed = recentProjectsCollapsed();
+  section.classList.toggle("collapsed", collapsed);
+  if (toggle) {
+    toggle.textContent = collapsed ? "▶" : "▼";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+}
+
+document.getElementById("recent-header")?.addEventListener("click", () => {
+  localStorage.setItem(RECENT_COLLAPSED_KEY, String(!recentProjectsCollapsed()));
+  applyRecentProjectsCollapsed();
+});
 
 function getRecentProjects() {
   try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; }
@@ -1832,6 +1854,7 @@ function renderRecentProjects() {
   const section = document.getElementById("recent-projects");
   const list = document.getElementById("recent-list");
   if (!section || !list) return;
+  applyRecentProjectsCollapsed();
   const recent = getRecentProjects();
   if (recent.length === 0) { section.hidden = true; return; }
   section.hidden = false;

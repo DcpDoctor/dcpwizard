@@ -13,6 +13,29 @@
   cursor: pointer;
 }
 
+.recent-header {
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.recent-panel:not(.collapsed) .recent-header {
+  margin-bottom: 12px;
+}
+.recent-panel.collapsed .recent-list {
+  display: none;
+}
+.recent-toggle {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.recent-toggle:hover {
+  opacity: 1;
+}
+
 .post-build-actions {
   display: flex;
   gap: 6px;
