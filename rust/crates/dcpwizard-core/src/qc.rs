@@ -46,7 +46,7 @@ pub fn run_qc(dcp_dir: &Path) -> QcReport {
         return report;
     }
 
-    let verify_result = crate::verify::verify_dcp(dcp_dir);
+    let verify_result = crate::verify::verify_dcp_for_report(dcp_dir);
 
     for err in &verify_result.errors {
         report.results.push(QcResult {

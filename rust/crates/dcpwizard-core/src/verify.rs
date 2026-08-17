@@ -16,11 +16,28 @@ pub struct VerifyCliOptions {
     pub skip_hash_check: bool,
     pub skip_picture_check: bool,
     pub strict: bool,
+    /// Read every frame's codestream, which is what the QC report's forensics
+    /// line is measured from.
+    pub scan_every_frame: bool,
 }
 
 /// Verify a DCP by delegating to dcpdoctor-core.
 pub fn verify_dcp(dcp_dir: &Path) -> VerifyResult {
     verify_dcp_with_options(dcp_dir, &VerifyCliOptions::default())
+}
+
+/// Verify for the QC report, which reads the picture essence itself.
+///
+/// The frame-by-frame scan is the expensive part of a verify, so the report pays
+/// for it and a plain verify stays fast.
+pub fn verify_dcp_for_report(dcp_dir: &Path) -> VerifyResult {
+    verify_dcp_with_options(
+        dcp_dir,
+        &VerifyCliOptions {
+            scan_every_frame: true,
+            ..VerifyCliOptions::default()
+        },
+    )
 }
 
 /// Verify a DCP with the specified options.
@@ -50,13 +67,14 @@ pub fn verify_dcp_with_options(dcp_dir: &Path, options: &VerifyCliOptions) -> Ve
         if options.skip_picture_check {
             o.check_picture_details = false;
         }
+        o.scan_every_frame = options.scan_every_frame;
         o
     } else {
         dcpdoctor_core::VerifyOptions {
             check_hashes: !options.skip_hash_check,
             check_signatures: true,
             check_picture_details: !options.skip_picture_check,
-            scan_every_frame: false,
+            scan_every_frame: options.scan_every_frame,
             strict_smpte: false,
             ov: None,
             kdm: None,
@@ -210,8 +228,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let options = VerifyCliOptions {
             skip_hash_check: true,
-            skip_picture_check: false,
-            strict: false,
+            ..VerifyCliOptions::default()
         };
         let result = verify_dcp_with_options(tmp.path(), &options);
         // Should still fail (no ASSETMAP) but exercising the code path

@@ -216,13 +216,13 @@ should also land there and are noted in its DESIGN_TODO.
   metadata poll). Not yet clicked through in the running window. Still open:
   render toggles for subtitles and closed captions, which the DCP loader does not
   load. imfwizard too.
-- QC report additions, both in CORE report.rs on top of what dcpdoctor verifies.
+- QC report addition, in CORE report.rs on top of what dcpdoctor verifies:
   Leq(m) per ISO 21727 with the content-kind limits stated inline (advertisement
-  <= 82, trailer <= 85): PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
-  is the number cinema mix stages use, so it needs the M-weighting added. And a
-  codestream forensics section (decomp levels, precincts, tile-parts, POC, MCT,
-  worst frame bytes against the cap), which PK j2k.rs can already parse. The
-  forensics half applies to imfwizard too, Leq(m) is cinema-only.
+  <= 82, trailer <= 85). PK loudness.rs measures LUFS/dBTP via ebur128 but Leq(m)
+  is the number cinema mix stages use, so it needs the M-weighting added.
+  Cinema-only. The codestream forensics half is served: `report` runs the verify
+  with `scan_every_frame`, so dcpdoctor's `j2k_codestream_summary` line reaches
+  the report's Info rows.
 - Crop indicator in the preview. Their preview stamps "+-275px top/bottom cropped"
   on the frame. `create` now logs the picture plan ("crop 0/0/138/138 to 1920x804,
   ... pad to 2048x1080 at (0,112)") in both the CLI and the GUI job log, and the

@@ -4795,6 +4795,7 @@ fn run() {
                     skip_hash_check: no_hash_check,
                     skip_picture_check: no_picture_check,
                     strict,
+                    scan_every_frame: false,
                 },
             );
 
