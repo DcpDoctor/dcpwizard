@@ -77,6 +77,7 @@ pub mod subtitle_preview;
 pub mod subtitle_retime;
 #[cfg(test)]
 pub(crate) mod test_wav;
+pub mod tms_upload;
 pub mod trailer;
 pub mod transcode;
 pub mod trim;
