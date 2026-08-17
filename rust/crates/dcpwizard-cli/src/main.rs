@@ -2056,6 +2056,26 @@ enum BatchAction {
     },
 }
 
+/// Where the time inside an encode went, as one line. postkit renders the four
+/// phase clocks off `PipelineProgress`, and `create` encodes through the grok
+/// pipeline, which reports the same clocks on `EncodeProgress`.
+fn encode_phase_breakdown(progress: &postkit::grok_encoder::EncodeProgress) -> String {
+    postkit::pipeline::PipelineProgress {
+        stage: "encode".to_string(),
+        message: String::new(),
+        frame: progress.frames_encoded,
+        total_frames: progress.total_frames,
+        fps: progress.fps,
+        elapsed_secs: progress.elapsed_secs,
+        percent: 0.0,
+        decode_wait_secs: progress.decode_wait_secs,
+        prepare_secs: progress.prepare_secs,
+        encode_secs: progress.encode_secs,
+        write_secs: progress.write_secs,
+    }
+    .phase_breakdown()
+}
+
 fn parse_colour_space(s: &str) -> postkit::colour::ColourSpace {
     match s.to_lowercase().as_str() {
         "rec709" | "bt709" => postkit::colour::ColourSpace::Rec709,
@@ -4017,6 +4037,7 @@ fn run() {
                 let video_filter =
                     join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref());
                 let encode_start = std::time::Instant::now();
+                let mut last_encode_progress: Option<EncodeProgress> = None;
                 let result = grok_encoder::encode_video_pipeline_resumable(
                     &encode_video_path,
                     &j2k_dir,
@@ -4052,6 +4073,7 @@ fn run() {
                             "\r[encode] {}/{} frames ({:.0}%) {:.1} fps  avg {:.1}  eta {}   ",
                             p.frames_encoded, p.total_frames, percent, p.fps, avg_fps, eta
                         );
+                        last_encode_progress = Some(p);
                     },
                 );
                 eprintln!();
@@ -4061,6 +4083,9 @@ fn run() {
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
+                if let Some(progress) = last_encode_progress.as_ref() {
+                    tracing::info!("Encode breakdown: {}", encode_phase_breakdown(progress));
+                }
 
                 // Stereoscopic: encode the right eye into its own dir at the same
                 // settings (main input is the left eye).

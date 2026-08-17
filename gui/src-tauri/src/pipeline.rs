@@ -1452,6 +1452,17 @@ fn format_stage_timing(stage: &str, duration: std::time::Duration) -> String {
     )
 }
 
+/// The `[TIMING]` line naming where the time inside an encode went, or None
+/// when nothing was measured, which is a still or an image sequence handed
+/// straight to grk_compress.
+fn format_encode_breakdown(progress: &postkit::pipeline::PipelineProgress) -> Option<String> {
+    let measured = progress.decode_wait_secs > 0.0
+        || progress.prepare_secs > 0.0
+        || progress.encode_secs > 0.0
+        || progress.write_secs > 0.0;
+    measured.then(|| format!("[TIMING] encode breakdown: {}", progress.phase_breakdown()))
+}
+
 fn parse_audio_input_order(
     value: Option<&str>,
 ) -> Result<dcpwizard_core::mxf_wrap::AudioInputOrder, String> {
@@ -2104,6 +2115,8 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let job_id = job.id;
     let app_ref = app.clone();
     let log_ref = log_file.clone();
+    let encode_breakdown: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let encode_breakdown_ref = encode_breakdown.clone();
     let encode_started = Instant::now();
     let encode_result = if job.still_length_frames > 0 {
         encode_still(job, output, encode_fps, &resolved_picture, |msg| {
@@ -2128,6 +2141,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
                     p.elapsed_secs,
                     p.percent,
                 );
+                if let Some(line) = format_encode_breakdown(p) {
+                    *encode_breakdown_ref.lock().unwrap() = Some(line);
+                }
             },
             |msg| log_to(&log_ref, msg),
         )?
@@ -2163,6 +2179,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         &log_file,
         &format_stage_timing("encode", encode_started.elapsed()),
     );
+    if let Some(breakdown) = encode_breakdown.lock().unwrap().as_deref() {
+        log_to(&log_file, breakdown);
+    }
 
     let audio_started = Instant::now();
     let audio_path = prepare_audio(job, conform, output, |msg| log_to(&log_file, msg))?;
@@ -2366,6 +2385,36 @@ mod tests {
             format_stage_timing("total", Duration::from_secs(3600)),
             "[TIMING] total took 60m0s"
         );
+    }
+
+    #[test]
+    fn the_encode_breakdown_is_one_timing_line_and_absent_when_nothing_was_measured() {
+        let measured = postkit::pipeline::PipelineProgress {
+            stage: "encode".into(),
+            message: "Frame 100/200".into(),
+            frame: 100,
+            total_frames: 200,
+            fps: 12.0,
+            elapsed_secs: 300.0,
+            percent: 50.0,
+            decode_wait_secs: 12.0,
+            prepare_secs: 30.4,
+            encode_secs: 250.0,
+            write_secs: 7.6,
+        };
+        assert_eq!(
+            format_encode_breakdown(&measured).as_deref(),
+            Some("[TIMING] encode breakdown: decoder wait 12s, frame prep 30s, j2k 4m10s, write 8s")
+        );
+
+        let unmeasured = postkit::pipeline::PipelineProgress {
+            decode_wait_secs: 0.0,
+            prepare_secs: 0.0,
+            encode_secs: 0.0,
+            write_secs: 0.0,
+            ..measured
+        };
+        assert_eq!(format_encode_breakdown(&unmeasured), None);
     }
 
     fn test_job() -> JobConfig {

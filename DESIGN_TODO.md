@@ -224,13 +224,11 @@ should also land there and are noted in its DESIGN_TODO.
 - Ident and rating-card library. A drag-drop library of head idents, tail idents,
   rating cards and anti-piracy clips joined onto the build. Real ad and trailer
   workflow, but it is conform/concatenation work, so a real lift. DCP-only.
-- Encode log detail. The per-stage half is done: `[TIMING]` lines in the job log
-  give preflight, encode, audio, packaging, validation and the total. What is still
-  open is the breakdown inside an encode, colour convert against frame prep against
-  the J2K encode itself: postkit's `PipelineProgress` carries a stage name, a frame
-  count and an elapsed clock, and nothing that separates the three, so it would take
-  a wider progress payload from postkit first. Their claim that the MXF write
-  overlaps the encode is untouched here. imfwizard too.
+- Overlap the MXF write with the encode, as Storm claims to. The encode log
+  itself is done: `[TIMING]` lines give preflight, encode, audio, packaging,
+  validation and the total, and the encode line is followed by a breakdown of
+  decoder wait, frame prep, J2K and write off postkit's phase clocks. Nothing
+  here overlaps the wrap with the encode yet. imfwizard too.
 
 ## Done 2026-08-12
 
