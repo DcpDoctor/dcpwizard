@@ -213,13 +213,14 @@ fn find_grk_decompress() -> Option<std::path::PathBuf> {
             return Some(path);
         }
     }
-    std::process::Command::new("which")
-        .arg("grk_decompress")
+    // spawning is the one PATH lookup that works the same on every platform,
+    // `which` on Windows answers with a path Command cannot open
+    let on_path = std::path::PathBuf::from("grk_decompress");
+    std::process::Command::new(&on_path)
+        .arg("-h")
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| std::path::PathBuf::from(s.trim()))
+        .map(|_| on_path)
 }
 
 /// Decode one codestream to a 16-bit-per-channel PPM and return its samples.
