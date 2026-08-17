@@ -200,7 +200,7 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
         )?;
 
         // timed text is not frame-wrapped; a cleartext subtitle copies byte-for-byte,
-        // an encrypted one is refused loud (no create path produces it, so untested).
+        // an encrypted one is refused loud until this path can rewrap it.
         let subtitle = process_cleartext_copy(
             &entry.subtitle_file,
             &entry.subtitle_asset_id,

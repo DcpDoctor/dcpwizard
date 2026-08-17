@@ -142,6 +142,9 @@ pub struct CplReel {
     pub subtitle_language: Option<String>,
     #[serde(default)]
     pub subtitle_hash: Option<String>,
+    /// KeyId (bare UUID) when the timed-text essence is encrypted.
+    #[serde(default)]
+    pub subtitle_key_id: Option<String>,
     /// Bare UUID of the closed-caption (ST 429-12) timed-text track, when present.
     /// Distinct from the open subtitle: emitted as MainClosedCaption.
     #[serde(default)]
@@ -158,6 +161,9 @@ pub struct CplReel {
     pub ccap_language: Option<String>,
     #[serde(default)]
     pub ccap_hash: Option<String>,
+    /// KeyId (bare UUID) when the closed-caption essence is encrypted.
+    #[serde(default)]
+    pub ccap_key_id: Option<String>,
     /// Picture is a stereoscopic (ST 429-10) essence: emit MainStereoscopicPicture
     /// with FrameRate doubled (two frames per edit unit) instead of MainPicture.
     pub stereoscopic: bool,
@@ -782,6 +788,10 @@ fn main_subtitle_block(reel: &CplReel, subtitle_id: &str) -> String {
         "          <Duration>{}</Duration>\n",
         reel.subtitle_duration
     ));
+    // ST 429-7 TrackFileAssetType orders KeyId before Hash, and Language after both
+    if let Some(ref key_id) = reel.subtitle_key_id {
+        b.push_str(&format!("          <KeyId>urn:uuid:{key_id}</KeyId>\n"));
+    }
     if let Some(ref hash) = reel.subtitle_hash {
         b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
     }
@@ -814,6 +824,9 @@ fn main_closed_caption_block(reel: &CplReel, ccap_id: &str) -> String {
         "          <Duration>{}</Duration>\n",
         reel.ccap_duration
     ));
+    if let Some(ref key_id) = reel.ccap_key_id {
+        b.push_str(&format!("          <KeyId>urn:uuid:{key_id}</KeyId>\n"));
+    }
     if let Some(ref hash) = reel.ccap_hash {
         b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
     }

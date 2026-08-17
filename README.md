@@ -58,8 +58,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Encode QoL** on `create`: `--start-at` (scheduled wall-clock start), `--resume` (reuse on-disk J2K frames after an interruption, survives restarts), average-fps ETA in progress output, `--shutdown-when-done` (power off after a clean encode)
 
 ### Encryption & KDM
-- **AES-128 essence encryption**, content keys generated with a CSPRNG, encrypted at wrap time
-- **Signed SMPTE KDM** (ST 430-1 / 430-3) carrying the DCP's image and audio content keys
+- **AES-128 essence encryption** of picture, sound, timed text and Atmos, content keys generated with a CSPRNG, encrypted at wrap time
+- **Signed SMPTE KDM** (ST 430-1 / 430-3) carrying the DCP's content keys, one per essence (MDIK, MDAK, MDSK, MDEK)
 - **Batch KDM**, generate for multiple screens in one pass
 - **DKDM re-wrap**, re-issue KDMs from a Distribution KDM
 - **KDM formulation** via `--formulation` on `kdm`/`kdm-batch`/`kdm-rewrap` (the four ISDCF Doc 5 spellings; derived from `--device-cert` when omitted)
@@ -261,10 +261,12 @@ dcpwizard create --title "My Film" --video movie.mov --output ./dcp --check
 # subtitle tracks are copied unchanged; encrypted input is rejected)
 dcpwizard transcode-dcp --input ./dcp --output ./dcp_light --video-bit-rate 100
 
-# Create with encryption. Content keys are generated with a CSPRNG and the
-# essence is AES-128 encrypted at wrap time. --key-out is required: it is the
-# only place the keys are written (never next to the DCP). That file holds the
-# plaintext keys, keep it secret and outside the DCP. Feed it to `kdm --keys`.
+# Create with encryption. Content keys are generated with a CSPRNG and every
+# essence is AES-128 encrypted at wrap time: picture, sound, subtitle,
+# closed caption and Atmos each get their own key. --key-out is required: it is
+# the only place the keys are written (never next to the DCP). That file holds
+# the plaintext keys, keep it secret and outside the DCP. Feed it to
+# `kdm --keys`, which puts every key in the KDM.
 dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./dcp \
     --encrypt --key-out ./secret/my_film.keys.json
 

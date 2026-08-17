@@ -19,6 +19,10 @@ pub enum KeyType {
     Mdik,
     /// Audio essence key (MDAK).
     Mdak,
+    /// Timed-text essence key (MDSK), for subtitle and closed-caption tracks.
+    Mdsk,
+    /// Auxiliary-data essence key (MDEK), for the ST 429-18 Atmos track.
+    Mdek,
 }
 
 impl KeyType {
@@ -26,6 +30,8 @@ impl KeyType {
         match self {
             KeyType::Mdik => *b"MDIK",
             KeyType::Mdak => *b"MDAK",
+            KeyType::Mdsk => *b"MDSK",
+            KeyType::Mdek => *b"MDEK",
         }
     }
 }
@@ -111,32 +117,6 @@ pub fn generate_content_key(key_type: KeyType, asset_uuid: &str) -> Result<Gener
     })
 }
 
-/// Refuse an encrypted DCP carrying a track the wrap layer cannot encrypt.
-///
-/// [`crate::mxf_wrap`] encrypts J2K picture and PCM sound; postkit's timed-text
-/// and Atmos wraps take no key, so those tracks would ship in the clear beside
-/// encrypted picture and sound. DCP-o-matic encrypts SMPTE timed text and Atmos
-/// alongside sound, so this is a gap, not a delivery choice.
-///
-/// TODO: pass the content key into postkit's timed-text and Atmos wraps
-/// (asdcplib's writers already take the AES/HMAC contexts) and drop this guard.
-pub fn check_encryptable_tracks(has_timed_text: bool, has_atmos: bool) -> Result<(), String> {
-    let blocked: Vec<&str> = [("timed text", has_timed_text), ("Atmos", has_atmos)]
-        .into_iter()
-        .filter(|(_, present)| *present)
-        .map(|(name, _)| name)
-        .collect();
-    if blocked.is_empty() {
-        return Ok(());
-    }
-    Err(format!(
-        "an encrypted DCP cannot carry {}: the MXF wrapper encrypts picture and sound only, \
-         so that track would ship in the clear. Build the package without --encrypt, or \
-         deliver it without that track",
-        blocked.join(" or ")
-    ))
-}
-
 fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -168,6 +148,14 @@ mod tests {
         assert_eq!(kt, *b"MDIK");
         assert_eq!(key, a.key);
         assert_eq!(*kid.as_bytes(), a.key_id);
+    }
+
+    #[test]
+    fn every_essence_has_its_st_430_1_key_type() {
+        assert_eq!(KeyType::Mdik.as_smpte(), *b"MDIK");
+        assert_eq!(KeyType::Mdak.as_smpte(), *b"MDAK");
+        assert_eq!(KeyType::Mdsk.as_smpte(), *b"MDSK");
+        assert_eq!(KeyType::Mdek.as_smpte(), *b"MDEK");
     }
 
     #[test]

@@ -151,19 +151,6 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         );
         return -1;
     }
-    if config.encrypt {
-        let timed_text = versions
-            .iter()
-            .any(|v| v.subtitle.is_some() || v.ccap.is_some())
-            || config.subtitle_path.is_some()
-            || config.ccap_path.is_some();
-        if let Err(e) =
-            crate::encrypt::check_encryptable_tracks(timed_text, config.atmos_path.is_some())
-        {
-            tracing::error!("{e}");
-            return -1;
-        }
-    }
     if config.right_eye_dir.is_some() {
         tracing::error!("stereoscopic 3D is not supported with --versions");
         return -1;
@@ -328,16 +315,24 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
 
     // ── atmos: shared aux data, single reel only (guarded above) ──
     let mut aux_data: Option<crate::cpl::AuxData> = None;
+    let mut atmos_key_info: Option<ContentKey> = None;
     if let Some(atmos_path) = config.atmos_path.as_ref() {
         let atmos_uuid = uuid::Uuid::new_v4();
         let atmos_name = format!("atmos_{atmos_uuid}.mxf");
         let atmos_path_out = config.output_dir.join(&atmos_name);
+        let atmos_key = match mint_key(config, KeyType::Mdek, &atmos_uuid.to_string()) {
+            Ok(k) => k,
+            Err(()) => {
+                cleanup(&temps);
+                return -1;
+            }
+        };
         let Some(track) = crate::mxf_wrap::wrap_mxf_result(&crate::mxf_wrap::MxfWrapConfig {
             input_path: atmos_path.clone(),
             output_mxf: atmos_path_out.clone(),
             mxf_type: crate::mxf_wrap::MxfType::Atmos,
             frame_rate: fps,
-            encryption: None,
+            encryption: atmos_key.as_ref().map(crate::reel::mxf_enc),
             mca_config: None,
             asset_uuid: Some(*atmos_uuid.as_bytes()),
         }) else {
@@ -367,9 +362,10 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             edit_rate_den: 1,
             duration: track.duration,
             entry_point: 0,
-            key_id: None,
+            key_id: atmos_key.as_ref().map(|k| k.info.key_id.clone()),
             data_type: ATMOS_DATA_TYPE_UL.to_string(),
         });
+        atmos_key_info = atmos_key.map(|k| k.info);
     }
 
     // ── per version: subtitle + optional own audio + one CPL ──
@@ -475,7 +471,9 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
         };
 
         let mut cpl_reels = Vec::with_capacity(ranges.len());
-        let mut bundle_keys: Vec<ContentKey> = Vec::new();
+        // the Atmos essence is shared by every version, so each version's KDM
+        // needs the one key it was wrapped with
+        let mut bundle_keys: Vec<ContentKey> = atmos_key_info.iter().cloned().collect();
         for (i, (range, ess)) in ranges.iter().zip(&essences).enumerate() {
             let reel_duration_frames = ess.reel_frames as u32;
             // sound: own audio overrides the shared base sound
@@ -506,10 +504,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
             };
 
             // subtitle for this reel
-            let mut subtitle_id = None;
-            let mut subtitle_duration = 0u64;
-            let mut subtitle_hash = None;
-            if sub_is_xml && i == 0 {
+            let subtitle = if sub_is_xml && i == 0 {
                 match wrap_subtitle_xml(
                     "subtitle",
                     version.subtitle.as_ref().unwrap(),
@@ -518,11 +513,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut pkl_entries,
                     &mut am_entries,
                 ) {
-                    Ok(track) => {
-                        subtitle_id = Some(track.id);
-                        subtitle_duration = track.duration;
-                        subtitle_hash = Some(track.hash);
-                    }
+                    Ok(track) => Some(track),
                     Err(()) => {
                         cleanup(&temps);
                         return -1;
@@ -547,23 +538,18 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut am_entries,
                     &mut temps,
                 ) {
-                    Ok(track) => {
-                        subtitle_id = Some(track.id);
-                        subtitle_duration = track.duration;
-                        subtitle_hash = Some(track.hash);
-                    }
+                    Ok(track) => Some(track),
                     Err(()) => {
                         cleanup(&temps);
                         return -1;
                     }
                 }
-            }
+            } else {
+                None
+            };
 
             // closed caption for this reel (MainClosedCaption role)
-            let mut ccap_id = None;
-            let mut ccap_duration = 0u64;
-            let mut ccap_hash = None;
-            if ccap_is_xml && i == 0 {
+            let ccap = if ccap_is_xml && i == 0 {
                 match wrap_subtitle_xml(
                     "ccap",
                     version.ccap.as_ref().unwrap(),
@@ -572,11 +558,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut pkl_entries,
                     &mut am_entries,
                 ) {
-                    Ok(track) => {
-                        ccap_id = Some(track.id);
-                        ccap_duration = track.duration;
-                        ccap_hash = Some(track.hash);
-                    }
+                    Ok(track) => Some(track),
                     Err(()) => {
                         cleanup(&temps);
                         return -1;
@@ -601,23 +583,28 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     &mut am_entries,
                     &mut temps,
                 ) {
-                    Ok(track) => {
-                        ccap_id = Some(track.id);
-                        ccap_duration = track.duration;
-                        ccap_hash = Some(track.hash);
-                    }
+                    Ok(track) => Some(track),
                     Err(()) => {
                         cleanup(&temps);
                         return -1;
                     }
                 }
-            }
+            } else {
+                None
+            };
+            let subtitle_duration = subtitle.as_ref().map(|t| t.duration).unwrap_or(0);
+            let ccap_duration = ccap.as_ref().map(|t| t.duration).unwrap_or(0);
 
-            if let Some(k) = ess.picture_key_info.as_ref() {
-                bundle_keys.push(k.clone());
-            }
-            if let Some(k) = sound_key_info.as_ref() {
-                bundle_keys.push(k.clone());
+            for key in [
+                ess.picture_key_info.as_ref(),
+                sound_key_info.as_ref(),
+                subtitle.as_ref().and_then(|t| t.key_info.as_ref()),
+                ccap.as_ref().and_then(|t| t.key_info.as_ref()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                bundle_keys.push(key.clone());
             }
 
             cpl_reels.push(crate::cpl::CplReel {
@@ -638,20 +625,22 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                 sound_duration: ess.reel_frames,
                 sound_entry_point: 0,
                 sound_key_id,
-                subtitle_id,
+                subtitle_id: subtitle.as_ref().map(|t| t.id.clone()),
                 subtitle_edit_rate_num: fps,
                 subtitle_edit_rate_den: 1,
                 subtitle_duration,
                 subtitle_entry_point: 0,
                 subtitle_language: subtitle_duration.gt(&0).then(|| sub_lang.clone()),
-                subtitle_hash,
-                ccap_id,
+                subtitle_hash: subtitle.as_ref().map(|t| t.hash.clone()),
+                subtitle_key_id: subtitle.as_ref().and_then(|t| t.key_id.clone()),
+                ccap_id: ccap.as_ref().map(|t| t.id.clone()),
                 ccap_edit_rate_num: fps,
                 ccap_edit_rate_den: 1,
                 ccap_duration,
                 ccap_entry_point: 0,
                 ccap_language: ccap_duration.gt(&0).then(|| sub_lang.clone()),
-                ccap_hash,
+                ccap_hash: ccap.as_ref().map(|t| t.hash.clone()),
+                ccap_key_id: ccap.as_ref().and_then(|t| t.key_id.clone()),
                 stereoscopic: false,
                 aux_data: aux_data.clone(),
                 markers: Vec::new(),
@@ -859,6 +848,10 @@ pub(crate) struct WrappedTimedText {
     pub id: String,
     pub duration: u64,
     pub hash: String,
+    /// KeyId the CPL block declares, and the key itself for the keys file. Both
+    /// None on an unencrypted package.
+    pub key_id: Option<String>,
+    pub key_info: Option<ContentKey>,
 }
 
 /// Wrap already-rebased SRT cues into a per-reel timed-text MXF. `prefix` names
@@ -887,6 +880,7 @@ pub(crate) fn wrap_subtitle_cues(
     };
     let name = format!("{prefix}_{uuid}.mxf");
     let path = config.output_dir.join(&name);
+    let key = mint_key(config, KeyType::Mdsk, &uuid.to_string())?;
     let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
         &dcst,
         &resources,
@@ -894,6 +888,7 @@ pub(crate) fn wrap_subtitle_cues(
         fps,
         Some(*uuid.as_bytes()),
         duration_frames,
+        key.as_ref().map(crate::reel::mxf_enc),
     );
     temps.push(dcst);
     // the staged font now lives inside the MXF; a bitmap resource is the
@@ -912,6 +907,8 @@ pub(crate) fn wrap_subtitle_cues(
         id: uuid.to_string(),
         duration: track.duration,
         hash: crate::hash::hash_file(&path).unwrap_or_default(),
+        key_id: key.as_ref().map(|k| k.info.key_id.clone()),
+        key_info: key.map(|k| k.info),
     })
 }
 
@@ -928,12 +925,13 @@ pub(crate) fn wrap_subtitle_xml(
     let uuid = uuid::Uuid::new_v4();
     let name = format!("{prefix}_{uuid}.mxf");
     let path = config.output_dir.join(&name);
+    let key = mint_key(config, KeyType::Mdsk, &uuid.to_string())?;
     let wrapped = crate::mxf_wrap::wrap_mxf_result(&crate::mxf_wrap::MxfWrapConfig {
         input_path: xml_path.to_path_buf(),
         output_mxf: path.clone(),
         mxf_type: crate::mxf_wrap::MxfType::TimedText,
         frame_rate: fps,
-        encryption: None,
+        encryption: key.as_ref().map(crate::reel::mxf_enc),
         mca_config: None,
         asset_uuid: Some(*uuid.as_bytes()),
     });
@@ -946,6 +944,8 @@ pub(crate) fn wrap_subtitle_xml(
         id: uuid.to_string(),
         duration: track.duration,
         hash: crate::hash::hash_file(&path).unwrap_or_default(),
+        key_id: key.as_ref().map(|k| k.info.key_id.clone()),
+        key_info: key.map(|k| k.info),
     })
 }
 

@@ -145,12 +145,6 @@ pub fn check_before_encode(plan: &CreatePlan) -> Result<(), String> {
     }
     crate::hfr::validate_fps_resolution(plan.fps, plan.four_k, plan.standard == Standard::Smpte)?;
     check_burn(plan)?;
-    if plan.encrypt {
-        crate::encrypt::check_encryptable_tracks(
-            plan.subtitle.is_some() || plan.ccap.is_some(),
-            plan.atmos.is_some(),
-        )?;
-    }
     check_reel_splitting(plan)?;
     check_audio_map(plan)?;
     check_audio_channels(plan)?;
@@ -597,16 +591,5 @@ mod tests {
             error.contains("not supported with reel splitting"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn an_encrypted_package_carrying_a_track_the_wrapper_cannot_encrypt_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut plan = plan_with_picture(dir.path().join("j2k"));
-        plan.encrypt = true;
-        plan.ccap = Some(dir.path().join("captions.xml"));
-
-        let error = check_before_encode(&plan).unwrap_err();
-        assert!(error.contains("ship in the clear"), "{error}");
     }
 }

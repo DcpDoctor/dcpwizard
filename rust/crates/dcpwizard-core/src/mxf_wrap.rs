@@ -40,7 +40,7 @@ pub struct MxfWrapConfig {
     pub output_mxf: PathBuf,
     pub mxf_type: MxfType,
     pub frame_rate: u32,
-    /// AES-128 content encryption for J2K picture / PCM sound. Not serialized.
+    /// AES-128 content encryption for the wrapped essence. Not serialized.
     #[serde(skip)]
     pub encryption: Option<postkit::mxf_wrap::MxfEncryption>,
     /// ST 429-12 MCA channel labels for a PCM wrap (e.g. `"51(L,R,C,LFE,Ls,Rs)"`
@@ -437,6 +437,7 @@ pub fn wrap_timed_text_resources(
     frame_rate: u32,
     asset_uuid: Option<[u8; 16]>,
     duration_frames: Option<u32>,
+    encryption: Option<postkit::mxf_wrap::MxfEncryption>,
 ) -> Option<postkit::mxf_wrap::MxfTrackFile> {
     let mut input_files = vec![dcst.to_path_buf()];
     let mut resource_ids = Vec::new();
@@ -453,7 +454,7 @@ pub fn wrap_timed_text_resources(
         fps_num: fps,
         fps_den: 1,
         partition_size: 0,
-        encryption: None,
+        encryption,
         mca_config: None,
         resource_ids,
         hdr: None,

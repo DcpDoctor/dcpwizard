@@ -393,15 +393,6 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
         );
         return -1;
     }
-    if config.encrypt
-        && let Err(e) = crate::encrypt::check_encryptable_tracks(
-            comps.iter().any(|c| c.subtitle.is_some()),
-            config.atmos_path.is_some(),
-        )
-    {
-        tracing::error!("{e}");
-        return -1;
-    }
 
     let fps = if config.frame_rate_num > 0 {
         config.frame_rate_num
@@ -569,9 +560,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
                     config.subtitle_language.clone()
                 }
             });
-        let mut subtitle_id = None;
-        let mut subtitle_duration = 0u64;
-        let mut subtitle_hash = None;
+        let mut subtitle: Option<crate::versions::WrappedTimedText> = None;
         if let Some(sub) = comp.subtitle.as_ref() {
             let is_xml = sub
                 .extension()
@@ -610,9 +599,10 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             };
             match wrapped {
                 Ok(track) => {
-                    subtitle_id = Some(track.id);
-                    subtitle_duration = track.duration;
-                    subtitle_hash = Some(track.hash);
+                    if let Some(key) = track.key_info.as_ref() {
+                        bundle_keys.push(key.clone());
+                    }
+                    subtitle = Some(track);
                 }
                 Err(()) => {
                     cleanup(&temps);
@@ -620,6 +610,7 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
                 }
             }
         }
+        let subtitle_duration = subtitle.as_ref().map(|t| t.duration).unwrap_or(0);
 
         // ── CPL ──
         let content_kind = comp
@@ -647,13 +638,14 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             sound_duration: total,
             sound_entry_point: 0,
             sound_key_id,
-            subtitle_id,
+            subtitle_id: subtitle.as_ref().map(|t| t.id.clone()),
             subtitle_edit_rate_num: fps,
             subtitle_edit_rate_den: 1,
             subtitle_duration,
             subtitle_entry_point: 0,
             subtitle_language: (subtitle_duration > 0).then(|| sub_lang.clone()),
-            subtitle_hash,
+            subtitle_hash: subtitle.as_ref().map(|t| t.hash.clone()),
+            subtitle_key_id: subtitle.as_ref().and_then(|t| t.key_id.clone()),
             stereoscopic: false,
             aux_data: None,
             markers: crate::markers::default_markers(total),

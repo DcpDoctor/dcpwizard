@@ -163,19 +163,17 @@ const ATMOS_DATA_TYPE_UL: &str = "urn:smpte:ul:060e2b34.04010105.0e090604.000000
 /// (already logged). Used for the closed-caption track; the open subtitle path
 /// stays inline in create_dcp.
 fn wrap_timed_text_track(
-    input: &std::path::Path,
-    out_mxf: &std::path::Path,
+    wrap: crate::mxf_wrap::MxfWrapConfig,
     lang: &str,
-    fps: u32,
     timing: crate::subtitle::CueTiming,
     opts: &crate::subtitle::SubtitleOptions,
-    asset_uuid: [u8; 16],
 ) -> Option<u64> {
     // temp DCST and staged resources land next to the output MXF
-    let work_dir = out_mxf
+    let work_dir = wrap
+        .output_mxf
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let kind = match crate::subtitle::detect_subtitle_kind(input) {
+    let kind = match crate::subtitle::detect_subtitle_kind(&wrap.input_path) {
         Ok(k) => k,
         Err(e) => {
             tracing::error!("{e}");
@@ -183,53 +181,49 @@ fn wrap_timed_text_track(
         }
     };
     if kind == crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough {
-        let wrap_config = crate::mxf_wrap::MxfWrapConfig {
-            input_path: input.to_path_buf(),
-            output_mxf: out_mxf.to_path_buf(),
-            mxf_type: crate::mxf_wrap::MxfType::TimedText,
-            frame_rate: fps,
-            encryption: None,
-            mca_config: None,
-            asset_uuid: Some(asset_uuid),
-        };
-        match crate::mxf_wrap::wrap_mxf_result(&wrap_config) {
+        return match crate::mxf_wrap::wrap_mxf_result(&wrap) {
             Some(t) => Some(t.duration),
             None => {
                 tracing::error!("Failed to wrap timed-text MXF");
                 None
             }
-        }
-    } else {
-        let dcst_path = out_mxf.with_extension("dcst.xml");
-        let prepared = match crate::subtitle::prepare_subtitle_track(
-            input, timing, lang, fps, opts, &dcst_path,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("closed-caption conversion failed: {e}");
-                return None;
-            }
         };
-        let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
-            &prepared.dcst_path,
-            &prepared.resources,
-            out_mxf,
-            fps,
-            Some(asset_uuid),
-            None,
-        );
-        let _ = std::fs::remove_file(&dcst_path);
-        for (p, _) in &prepared.resources {
-            if p.starts_with(work_dir) {
-                let _ = std::fs::remove_file(p);
-            }
+    }
+    let dcst_path = wrap.output_mxf.with_extension("dcst.xml");
+    let prepared = match crate::subtitle::prepare_subtitle_track(
+        &wrap.input_path,
+        timing,
+        lang,
+        wrap.frame_rate,
+        opts,
+        &dcst_path,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("closed-caption conversion failed: {e}");
+            return None;
         }
-        match wrapped {
-            Some(t) => Some(t.duration),
-            None => {
-                tracing::error!("Failed to wrap timed-text MXF");
-                None
-            }
+    };
+    let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
+        &prepared.dcst_path,
+        &prepared.resources,
+        &wrap.output_mxf,
+        wrap.frame_rate,
+        wrap.asset_uuid,
+        None,
+        wrap.encryption,
+    );
+    let _ = std::fs::remove_file(&dcst_path);
+    for (p, _) in &prepared.resources {
+        if p.starts_with(work_dir) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    match wrapped {
+        Some(t) => Some(t.duration),
+        None => {
+            tracing::error!("Failed to wrap timed-text MXF");
+            None
         }
     }
 }
@@ -327,17 +321,6 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         );
         return -1;
     }
-    if config.encrypt {
-        let exists = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| p.exists());
-        if let Err(e) = crate::encrypt::check_encryptable_tracks(
-            exists(&config.subtitle_path) || exists(&config.ccap_path),
-            config.atmos_path.is_some(),
-        ) {
-            tracing::error!("{e}");
-            return -1;
-        }
-    }
-
     let fps = if config.frame_rate_num > 0 {
         config.frame_rate_num
     } else {
@@ -505,19 +488,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // Mint content keys up front so the essence is encrypted at wrap time and
     // the PKL/ASSETMAP hashes below are taken from the final encrypted files.
-    let picture_key = if config.encrypt {
-        match crate::encrypt::generate_content_key(
-            crate::encrypt::KeyType::Mdik,
-            &picture_uuid.to_string(),
-        ) {
-            Ok(k) => Some(k),
-            Err(e) => {
-                tracing::error!("content key generation failed: {e}");
-                return -1;
-            }
-        }
-    } else {
-        None
+    let picture_key = match crate::versions::mint_key(
+        config,
+        crate::encrypt::KeyType::Mdik,
+        &picture_uuid.to_string(),
+    ) {
+        Ok(k) => k,
+        Err(()) => return -1,
     };
 
     {
@@ -670,19 +647,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if let Some(audio_path) = prepared_audio.as_ref().or(config.audio_path.as_ref())
         && audio_path.exists()
     {
-        sound_key = if config.encrypt {
-            match crate::encrypt::generate_content_key(
-                crate::encrypt::KeyType::Mdak,
-                &sound_uuid.to_string(),
-            ) {
-                Ok(k) => Some(k),
-                Err(e) => {
-                    tracing::error!("content key generation failed: {e}");
-                    return -1;
-                }
-            }
-        } else {
-            None
+        sound_key = match crate::versions::mint_key(
+            config,
+            crate::encrypt::KeyType::Mdak,
+            &sound_uuid.to_string(),
+        ) {
+            Ok(k) => k,
+            Err(()) => return -1,
         };
         // labels follow the content, counts follow the container: the fill added
         // silent channels the soundfield must not claim, so the source is probed
@@ -795,6 +766,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let subtitle_mxf_path = config.output_dir.join(&subtitle_mxf_name);
     let mut has_subtitle = false;
     let mut subtitle_duration = 0u64;
+    let mut subtitle_key = None;
     let subtitle_lang = if config.subtitle_language.is_empty() {
         "en"
     } else {
@@ -811,6 +783,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 return -1;
             }
         };
+        subtitle_key = match crate::versions::mint_key(
+            config,
+            crate::encrypt::KeyType::Mdsk,
+            &subtitle_uuid.to_string(),
+        ) {
+            Ok(k) => k,
+            Err(()) => return -1,
+        };
         let track = if kind == crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough {
             // preserve authored SMPTE XML unchanged (placement, styling, timing)
             let wrap_config = crate::mxf_wrap::MxfWrapConfig {
@@ -818,7 +798,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 output_mxf: subtitle_mxf_path.clone(),
                 mxf_type: crate::mxf_wrap::MxfType::TimedText,
                 frame_rate: fps,
-                encryption: None,
+                encryption: subtitle_key.as_ref().map(crate::reel::mxf_enc),
                 mca_config: None,
                 asset_uuid: Some(*subtitle_uuid.as_bytes()),
             };
@@ -856,6 +836,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 fps,
                 Some(*subtitle_uuid.as_bytes()),
                 None,
+                subtitle_key.as_ref().map(crate::reel::mxf_enc),
             );
             // the DCST and any staged font now live inside the MXF
             let _ = std::fs::remove_file(&dcst_path);
@@ -883,6 +864,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let ccap_mxf_path = config.output_dir.join(&ccap_mxf_name);
     let mut has_ccap = false;
     let mut ccap_duration = 0u64;
+    let mut ccap_key = None;
     let ccap_lang = if config.ccap_language.is_empty() {
         "en"
     } else {
@@ -891,14 +873,27 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if let Some(ccap_path) = config.ccap_path.as_ref()
         && ccap_path.exists()
     {
+        ccap_key = match crate::versions::mint_key(
+            config,
+            crate::encrypt::KeyType::Mdsk,
+            &ccap_uuid.to_string(),
+        ) {
+            Ok(k) => k,
+            Err(()) => return -1,
+        };
         match wrap_timed_text_track(
-            ccap_path,
-            &ccap_mxf_path,
+            crate::mxf_wrap::MxfWrapConfig {
+                input_path: ccap_path.clone(),
+                output_mxf: ccap_mxf_path.clone(),
+                mxf_type: crate::mxf_wrap::MxfType::TimedText,
+                frame_rate: fps,
+                encryption: ccap_key.as_ref().map(crate::reel::mxf_enc),
+                mca_config: None,
+                asset_uuid: Some(*ccap_uuid.as_bytes()),
+            },
             ccap_lang,
-            fps,
             cue_timing,
             &config.subtitle_opts.for_closed_caption(),
-            *ccap_uuid.as_bytes(),
         ) {
             Some(d) => {
                 ccap_duration = d;
@@ -914,20 +909,29 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let atmos_mxf_name = format!("atmos_{atmos_uuid}.mxf");
     let atmos_mxf_path = config.output_dir.join(&atmos_mxf_name);
     let mut aux_data: Option<crate::cpl::AuxData> = None;
+    let mut atmos_key = None;
 
     if let Some(ref atmos_path) = config.atmos_path {
         if let Err(e) = crate::preflight::check_atmos_path(atmos_path) {
             tracing::error!("{e}");
             return -1;
         }
-        // aux data carries the essence unencrypted; the synthetic id keeps
-        // CPL/PKL/ASSETMAP consistent (same pattern as picture/sound).
+        atmos_key = match crate::versions::mint_key(
+            config,
+            crate::encrypt::KeyType::Mdek,
+            &atmos_uuid.to_string(),
+        ) {
+            Ok(k) => k,
+            Err(()) => return -1,
+        };
+        // the synthetic id keeps CPL/PKL/ASSETMAP consistent (same pattern as
+        // picture/sound)
         let wrap_config = crate::mxf_wrap::MxfWrapConfig {
             input_path: atmos_path.clone(),
             output_mxf: atmos_mxf_path.clone(),
             mxf_type: crate::mxf_wrap::MxfType::Atmos,
             frame_rate: fps,
-            encryption: None,
+            encryption: atmos_key.as_ref().map(crate::reel::mxf_enc),
             mca_config: None,
             asset_uuid: Some(*atmos_uuid.as_bytes()),
         };
@@ -946,7 +950,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             edit_rate_den: 1,
             duration: track.duration,
             entry_point: 0,
-            key_id: None,
+            key_id: atmos_key.as_ref().map(|k| k.info.key_id.clone()),
             data_type: ATMOS_DATA_TYPE_UL.to_string(),
         });
         tracing::info!("Atmos MXF: {atmos_mxf_name} ({} frames)", track.duration);
@@ -1035,6 +1039,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             None
         },
         subtitle_hash,
+        subtitle_key_id: subtitle_key.as_ref().map(|k| k.info.key_id.clone()),
         ccap_id: if has_ccap {
             Some(ccap_uuid.to_string())
         } else {
@@ -1050,6 +1055,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             None
         },
         ccap_hash,
+        ccap_key_id: ccap_key.as_ref().map(|k| k.info.key_id.clone()),
         stereoscopic,
         aux_data: aux_data.clone(),
         markers,
@@ -1256,11 +1262,11 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             cpl_id: cpl_uuid.clone(),
             keys: Vec::new(),
         };
-        if let Some(k) = picture_key {
-            bundle.keys.push(k.info);
-        }
-        if let Some(k) = sound_key {
-            bundle.keys.push(k.info);
+        for key in [picture_key, sound_key, subtitle_key, ccap_key, atmos_key]
+            .into_iter()
+            .flatten()
+        {
+            bundle.keys.push(key.info);
         }
         if let Err(e) = bundle.write(keys_path) {
             tracing::error!("Failed to write keys file: {e}");

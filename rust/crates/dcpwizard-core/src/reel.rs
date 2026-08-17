@@ -570,6 +570,14 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             }
             let sub_name = format!("subtitle_{subtitle_uuid}.mxf");
             let sub_path = config.output_dir.join(&sub_name);
+            let subtitle_key = match mint_key(
+                config,
+                crate::encrypt::KeyType::Mdsk,
+                &subtitle_uuid.to_string(),
+            ) {
+                Ok(k) => k,
+                Err(()) => return -1,
+            };
             let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
                 &dcst,
                 &resources,
@@ -577,6 +585,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 fps,
                 Some(*subtitle_uuid.as_bytes()),
                 Some(reel_frames as u32),
+                subtitle_key.as_ref().map(mxf_enc),
             );
             temps.push(dcst);
             let Some(track) = wrapped else {
@@ -594,6 +603,8 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 id: subtitle_uuid.to_string(),
                 duration: track.duration,
                 hash: crate::hash::hash_file(&sub_path).unwrap_or_default(),
+                key_id: subtitle_key.as_ref().map(|k| k.info.key_id.clone()),
+                key_info: subtitle_key.map(|k| k.info),
             });
         }
 
@@ -621,6 +632,14 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             }
             let ccap_name = format!("ccap_{ccap_uuid}.mxf");
             let ccap_path = config.output_dir.join(&ccap_name);
+            let ccap_key = match mint_key(
+                config,
+                crate::encrypt::KeyType::Mdsk,
+                &ccap_uuid.to_string(),
+            ) {
+                Ok(k) => k,
+                Err(()) => return -1,
+            };
             let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
                 &dcst,
                 &resources,
@@ -628,6 +647,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 fps,
                 Some(*ccap_uuid.as_bytes()),
                 Some(reel_frames as u32),
+                ccap_key.as_ref().map(mxf_enc),
             );
             temps.push(dcst);
             let Some(track) = wrapped else {
@@ -645,14 +665,20 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
                 id: ccap_uuid.to_string(),
                 duration: track.duration,
                 hash: crate::hash::hash_file(&ccap_path).unwrap_or_default(),
+                key_id: ccap_key.as_ref().map(|k| k.info.key_id.clone()),
+                key_info: ccap_key.map(|k| k.info),
             });
         }
 
-        if let Some(k) = picture_key {
-            key_infos.push(k.info);
+        for key in [picture_key, sound_key].into_iter().flatten() {
+            key_infos.push(key.info);
         }
-        if let Some(k) = sound_key {
-            key_infos.push(k.info);
+        for key in [sub.as_ref(), ccap.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.key_info.as_ref())
+        {
+            key_infos.push(key.clone());
         }
 
         cpl_reels.push(crate::cpl::CplReel {
@@ -680,6 +706,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             subtitle_entry_point: 0,
             subtitle_language: sub.as_ref().map(|_| subtitle_lang.to_string()),
             subtitle_hash: sub.as_ref().map(|t| t.hash.clone()),
+            subtitle_key_id: sub.as_ref().and_then(|t| t.key_id.clone()),
             ccap_id: ccap.as_ref().map(|t| t.id.clone()),
             ccap_edit_rate_num: fps,
             ccap_edit_rate_den: 1,
@@ -687,6 +714,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             ccap_entry_point: 0,
             ccap_language: ccap.as_ref().map(|_| ccap_lang.to_string()),
             ccap_hash: ccap.as_ref().map(|t| t.hash.clone()),
+            ccap_key_id: ccap.as_ref().and_then(|t| t.key_id.clone()),
             stereoscopic: false,
             aux_data: None,
             markers: Vec::new(),

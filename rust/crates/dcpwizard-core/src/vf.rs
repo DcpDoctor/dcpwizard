@@ -527,6 +527,7 @@ fn prepare_timed_text(
         fps,
         Some(*id.as_bytes()),
         None,
+        None,
     );
     if let Some(tmp) = temp_dcst {
         let _ = std::fs::remove_file(tmp);

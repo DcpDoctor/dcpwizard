@@ -65,13 +65,11 @@ user-facing surface is here.
   references collapse onto the submodule this workspace already builds. The
   edit-the-submodule-and-rebuild loop is unchanged and `cargo tree -d` reports no
   postkit duplicate. imfwizard has the same shape.
-- Encrypted timed text and Atmos (PK mxf_wrap.rs): `wrap_timed_text` and
-  `wrap_atmos` never call `setup_encryption` and pass no AES/HMAC contexts to the
-  writers, though asdcplib-rs takes them on `write_timed_text_resource`,
-  `write_ancillary_resource` and the Atmos `write_frame`. Until that lands,
-  `--encrypt` refuses a package carrying a subtitle, closed-caption or Atmos track
-  (CORE/encrypt.rs `check_encryptable_tracks`). Then: an MDSK key type for timed
-  text, the key ids into the CPL/AuxData and the keys file, and a KDM covering them.
+- Decrypting timed text and Atmos (CORE/decrypt.rs `process_cleartext_copy`):
+  `create --encrypt` keys the subtitle, closed-caption and Atmos tracks now, but
+  `decrypt` and `transcode-dcp` still refuse an encrypted timed-text or aux-data
+  MXF rather than rewrapping it in the clear, so an all-encrypted package with any
+  of those tracks cannot be round-tripped back to cleartext.
 - Source fitting from the GUI without a crop (GUI pipeline.rs `job_geometry`): the
   create panel names a container, never a raster, so it forces a raster only when
   Fill container is ticked. A letterboxed HD source with 2K Scope selected and the
