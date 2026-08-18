@@ -8,6 +8,15 @@ user-facing surface is here.
 
 ## Open
 
+- Preview transport controls beyond play/pause: a to-start button, skip
+  back/forward buttons (the seconds ArrowLeft/ArrowRight already seek), and
+  single-frame stepping. Frame stepping is mpv's `frame-step` and
+  `frame-back-step`, which need two new guikit preview commands each wizard
+  registers in its src-tauri handler list. The buttons go in `#global-transport`
+  in `gui/index.html` beside the play button and are wired by id in guikit's
+  `preview.js`; the shortcut list in `gui/src/main.js` gains `,` and `.` for the
+  frame steps. Shared with imfwizard through guikit; the markup and shortcut
+  registrations are per wizard.
 - Hints not ported from DCP-o-matic's list, each for a reason. Signing certificate
   checks (utf8 subject strings, a chain valid for more than 15 years) are about
   the configured signer rather than the job, and our signer is held to ST 430-2
