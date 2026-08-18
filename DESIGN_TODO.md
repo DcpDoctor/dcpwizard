@@ -8,6 +8,12 @@ user-facing surface is here.
 
 ## Open
 
+- GUI re-verification owed (2026-08-17): the QC overlays drawn at and across end
+  of file without freezing and without the frame-rate hit the old vf chain
+  caused (watch the HUD decoder fps), the playlist fixes live (clearing rows
+  stops or clears the preview when the queue owns it, one advance per end of
+  file), and the transport bar tracking live during playback after postkit's
+  non-blocking render fix (its DESIGN_TODO has the entry).
 - Preview transport controls beyond play/pause: a to-start button, skip
   back/forward buttons (the seconds ArrowLeft/ArrowRight already seek), and
   single-frame stepping. Frame stepping is mpv's `frame-step` and
