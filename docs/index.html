@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DCP Wizard: Turn Your Master Into a Cinema-Ready DCP</title>
-    <meta name="description" content="DCP Wizard turns your finished master into a cinema-ready Digital Cinema Package. Start from ProRes, DPX, or camera masters, package SMPTE or Interop, encrypt with KDMs, quality-check, and deliver. Free desktop app for Windows, macOS, and Linux.">
+    <meta name="description" content="DCP Wizard turns your finished master into a cinema-ready Digital Cinema Package. Start from ProRes, DPX, or camera masters, package SMPTE or Interop, encrypt every track with KDMs, preview, quality-check, and deliver. Free desktop app for Windows, macOS, and Linux.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -322,6 +322,7 @@
             DCP Wizard
         </a>
         <ul class="nav-links">
+            <li><a href="https://postperfection.github.io/">Suite</a></li>
             <li><a href="#download">Download</a></li>
             <li><a href="#features">Features</a></li>
             <li><a href="#comparison">Compare</a></li>
@@ -411,17 +412,32 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(251,113,133,0.15);">🖼️</div>
             <h3>Hit the right frame</h3>
-            <p>Scope, flat, or full. Scale, crop, or letterbox to land exactly on the DCI frame you need.</p>
+            <p>Scope, flat, or full. Crop, auto-crop, fill, rotate, flip, or letterbox so the source lands on the DCI raster the container asks for.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(251,191,36,0.15);">🎬</div>
             <h3>Multi-reel features</h3>
-            <p>Split a long feature into reels automatically, with sample-accurate audio and clean subtitle boundaries at every reel.</p>
+            <p>Split a long feature into reels automatically, at a length, at timecodes, or at chapter marks, with sample-accurate audio and clean subtitle boundaries at every reel.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(52,211,153,0.15);">🌍</div>
             <h3>Every language in one package</h3>
-            <p>Build one package with a version per language: several playlists share the same picture and sound, each with its own subtitles or dub.</p>
+            <p>Build one package with a version per language: several playlists share the same picture and sound, each with its own subtitles or dub. A version file ships only what changed against an existing OV.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(74,222,128,0.15);">⚡</div>
+            <h3>Pre-build check</h3>
+            <p>Every reason a job cannot be packaged is raised before the encode starts, so a bad title or a bad subtitle fails in a second instead of after an hour of JPEG 2000. Advisory hints (channel count, first cue too early, unusual frame rate) show in a dialog you can build through.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(56,189,248,0.15);">🏷️</div>
+            <h3>ISDCF content titles</h3>
+            <p>Rebuild the title from what the package actually carries: content type, container, languages, channel ladder, territory, rating, resolution, studio, and date. Ratings and content version also land in the CPL.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(251,191,36,0.15);">🎞️</div>
+            <h3>Idents and rating cards</h3>
+            <p>Keep a library of head idents, tail idents, rating cards, and anti-piracy clips. They join as their own reels, conformed to the feature's raster, rate, and sound layout at build time.</p>
         </div>
     </div>
 
@@ -430,12 +446,31 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(251,191,36,0.15);">🔊</div>
             <h3>Immersive sound</h3>
-            <p>Package Dolby Atmos alongside your PCM mix for immersive-capable rooms.</p>
+            <p>Package Dolby Atmos alongside your PCM mix. Map any source channel to any DCP lane, fill a stereo source out to 6, 8, or 16 channels without upmixing, or label HI, VI, and sign-language video (ISDCF Doc 13).</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(167,139,250,0.15);">📝</div>
-            <h3>Subtitles from SRT</h3>
-            <p>Turn an SRT into cinema subtitles: convert it, package it into the DCP, or burn it into the picture for festivals. Multiple languages supported.</p>
+            <h3>Subtitles from your edit</h3>
+            <p>Package SRT, ASS/SSA, PAC, FCPXML, Matroska, or Interop PNG bitmaps as cinema timed text, or burn them into the picture as it encodes. Placement, RTL, wrap, font embedding, and appearance (size, colour, outline or shadow, fades) are yours to set.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(56,189,248,0.15);">💬</div>
+            <h3>Closed captions</h3>
+            <p>A separate ST 429-12 closed-caption track, the same input formats as open subtitles. Carried through reel splits, language versions, and version files. Every reel that needs a caption gets one, including a placeholder on a reel with nothing to show.</p>
+        </div>
+    </div>
+
+    <h3 class="group-title">Preview before it ships</h3>
+    <div class="features-grid">
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(167,139,250,0.15);">▶️</div>
+            <h3>Source and package preview</h3>
+            <p>Play the source or the finished DCP in the app. Crop bands follow the Picture panel, Sub and CC load the packaged tracks, and the header carries a safe-area box, an aspect mask, a centre cross, a thirds grid, decode scale, and a HUD.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(34,211,238,0.15);">📋</div>
+            <h3>Play, inspect, queue</h3>
+            <p>A finished build offers Play, Inspect (the Verify view, already running), and Reveal. Queue packages from Recent Projects or a finished build and they play one after another.</p>
         </div>
     </div>
 
@@ -458,7 +493,7 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(251,113,133,0.15);">🔐</div>
             <h3>Encryption and KDMs</h3>
-            <p>Encrypt the package and cut a KDM per screen. Batch KDMs for a whole release in one pass, and re-wrap from a distribution KDM when a new venue is added.</p>
+            <p>Encrypt every essence: picture, sound, subtitles, closed captions, and Atmos, each with its own key. Cut a KDM per screen, batch a whole release, email KDMs from a cinema list, or re-wrap from a distribution KDM when a new venue is added.</p>
         </div>
     </div>
 
@@ -467,12 +502,12 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(74,222,128,0.15);">✅</div>
             <h3>Built-in quality check</h3>
-            <p>DCP Doctor checks your package against SMPTE compliance and hands you an HTML report, so problems surface before the package leaves your desk.</p>
+            <p>DCP Doctor checks your package against SMPTE Bv2.1 and hands you an HTML report, including JPEG 2000 forensics and Leq(m) sound level against the content kind's limit, so problems surface before the package leaves your desk.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(56,189,248,0.15);">📤</div>
             <h3>Verified copy to drive</h3>
-            <p>Copy to a CRU or USB cinema drive with a free-space check and a post-copy hash check, so what lands on the drive matches what you built.</p>
+            <p>Copy to a CRU or USB cinema drive with a free-space check and a post-copy hash check, or upload the finished package to a theatre management system over sftp.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(167,139,250,0.15);">▶️</div>
@@ -522,8 +557,8 @@
             <tr><td>Version Files (VF)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Multi-CPL timeline</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Up to 4K</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-            <tr><td>Frame rates 24–60 fps</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-            <tr><td>High Bitrate (500 Mbps)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Frame rates 24–120 fps (2K HFR)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>High bitrate encode</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Stereoscopic 3D</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>DPX / TIFF / PNG / QuickTime input</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Scale / Crop / Letterbox</td><td class="yes">✓</td><td class="yes">✓</td></tr>
@@ -531,15 +566,21 @@
             <tr><td>Audio (PCM 5.1)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Immersive audio (Dolby Atmos)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Channel labeling (2.0 / 5.1 / 7.1 + HI/VI)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-            <tr><td>SRT → SMPTE subtitles</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>SRT / ASS / PAC / FCPXML → SMPTE subtitles</td><td class="yes">✓</td><td class="yes">SRT</td></tr>
             <tr><td>Subtitle packaging into DCP</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-            <tr><td>Subtitle burn-in</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Closed captions (ST 429-12)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Subtitle burn-in during encode</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Integrated quality check</td><td class="yes">✓ (DCP Doctor)</td><td class="yes">✓ (Fraunhofer)</td></tr>
             <tr><td>KDM (SMPTE + Interop)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>AES-128 essence encryption</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>DKDM re-wrap</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Desktop app</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td colspan="3" style="color:var(--accent);font-weight:600;padding-top:20px;">DCP Wizard exclusive</td></tr>
+            <tr><td>Pre-build check and cinema hints</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>Preview with crop, Sub/CC, and QC overlays</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>ISDCF content titles from the package</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>Ident / rating-card library</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>TMS upload over sftp</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Automation API &amp; Docker</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Watch folder automation</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Visible watermarking</td><td class="yes">✓</td><td class="no">✗</td></tr>
@@ -562,7 +603,10 @@
     <h2 class="section-title">Automation</h2>
     <p class="section-subtitle">Run deliveries hands-off. The command-line version drives everything the app does, plus watch folders, a job queue, and an automation API for headless rooms.</p>
 
-    <div class="code-block"><code><span class="comment"># Watch a folder and build a DCP whenever a master lands in it</span>
+    <div class="code-block"><code><span class="comment"># Raise every refusal and hint before committing to the encode</span>
+<span class="cmd">dcpwizard</span> create <span class="flag">--title</span> <span class="val">"My Film"</span> <span class="flag">--video</span> <span class="val">movie.mov</span> <span class="flag">--output</span> <span class="val">./dcp</span> <span class="flag">--check</span>
+
+<span class="comment"># Watch a folder and build a DCP whenever a master lands in it</span>
 <span class="cmd">dcpwizard</span> watch <span class="val">./incoming</span>
 
 <span class="comment"># Queue a job and let the daemon work through it</span>
@@ -578,10 +622,11 @@
 
     <div class="prereqs-list">
         <div class="prereq"><span class="tag required">Required</span><span>Rust toolchain</span></div>
+        <div class="prereq"><span class="tag required">Required</span><span>Grok (JPEG 2000)</span></div>
         <div class="prereq"><span class="tag required">Required</span><span>OpenSSL</span></div>
         <div class="prereq"><span class="tag required">Required</span><span>Xerces-C</span></div>
         <div class="prereq"><span class="tag optional">Optional</span><span>ffmpeg (transcoding)</span></div>
-        <div class="prereq"><span class="tag optional">Optional</span><span>Grok (JPEG 2000)</span></div>
+        <div class="prereq"><span class="tag optional">Optional</span><span>mpv (GUI preview)</span></div>
     </div>
 
     <div class="code-block"><code><span class="comment"># Command-line build</span>
@@ -599,7 +644,7 @@
 
 <footer>
     <p>&copy; 2026 Grok Image Compression Inc. &middot; Licensed under the <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL-3.0</a>.</p>
-    <p style="margin-top: 8px;">Built by <a href="https://github.com/PostPerfection">PostPerfection</a></p>
+    <p style="margin-top: 8px;">Part of the <a href="https://postperfection.github.io/">PostPerfection</a> suite</p>
 </footer>
 
 </body>
