@@ -4814,7 +4814,7 @@ fn run() {
             input_range,
             split_chapters,
         } => {
-            use postkit::encode::{StreamEncodeOptions, stream_encode_subprocess};
+            use postkit::pipeline::{EncodeRunOptions, PipelineProgress, run_encode_with_options};
             use std::sync::Arc;
             use std::sync::atomic::AtomicBool;
 
@@ -4830,7 +4830,7 @@ fn run() {
             let j2k_dir = output_dir.join("j2k");
             let _ = std::fs::create_dir_all(&j2k_dir);
 
-            tracing::info!("Pipeline (subprocess Grok): {} -> {}", input, output);
+            tracing::info!("Pipeline: {} -> {}", input, output);
 
             // reel-split boundaries from the source's chapter marks
             let reel_split_frames = if split_chapters {
@@ -4861,34 +4861,22 @@ fn run() {
                 input_path.clone()
             };
 
-            let grk_bin = std::env::var("GRK_COMPRESS_BIN")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    PathBuf::from(home).join("bin/grok/bin/grk_compress")
-                });
-
             let conform = dcpwizard_core::probe::probe_video(&encode_input)
                 .map(|info| {
                     dcpwizard_core::hfr::conform_source_to_dcp(info.fps_num, info.fps_den, fps)
                 })
                 .unwrap_or_default();
 
-            let opts = StreamEncodeOptions {
-                input: encode_input.clone(),
-                output_dir: j2k_dir.clone(),
+            let encode_options = EncodeRunOptions {
                 compression_ratio: ratio,
-                num_resolutions: 6,
-                codeblock_size: 32,
-                progression: "CPRL".to_string(),
                 fps: postkit::encode::FrameRate::whole(fps),
                 read_source_at: conform.read_source_at,
-                compressor_path: grk_bin,
-                lib_dir: None,
-                ..StreamEncodeOptions::default()
+                codestream_byte_cap: Some(postkit::j2k::dci_codestream_byte_cap(fps)),
+                ..EncodeRunOptions::default()
             };
 
             let cancel = Arc::new(AtomicBool::new(false));
+            let pause = Arc::new(AtomicBool::new(false));
 
             // Handle Ctrl+C
             let cancel_clone = cancel.clone();
@@ -4896,113 +4884,104 @@ fn run() {
                 cancel_clone.store(true, std::sync::atomic::Ordering::Relaxed);
             });
 
-            let result = stream_encode_subprocess(&opts, &cancel, |p| {
-                let percent = if p.total_frames > 0 {
-                    (p.frame as f64 / p.total_frames as f64) * 100.0
-                } else {
-                    0.0
-                };
-                eprint!(
-                    "\r[encode] {}/{} frames ({:.0}%) {:.1} fps   ",
-                    p.frame, p.total_frames, percent, p.fps
-                );
-            });
+            let encode = run_encode_with_options(
+                &encode_input,
+                &output_dir,
+                &encode_options,
+                &cancel,
+                &pause,
+                |p: &PipelineProgress| {
+                    let percent = if p.total_frames > 0 {
+                        (p.frame as f64 / p.total_frames as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    eprint!(
+                        "\r[encode] {}/{} frames ({:.0}%) {:.1} fps   ",
+                        p.frame, p.total_frames, percent, p.fps
+                    );
+                },
+                |message: &str| tracing::debug!("{message}"),
+            );
             eprintln!();
 
-            if !result.success {
-                tracing::error!("Encode failed: {}", result.error);
-                1
-            } else {
-                tracing::info!("Encoded {} frames", result.frames_encoded);
-
-                let cap = postkit::j2k::dci_codestream_byte_cap(fps);
-                let over_cap: Vec<(String, u64)> = std::fs::read_dir(&j2k_dir)
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .filter_map(|entry| {
-                        let len = entry.metadata().ok()?.len();
-                        (len > cap).then(|| (entry.file_name().to_string_lossy().into_owned(), len))
-                    })
-                    .collect();
-                if !over_cap.is_empty() {
-                    let worst = over_cap.iter().map(|(_, len)| *len).max().unwrap_or(0);
-                    tracing::error!(
-                        "{} frames exceed the DCI cap of {cap} bytes at {fps} fps (largest {worst}); the package would fail QC",
-                        over_cap.len()
-                    );
+            let encode = match encode {
+                Ok(encode) => encode,
+                Err(e) => {
+                    tracing::error!("Encode failed: {e}");
                     std::process::exit(1);
                 }
+            };
+            tracing::info!("Encoded {} frames", encode.frames_encoded);
 
-                // Auto-demux audio from video if --audio not provided
-                let audio_path = if let Some(a) = audio {
-                    Some(PathBuf::from(a))
-                } else {
-                    let wav_out = output_dir.join("audio_demux.wav");
-                    let demux = std::process::Command::new("ffmpeg")
-                        .arg("-y")
-                        .arg("-i")
-                        .arg(&input_path)
-                        .arg("-vn")
-                        .arg("-acodec")
-                        .arg("pcm_s24le")
-                        .arg("-ar")
-                        .arg("48000")
-                        .arg(&wav_out)
-                        .output();
-                    match demux {
-                        Ok(o) if o.status.success() => {
-                            tracing::info!("Demuxed audio: {}", wav_out.display());
-                            Some(wav_out)
-                        }
-                        Ok(_) => {
-                            tracing::warn!("No audio stream in input (or demux failed)");
-                            None
-                        }
-                        Err(e) => {
-                            tracing::warn!("ffmpeg not available for audio demux: {e}");
-                            None
-                        }
+            // Auto-demux audio from video if --audio not provided
+            let audio_path = if let Some(a) = audio {
+                Some(PathBuf::from(a))
+            } else {
+                let wav_out = output_dir.join("audio_demux.wav");
+                let demux = std::process::Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-i")
+                    .arg(&input_path)
+                    .arg("-vn")
+                    .arg("-acodec")
+                    .arg("pcm_s24le")
+                    .arg("-ar")
+                    .arg("48000")
+                    .arg(&wav_out)
+                    .output();
+                match demux {
+                    Ok(o) if o.status.success() => {
+                        tracing::info!("Demuxed audio: {}", wav_out.display());
+                        Some(wav_out)
                     }
-                };
-
-                let audio_path = match (conform.audio_pull_up, audio_path) {
-                    (true, Some(input)) => {
-                        let pulled_up = output_dir.join("audio_pullup.wav");
-                        if let Err(error) = dcpwizard_core::hfr::audio_pull_up(&input, &pulled_up) {
-                            tracing::error!("{error}");
-                            std::process::exit(1);
-                        }
-                        tracing::info!("Applied 23.976-to-24 audio pull-up");
-                        Some(pulled_up)
+                    Ok(_) => {
+                        tracing::warn!("No audio stream in input (or demux failed)");
+                        None
                     }
-                    (_, audio_path) => audio_path,
-                };
+                    Err(e) => {
+                        tracing::warn!("ffmpeg not available for audio demux: {e}");
+                        None
+                    }
+                }
+            };
 
-                // Package
-                let config = dcpwizard_core::dcp::DcpConfig {
-                    title,
-                    standard: dcpwizard_core::Standard::Smpte,
-                    output_dir: output_dir.clone(),
-                    frame_rate_num: fps,
-                    frame_rate_den: 1,
-                    j2k_dir: Some(j2k_dir.clone()),
-                    audio_path: audio_path.clone(),
-                    audio_input_order: dcpwizard_core::mxf_wrap::AudioInputOrder::Canonical51,
-                    reel_split_frames: reel_split_frames.clone(),
-                    ..Default::default()
-                };
-                let code = dcpwizard_core::dcp::create_dcp(&config);
+            let audio_path = match (conform.audio_pull_up, audio_path) {
+                (true, Some(input)) => {
+                    let pulled_up = output_dir.join("audio_pullup.wav");
+                    if let Err(error) = dcpwizard_core::hfr::audio_pull_up(&input, &pulled_up) {
+                        tracing::error!("{error}");
+                        std::process::exit(1);
+                    }
+                    tracing::info!("Applied 23.976-to-24 audio pull-up");
+                    Some(pulled_up)
+                }
+                (_, audio_path) => audio_path,
+            };
 
-                // Clean up intermediate files
-                let _ = std::fs::remove_dir_all(&j2k_dir);
-                // both are ours whenever they exist, and the pull-up may have
-                // moved audio_path off the demux, so remove them by name
-                let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
-                let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
-                let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
-                code
-            }
+            // Package
+            let config = dcpwizard_core::dcp::DcpConfig {
+                title,
+                standard: dcpwizard_core::Standard::Smpte,
+                output_dir: output_dir.clone(),
+                frame_rate_num: fps,
+                frame_rate_den: 1,
+                j2k_dir: Some(j2k_dir.clone()),
+                audio_path: audio_path.clone(),
+                audio_input_order: dcpwizard_core::mxf_wrap::AudioInputOrder::Canonical51,
+                reel_split_frames: reel_split_frames.clone(),
+                ..Default::default()
+            };
+            let code = dcpwizard_core::dcp::create_dcp(&config);
+
+            // Clean up intermediate files
+            let _ = std::fs::remove_dir_all(&j2k_dir);
+            // both are ours whenever they exist, and the pull-up may have
+            // moved audio_path off the demux, so remove them by name
+            let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
+            let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
+            let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
+            code
         }
 
         Commands::Transcode {
