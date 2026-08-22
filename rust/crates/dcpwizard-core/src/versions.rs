@@ -678,7 +678,7 @@ pub fn create_versioned_dcp(config: &DcpConfig, versions: &[VersionSpec]) -> i32
                     ch,
                     config.hi_channel,
                     config.vi_channel,
-                )?;
+                );
                 let sample_rate = crate::mxf_wrap::wav_sample_rate(path).unwrap_or(48000);
                 Some(crate::cpl::MainSound {
                     configuration,

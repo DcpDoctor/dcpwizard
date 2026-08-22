@@ -805,18 +805,17 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         });
         // MainSoundConfiguration for the CPL metadata asset, from the same counts
         // as the MCA labels (silent fill channels become '-').
-        if let Some(configuration) = crate::cpl::main_sound_configuration(
+        let configuration = crate::cpl::main_sound_configuration(
             content_channels,
             packaged_channels,
             config.hi_channel,
             config.vi_channel,
-        ) {
-            let sample_rate = crate::mxf_wrap::wav_sample_rate(audio_path).unwrap_or(48000);
-            main_sound = Some(crate::cpl::MainSound {
-                configuration,
-                sample_rate,
-            });
-        }
+        );
+        let sample_rate = crate::mxf_wrap::wav_sample_rate(audio_path).unwrap_or(48000);
+        main_sound = Some(crate::cpl::MainSound {
+            configuration,
+            sample_rate,
+        });
         if config.has_library_items() {
             match crate::library_reel::job_sound(audio_path) {
                 Ok(sound) => job_sound = Some(sound),

@@ -405,7 +405,7 @@ fn splice_reel_extras(
         let end = idx + pos;
         let mut segment = xml[idx..end].to_string();
         if reel.stereoscopic {
-            segment = rewrite_stereoscopic(&segment, reel, standard);
+            segment = remove_main_picture(&segment);
         }
         if !reel.markers.is_empty() {
             segment = insert_main_markers(&segment, reel);
@@ -413,6 +413,12 @@ fn splice_reel_extras(
         out.push_str(&segment);
         if let Some(ref sid) = reel.subtitle_id {
             out.push_str(&main_subtitle_block(reel, sid));
+        }
+        // everything below is in a namespace of its own, and 429-7 admits those
+        // through an xs:any that follows MainSubtitle: a foreign element written
+        // where MainPicture sat makes the AssetList schema-invalid
+        if reel.stereoscopic {
+            out.push_str(&stereoscopic_picture_block(reel, standard));
         }
         if let Some(ref cid) = reel.ccap_id {
             out.push_str(&main_closed_caption_block(reel, cid));
@@ -439,26 +445,41 @@ const NS_CPL_META: &str = "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metad
 const UNM49_SCOPE: &str =
     "http://www.smpte-ra.org/schemas/429-16/2014/CPL-Metadata#scope/release-territory/UNM49";
 
+/// ST 428-12 soundfield group for a single channel, which ISDCF's audio-config
+/// registry gives as the DCP naming code 10, "1.0 (Center Channel Mono)".
+const SOUNDFIELD_MONO: &str = "M";
+
+/// Written where no ST 428-12 group describes the channel count. ISDCF uses '-'
+/// for a MainSoundConfiguration with nothing to declare.
+const SOUNDFIELD_NONE: &str = "-";
+
 /// Build the ST 429-16 MainSoundConfiguration. The group comes from the channels
 /// the content fills, the slot count from the channels the track is packaged
 /// with, so the silent fill channels are written '-' rather than counted into
-/// the group. Returns None for a layout with no canonical DCP label.
+/// the group.
+///
+/// A layout with no canonical DCP labels keeps its slot count and writes every
+/// slot '-': the sound essence carries no MCA labels to name those channels
+/// with, and ISDCF's own guidance for channels with nothing to declare is the
+/// '-' form. The string is required either way, since Bv2.1 wants the metadata
+/// asset that holds it on every SMPTE CPL.
 pub fn main_sound_configuration(
     content_channels: u32,
     packaged_channels: u32,
     hi_channel: Option<u32>,
     vi_channel: Option<u32>,
-) -> Option<String> {
+) -> String {
     let extra = hi_channel.is_some() as u32 + vi_channel.is_some() as u32;
     let main_count = content_channels.saturating_sub(extra);
     // canonical DCP channel order per ISDCF / SMPTE RDD 52. 16 is 5.1 because no
     // content is 16 channels wide: a caller that knows only the packaged count is
     // looking at the 5.1 track the wrap has always filled.
     let (group, labels): (&str, &[&str]) = match main_count {
+        1 => (SOUNDFIELD_MONO, &[]),
         2 => ("20", &["L", "R"]),
         6 | 16 => ("51", &["L", "R", "C", "LFE", "Ls", "Rs"]),
         8 => ("71", &["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs"]),
-        _ => return None,
+        _ => (SOUNDFIELD_NONE, &[]),
     };
     let mut slots = vec!["-"; packaged_channels as usize];
     for (i, l) in labels.iter().enumerate() {
@@ -476,7 +497,7 @@ pub fn main_sound_configuration(
     {
         *slot = "VIN";
     }
-    Some(format!("{group}/{}", slots.join(",")))
+    format!("{group}/{}", slots.join(","))
 }
 
 /// SMPTE Bv2.1 CompositionMetadataAsset for the first reel. Stored and active
@@ -611,20 +632,16 @@ fn composition_metadata_block(config: &CplConfig, reel: &CplReel, sound: &MainSo
     b
 }
 
-/// Replace a reel segment's `<MainPicture>…</MainPicture>` block with a ST 429-10
-/// MainStereoscopicPicture (FrameRate = 2x edit rate for interleaved L/R).
-fn rewrite_stereoscopic(segment: &str, reel: &CplReel, standard: crate::Standard) -> String {
+/// Drop a reel segment's `<MainPicture>…</MainPicture>` block. A stereoscopic
+/// reel declares its picture as the ST 429-10 MainStereoscopicPicture appended
+/// further down the AssetList instead.
+fn remove_main_picture(segment: &str) -> String {
     const OPEN: &str = "        <MainPicture>\n";
     const CLOSE: &str = "        </MainPicture>\n";
     let (Some(start), Some(close)) = (segment.find(OPEN), segment.find(CLOSE)) else {
         return segment.to_string();
     };
-    let block_end = close + CLOSE.len();
-    let mut out = String::with_capacity(segment.len() + 128);
-    out.push_str(&segment[..start]);
-    out.push_str(&stereoscopic_picture_block(reel, standard));
-    out.push_str(&segment[block_end..]);
-    out
+    format!("{}{}", &segment[..start], &segment[close + CLOSE.len()..])
 }
 
 fn stereoscopic_picture_block(reel: &CplReel, standard: crate::Standard) -> String {
@@ -657,8 +674,13 @@ fn stereoscopic_picture_block(reel: &CplReel, standard: crate::Standard) -> Stri
         "          <Duration>{}</Duration>\n",
         reel.picture_duration
     ));
+    // ST 429-7 PictureTrackFileAssetType, which 429-10 reuses: KeyId then Hash,
+    // both before FrameRate
     if let Some(ref key_id) = reel.picture_key_id {
         b.push_str(&format!("          <KeyId>urn:uuid:{key_id}</KeyId>\n"));
+    }
+    if let Some(ref hash) = reel.picture_hash {
+        b.push_str(&format!("          <Hash>{hash}</Hash>\n"));
     }
     // stereoscopic essence carries two frames (left+right) per edit unit
     b.push_str(&format!(
@@ -858,27 +880,24 @@ mod tests {
 
     #[test]
     fn main_sound_configuration_by_channel_count() {
+        assert_eq!(main_sound_configuration(2, 2, None, None), "20/L,R");
         assert_eq!(
-            main_sound_configuration(2, 2, None, None).as_deref(),
-            Some("20/L,R")
+            main_sound_configuration(6, 6, None, None),
+            "51/L,R,C,LFE,Ls,Rs"
         );
         assert_eq!(
-            main_sound_configuration(6, 6, None, None).as_deref(),
-            Some("51/L,R,C,LFE,Ls,Rs")
-        );
-        assert_eq!(
-            main_sound_configuration(8, 8, None, None).as_deref(),
-            Some("71/L,R,C,LFE,Lss,Rss,Lrs,Rrs")
+            main_sound_configuration(8, 8, None, None),
+            "71/L,R,C,LFE,Lss,Rss,Lrs,Rrs"
         );
         // a 5.1 source padded to a 16-channel MXF carries ten '-' fills
         assert_eq!(
-            main_sound_configuration(6, 16, None, None).as_deref(),
-            Some("51/L,R,C,LFE,Ls,Rs,-,-,-,-,-,-,-,-,-,-")
+            main_sound_configuration(6, 16, None, None),
+            "51/L,R,C,LFE,Ls,Rs,-,-,-,-,-,-,-,-,-,-"
         );
         // HI/VI take their own channel slots after the main layout
         assert_eq!(
-            main_sound_configuration(8, 8, Some(6), Some(7)).as_deref(),
-            Some("51/L,R,C,LFE,Ls,Rs,HI,VIN")
+            main_sound_configuration(8, 8, Some(6), Some(7)),
+            "51/L,R,C,LFE,Ls,Rs,HI,VIN"
         );
     }
 
@@ -887,16 +906,57 @@ mod tests {
     #[test]
     fn filled_channels_do_not_join_the_soundfield_group() {
         assert_eq!(
-            main_sound_configuration(2, 16, None, None).as_deref(),
-            Some("20/L,R,-,-,-,-,-,-,-,-,-,-,-,-,-,-")
+            main_sound_configuration(2, 16, None, None),
+            "20/L,R,-,-,-,-,-,-,-,-,-,-,-,-,-,-"
         );
+        assert_eq!(main_sound_configuration(2, 6, None, None), "20/L,R,-,-,-,-");
         assert_eq!(
-            main_sound_configuration(2, 6, None, None).as_deref(),
-            Some("20/L,R,-,-,-,-")
+            main_sound_configuration(6, 8, None, None),
+            "51/L,R,C,LFE,Ls,Rs,-,-"
         );
+    }
+
+    /// Sound the essence carries no MCA labels for still gets a configuration,
+    /// so its composition can carry the metadata asset Bv2.1 requires. The slots
+    /// stay '-' rather than borrowing a layout the labels never claimed.
+    #[test]
+    fn unlabelled_sound_keeps_its_channel_count_and_names_no_channels() {
+        assert_eq!(main_sound_configuration(1, 1, None, None), "M/-");
         assert_eq!(
-            main_sound_configuration(6, 8, None, None).as_deref(),
-            Some("51/L,R,C,LFE,Ls,Rs,-,-")
+            main_sound_configuration(1, 16, None, None),
+            "M/-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-"
+        );
+        assert_eq!(main_sound_configuration(3, 3, None, None), "-/-,-,-");
+        assert_eq!(main_sound_configuration(5, 5, None, None), "-/-,-,-,-,-");
+    }
+
+    /// A mono build's CPL is a SMPTE CPL, so Bv2.1 8.6.1 wants the metadata asset
+    /// and its VersionNumber there too.
+    #[test]
+    fn unlabelled_sound_still_gets_the_composition_metadata_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let config = CplConfig {
+            title: "Mono".into(),
+            content_kind: "feature".into(),
+            reels: vec![sound_reel()],
+            standard: crate::Standard::Smpte,
+            main_sound: Some(MainSound {
+                configuration: main_sound_configuration(1, 1, None, None),
+                sample_rate: 48000,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(xml.contains("<meta:CompositionMetadataAsset"), "{xml}");
+        assert!(
+            xml.contains("<meta:VersionNumber>1</meta:VersionNumber>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<meta:MainSoundConfiguration>M/-</meta:MainSoundConfiguration>"),
+            "{xml}"
         );
     }
 
@@ -1162,6 +1222,75 @@ mod tests {
         assert!(xml.contains("<EditRate>24 1</EditRate>"));
         assert!(xml.contains("<FrameRate>48 1</FrameRate>"));
         assert!(xml.contains("</msp-cpl:MainStereoscopicPicture>"));
+    }
+
+    /// 429-7 admits the 429-10 picture element through an xs:any that follows
+    /// MainSound and MainSubtitle, so writing it where MainPicture sat makes the
+    /// AssetList schema-invalid.
+    #[test]
+    fn stereoscopic_picture_follows_the_429_7_track_elements() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let mut reel = stereo_reel();
+        reel.sound_id = Some("snd1".into());
+        reel.sound_edit_rate_num = 24;
+        reel.sound_edit_rate_den = 1;
+        reel.sound_duration = 240;
+        reel.subtitle_id = Some("sub1".into());
+        reel.subtitle_edit_rate_num = 24;
+        reel.subtitle_edit_rate_den = 1;
+        reel.subtitle_duration = 240;
+        let config = CplConfig {
+            title: "3D Order".into(),
+            content_kind: "feature".into(),
+            reels: vec![reel],
+            standard: crate::Standard::Smpte,
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+        let stereo = xml.find("<msp-cpl:MainStereoscopicPicture").unwrap();
+        assert!(xml.find("</MainSound>").unwrap() < stereo, "{xml}");
+        assert!(xml.find("</MainSubtitle>").unwrap() < stereo, "{xml}");
+        assert!(stereo < xml.find("</AssetList>").unwrap(), "{xml}");
+    }
+
+    /// A stereoscopic picture is a track file like any other, so the servers that
+    /// hash-check against the CPL need its `Hash` there: after Duration/KeyId and
+    /// before FrameRate, the 429-7 order 429-10 reuses.
+    #[test]
+    fn stereoscopic_picture_carries_its_hash_in_the_cpl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let mut reel = stereo_reel();
+        reel.picture_hash = Some("cGljdHVyZS1oYXNo".into());
+        reel.picture_key_id = Some("11111111-2222-3333-4444-555555555555".into());
+        let config = CplConfig {
+            title: "3D Hash".into(),
+            content_kind: "feature".into(),
+            reels: vec![reel],
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+
+        let picture = xml
+            .split("<msp-cpl:MainStereoscopicPicture")
+            .nth(1)
+            .and_then(|s| s.split("</msp-cpl:MainStereoscopicPicture>").next())
+            .expect("a MainStereoscopicPicture");
+        assert!(
+            picture.contains("<Hash>cGljdHVyZS1oYXNo</Hash>"),
+            "{picture}"
+        );
+        assert!(
+            picture.find("<KeyId>").unwrap() < picture.find("<Hash>").unwrap(),
+            "Hash follows KeyId: {picture}"
+        );
+        assert!(
+            picture.find("<Hash>").unwrap() < picture.find("<FrameRate>").unwrap(),
+            "Hash precedes FrameRate: {picture}"
+        );
     }
 
     #[test]

@@ -8,14 +8,15 @@ user-facing surface is here.
 
 ## Open
 
-- Two CPL gaps dcpdoctor 0.5.0 flags on clean dcpwizard output (2026-08-22, both
-  seen on the dci-ctp corpus baselines). A stereoscopic build's
-  `msp-cpl:MainStereoscopicPicture` block carries EntryPoint and Duration but no
-  `<Hash>`, so `cpl_missing_hash` warns on a clean 3D package. And a build whose
-  sound carries no MCA labels (the mono path) writes no
-  `<CompositionMetadataAsset>` at all, so `missing_required_element` fires
-  against Bv2.1 §8.6.1, which wants the asset and its VersionNumber on every
-  SMPTE CPL.
+- The paths that rebuild a CPL from an existing package (CORE `vf`, `assemble`,
+  `decrypt`, `j2k_transcode`) write no `CompositionMetadataAsset`, so dcpdoctor's
+  `missing_required_element` fires on their output the way it did on the mono
+  build. Each passes `main_sound: None` and none of them knows the layout or
+  sample rate that block declares. `decrypt` and `j2k_transcode` ship the source's
+  own sound MXF, so they can carry the source CPL's `MainSoundConfiguration` and
+  `MainSoundSampleRate` over the way `cpl::active_area_from_cpl` carries the
+  masking; `vf` and `assemble` can replace or combine sound and would have to read
+  the essence.
 - GUI re-verification owed (2026-08-17): the QC overlays drawn at and across end
   of file without freezing and without the frame-rate hit the old vf chain
   caused (watch the HUD decoder fps), the playlist fixes live (clearing rows
@@ -233,6 +234,30 @@ breadth, QC detectors, and the render-farm/cloud story. Items worth landing here
   visual compare is the part worth matching.
 - Waveform and vectorscope in the preview. Transkoder implies scopes ("HDR
   analyzer") but never enumerates them. guikit, both wizards.
+
+## Done 2026-08-22
+
+- The two CPL gaps dcpdoctor 0.5.0 flagged on clean output. A stereoscopic reel's
+  `msp-cpl:MainStereoscopicPicture` now carries the picture `Hash` the 2D
+  `MainPicture` always had, written after `KeyId` and before `FrameRate`, the
+  429-7 order 429-10 reuses. And `cpl::main_sound_configuration` returns a
+  configuration for every channel count instead of `None` for anything but
+  2.0/5.1/7.1, so a build whose sound carries no MCA labels still gets the
+  `CompositionMetadataAsset` Bv2.1 §8.6.1 requires. One channel is ISDCF's `M`
+  soundfield (its audio-config registry, naming code 10, ST 428-12 `sgM`), any
+  other unlabeled count declares no soundfield and writes `-`, and every channel
+  slot is `-` in both: the slot count still matches the essence, which is what
+  dcpdoctor's `check_main_sound_configuration` cross-checks, and no channel is
+  given a label the sound MXF's subdescriptors do not carry. `create`, the reel
+  split, `versions` and `multi_cpl` all reach it through that one function.
+- Fixed alongside, since it kept a 3D package from validating at all: the 429-10
+  picture element was written where `MainPicture` had been, ahead of `MainSound`,
+  and 429-7 admits a foreign-namespace element only through the `xs:any` that
+  follows `MainSubtitle`, so every 3D CPL failed schema validation on the
+  `MainSound` that came after it. `splice_reel_extras` now drops `MainPicture` for
+  a stereoscopic reel and appends the 429-10 block with the other foreign assets.
+  dci-ctp's `corpus_gen.fixup_stereo_order` hand-patched this on the 3D corpus
+  packages and can go.
 
 ## Done 2026-08-17
 

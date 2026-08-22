@@ -769,10 +769,13 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
     // sound layout for the SMPTE CompositionMetadataAsset, from the packaged audio
     let main_sound = wav.as_ref().and_then(|(path, info)| {
         let ch = crate::mxf_wrap::wav_channels(path).ok()? as u32;
-        let configuration =
-            crate::cpl::main_sound_configuration(ch, ch, config.hi_channel, config.vi_channel)?;
         Some(crate::cpl::MainSound {
-            configuration,
+            configuration: crate::cpl::main_sound_configuration(
+                ch,
+                ch,
+                config.hi_channel,
+                config.vi_channel,
+            ),
             sample_rate: info.sample_rate,
         })
     });

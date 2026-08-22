@@ -602,14 +602,13 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
             if let Some(k) = sr.key_info {
                 bundle_keys.push(k);
             }
-            if let Ok(ch) = crate::mxf_wrap::wav_channels(&prepared)
-                && let Some(configuration) = crate::cpl::main_sound_configuration(
+            if let Ok(ch) = crate::mxf_wrap::wav_channels(&prepared) {
+                let configuration = crate::cpl::main_sound_configuration(
                     ch as u32,
                     ch as u32,
                     config.hi_channel,
                     config.vi_channel,
-                )
-            {
+                );
                 let sample_rate = crate::mxf_wrap::wav_sample_rate(&prepared).unwrap_or(48000);
                 main_sound = Some(crate::cpl::MainSound {
                     configuration,
