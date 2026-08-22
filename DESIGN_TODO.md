@@ -65,7 +65,7 @@ user-facing surface is here.
   `EmbeddedPreview::set_surface(x, y, w, h, visible)`, identical on every
   platform.
 - Windows release builds: release.yml and gui-release.yml build grok through
-  the PostPerfection/setup-grok@v1 action (grok v20.3.10, the same step ci.yml
+  the PostPerfection/setup-grok@v1 action (grok v20.3.12, the same step ci.yml
   uses), the cli zip ships grokj2k.dll beside the exe, and
   tauri.windows.conf.json bundles it into the installer next to the exes.
   Unproven until the next tag run. Watch on that run: if grok's msvc install
