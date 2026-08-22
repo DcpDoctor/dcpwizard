@@ -266,7 +266,12 @@ pub fn write_16ch_slvs_wav(
     }
     // splice the mono SLVS samples into channel 15 (index 14)
     let ch_off = SLVS_CHANNEL_INDEX * BYTES_PER_SAMPLE;
-    for (s, sample) in slvs_pcm.chunks_exact(BYTES_PER_SAMPLE).enumerate() {
+    for (s, sample) in slvs_pcm
+        .as_chunks::<BYTES_PER_SAMPLE>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let base = s * frame_bytes_16 + ch_off;
         out[base..base + BYTES_PER_SAMPLE].copy_from_slice(sample);
     }

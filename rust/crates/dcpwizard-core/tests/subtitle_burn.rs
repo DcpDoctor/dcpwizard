@@ -259,8 +259,10 @@ fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16
     }
     at += 1;
     bytes[at..]
-        .chunks_exact(2)
-        .map(|s| u16::from_be_bytes([s[0], s[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|s| u16::from_be_bytes(*s))
         .collect()
 }
 
@@ -350,7 +352,7 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
     let unblued = card_z - card_z / 10;
     let mut yellow = 0u32;
     let mut outline = 0u32;
-    for pixel in samples.chunks_exact(3) {
+    for pixel in samples.as_chunks::<3>().0 {
         let (x, y, z) = (pixel[0] as u32, pixel[1] as u32, pixel[2] as u32);
         if y > lit && z < unblued {
             yellow += 1;
