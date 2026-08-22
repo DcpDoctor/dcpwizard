@@ -8,6 +8,14 @@ user-facing surface is here.
 
 ## Open
 
+- Two CPL gaps dcpdoctor 0.5.0 flags on clean dcpwizard output (2026-08-22, both
+  seen on the dci-ctp corpus baselines). A stereoscopic build's
+  `msp-cpl:MainStereoscopicPicture` block carries EntryPoint and Duration but no
+  `<Hash>`, so `cpl_missing_hash` warns on a clean 3D package. And a build whose
+  sound carries no MCA labels (the mono path) writes no
+  `<CompositionMetadataAsset>` at all, so `missing_required_element` fires
+  against Bv2.1 §8.6.1, which wants the asset and its VersionNumber on every
+  SMPTE CPL.
 - GUI re-verification owed (2026-08-17): the QC overlays drawn at and across end
   of file without freezing and without the frame-rate hit the old vf chain
   caused (watch the HUD decoder fps), the playlist fixes live (clearing rows
