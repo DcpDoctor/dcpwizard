@@ -705,8 +705,8 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "dcpdoctor-core"
-version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=b780e57#b780e57f38b22cfe12f19a9d69931fea5cbc3b23"
+version = "0.5.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=2aa7824#2aa782401cd963fbe17fc1063e119b83a8f74714"
 dependencies = [
  "asdcplib",
  "base64",
@@ -730,8 +730,8 @@ dependencies = [
 
 [[package]]
 name = "dcpdoctor-imf"
-version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=b780e57#b780e57f38b22cfe12f19a9d69931fea5cbc3b23"
+version = "0.5.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=2aa7824#2aa782401cd963fbe17fc1063e119b83a8f74714"
 dependencies = [
  "dcpdoctor-parse",
  "quick-xml 0.41.0",
@@ -740,8 +740,8 @@ dependencies = [
 
 [[package]]
 name = "dcpdoctor-parse"
-version = "0.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=b780e57#b780e57f38b22cfe12f19a9d69931fea5cbc3b23"
+version = "0.5.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=2aa7824#2aa782401cd963fbe17fc1063e119b83a8f74714"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -1189,7 +1189,7 @@ checksum = "c3531d702d6c1a3ba92a5fb55a404c7b8c476c8e7ca249951077afcbe4bc807f"
 [[package]]
 name = "grokj2k-sys"
 version = "1.0.0"
-source = "git+https://github.com/GrokImageCompression/grok.git#2cfb60744113c36cdf3e7357b8959f45c5d717d1"
+source = "git+https://github.com/GrokImageCompression/grok.git#79bbd701b9d8a1323b6838f992e6abb71176c918"
 dependencies = [
  "bindgen",
  "libc",
