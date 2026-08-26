@@ -1560,39 +1560,79 @@ renderVfReplacements();
 // === Jobs ===
 let jobsPollInterval = null;
 
+const JOBS_TABLE_COLUMNS = 6;
+const CANCELLABLE_JOB_STATES = ["running", "queued"];
+const GUI_JOB_SOURCE = "gui";
+const DAEMON_JOB_SOURCE = "daemon";
+
+function escapeHtml(text) {
+  const replacements = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+  return String(text).replace(/[&<>"]/g, ch => replacements[ch]);
+}
+
+function jobRow({ source, id, label, state, progress, message }) {
+  const cancel = CANCELLABLE_JOB_STATES.includes(state)
+    ? `<button class="btn-sm btn-cancel" data-job-id="${id}" data-job-source="${source}">✕</button>`
+    : "";
+  const rowTitle = message ? ` title="${escapeHtml(message)}"` : "";
+  return `<tr${rowTitle}><td>${id}</td><td>${source}</td><td>${escapeHtml(label)}</td>` +
+    `<td>${state}</td><td>${progress}</td><td>${cancel}</td></tr>`;
+}
+
+// The daemon prints a header and a rule before its jobs.
+const DAEMON_JOB_LIST_HEADER_LINES = 2;
+
+function daemonJobRows(stdout) {
+  const lines = stdout.trim().split("\n");
+  if (lines.length <= 1 || lines[0].startsWith("No jobs")) return [];
+  return lines.slice(DAEMON_JOB_LIST_HEADER_LINES).filter(line => line.trim()).map(line => {
+    const [id, state, progress, type] = line.trim().split(/\s+/);
+    return jobRow({ source: DAEMON_JOB_SOURCE, id, label: type, state, progress, message: "" });
+  });
+}
+
 async function refreshJobs() {
   const statusBadge = document.getElementById("jobs-status");
+  const tbody = document.getElementById("jobs-tbody");
+  if (!tbody) return;
+
+  const guiJobs = await invoke("list_jobs").catch(() => []);
+  const rows = guiJobs.map(job => jobRow({
+    source: GUI_JOB_SOURCE,
+    id: job.id,
+    label: job.title,
+    state: job.status,
+    progress: job.percent > 0 ? `${Math.round(job.percent)}%` : "",
+    message: job.message,
+  }));
+
   try {
     const result = await Command.sidecar("dcpwizard", ["batch", "list"]).execute();
-    if (result.code !== 0) {
+    if (result.code === 0) {
+      statusBadge.textContent = "Online";
+      rows.push(...daemonJobRows(result.stdout));
+    } else {
       statusBadge.textContent = "Offline";
-      document.getElementById("jobs-tbody").innerHTML =
-        '<tr><td colspan="5" style="text-align:center">Daemon not running</td></tr>';
-      return;
     }
-    statusBadge.textContent = "Online";
-    const lines = result.stdout.trim().split("\n");
-    const tbody = document.getElementById("jobs-tbody");
-    if (lines.length <= 1 || lines[0].startsWith("No jobs")) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center">No jobs</td></tr>';
-      return;
-    }
-    const jobLines = lines.slice(2).filter(l => l.trim());
-    tbody.innerHTML = jobLines.map(line => {
-      const parts = line.trim().split(/\s+/);
-      const [id, state, progress, type] = parts;
-      return `<tr><td>${id}</td><td>${type}</td><td>${state}</td><td>${progress}</td>
-        <td>${state === "running" || state === "queued" ? `<button class="btn-sm btn-cancel" data-job-id="${id}">✕</button>` : ''}</td></tr>`;
-    }).join('');
-    tbody.querySelectorAll(".btn-cancel").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await Command.sidecar("dcpwizard", ["batch", "cancel", btn.dataset.jobId]).execute();
-        refreshJobs();
-      });
-    });
   } catch {
     statusBadge.textContent = "Error";
   }
+
+  tbody.innerHTML = rows.length
+    ? rows.join("")
+    : `<tr><td colspan="${JOBS_TABLE_COLUMNS}" style="text-align:center">No jobs</td></tr>`;
+
+  tbody.querySelectorAll(".btn-cancel").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const jobId = btn.dataset.jobId;
+      if (btn.dataset.jobSource === GUI_JOB_SOURCE) {
+        await invoke("cancel_job", { jobId: Number(jobId) });
+      } else {
+        await Command.sidecar("dcpwizard", ["batch", "cancel", jobId]).execute();
+      }
+      refreshJobs();
+    });
+  });
 }
 
 function startJobsPolling() {

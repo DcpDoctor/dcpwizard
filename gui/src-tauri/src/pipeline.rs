@@ -48,12 +48,51 @@ pub struct PipelineProgress {
     pub percent: f64,
 }
 
+/// The states the Jobs panel prints for a GUI job. The daemon's `batch list`
+/// prints the same words, so one row reads the same whichever queue it came from.
+const STATUS_RUNNING: &str = "running";
+const STATUS_QUEUED: &str = "queued";
+const STATUS_DONE: &str = "done";
+const STATUS_FAILED: &str = "failed";
+const STATUS_CANCELLED: &str = "cancelled";
+
+fn status_of(state: crate::job_store::StoredJobState) -> &'static str {
+    match state {
+        crate::job_store::StoredJobState::Queued => STATUS_QUEUED,
+        crate::job_store::StoredJobState::Running => STATUS_RUNNING,
+        crate::job_store::StoredJobState::Done => STATUS_DONE,
+        crate::job_store::StoredJobState::Failed => STATUS_FAILED,
+        crate::job_store::StoredJobState::Cancelled => STATUS_CANCELLED,
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct JobInfo {
     pub id: u64,
     pub title: String,
     pub status: String,
     pub percent: f64,
+    pub message: String,
+}
+
+/// One job that has reached Done, Failed or Cancelled, as the panel lists it.
+fn finished_job_info(
+    id: u64,
+    title: String,
+    state: crate::job_store::StoredJobState,
+    message: String,
+) -> JobInfo {
+    JobInfo {
+        id,
+        title,
+        status: status_of(state).to_string(),
+        percent: if state == crate::job_store::StoredJobState::Done {
+            100.0
+        } else {
+            0.0
+        },
+        message,
+    }
 }
 
 // ─── ISDCF naming ──────────────────────────────────────────────────────────
@@ -374,6 +413,10 @@ pub struct JobQueue {
     current_status: Mutex<String>,
     /// Output folder of the running job, so a second build cannot write into it
     current_output: Mutex<Option<PathBuf>>,
+    /// Jobs that are neither running nor queued any more, oldest first. Read from
+    /// the jobs file once at startup and appended to as jobs finish, because
+    /// loading the file rewrites it.
+    history: Mutex<Vec<JobInfo>>,
     /// One JSON line per job record, appended when a job is queued and on every
     /// state change after it. The last record for an id is the job.
     jobs_file: PathBuf,
@@ -394,12 +437,56 @@ impl JobQueue {
             current_title: Mutex::new(String::new()),
             current_status: Mutex::new(String::new()),
             current_output: Mutex::new(None),
+            history: Mutex::new(Vec::new()),
             jobs_file,
         }
     }
 
     fn record(&self, state: crate::job_store::StoredJobState, message: &str, job: &JobConfig) {
         crate::job_store::record(&self.jobs_file, state, message, job);
+        if state != crate::job_store::StoredJobState::Queued
+            && state != crate::job_store::StoredJobState::Running
+        {
+            self.history.lock().unwrap().push(finished_job_info(
+                job.id,
+                job.title.clone(),
+                state,
+                message.to_string(),
+            ));
+        }
+    }
+
+    /// What the Jobs panel lists: the running job, then the queued ones, then
+    /// the finished ones newest first.
+    pub fn snapshot(&self) -> Vec<JobInfo> {
+        let mut jobs = Vec::new();
+
+        let current_id = self.current_id.load(Ordering::Relaxed);
+        let status = self.current_status.lock().unwrap().clone();
+        // between a job finishing and the worker picking up the next one the
+        // current slot still holds the finished job, which history already has
+        if current_id > 0 && status == STATUS_RUNNING {
+            jobs.push(JobInfo {
+                id: current_id,
+                title: self.current_title.lock().unwrap().clone(),
+                status,
+                percent: 0.0,
+                message: String::new(),
+            });
+        }
+
+        for job in self.queue.lock().unwrap().iter() {
+            jobs.push(JobInfo {
+                id: job.id,
+                title: job.title.clone(),
+                status: STATUS_QUEUED.to_string(),
+                percent: 0.0,
+                message: String::new(),
+            });
+        }
+
+        jobs.extend(self.history.lock().unwrap().iter().rev().cloned());
+        jobs
     }
 
     /// Put the jobs the last run left queued back in the queue and rewrite the
@@ -408,12 +495,20 @@ impl JobQueue {
     pub fn load_jobs_file(&self) -> usize {
         let loaded = crate::job_store::load(&self.jobs_file);
         let mut queue = self.queue.lock().unwrap();
+        let mut history = self.history.lock().unwrap();
         let mut highest_id = 0;
         for stored in loaded.jobs {
             highest_id = highest_id.max(stored.config.id);
             if stored.state == crate::job_store::StoredJobState::Queued {
                 queue.push_back(stored.config);
+                continue;
             }
+            history.push(finished_job_info(
+                stored.config.id,
+                stored.config.title,
+                stored.state,
+                stored.message,
+            ));
         }
         self.next_id.store(highest_id + 1, Ordering::Relaxed);
         loaded.skipped
@@ -1320,31 +1415,7 @@ pub async fn resume_job(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn list_jobs(app: AppHandle) -> Vec<JobInfo> {
-    let queue = app.state::<JobQueue>();
-    let mut jobs = Vec::new();
-
-    let current_id = queue.current_id.load(Ordering::Relaxed);
-    if current_id > 0 {
-        let title = queue.current_title.lock().unwrap().clone();
-        let status = queue.current_status.lock().unwrap().clone();
-        jobs.push(JobInfo {
-            id: current_id,
-            title,
-            status,
-            percent: 0.0,
-        });
-    }
-
-    let q = queue.queue.lock().unwrap();
-    for job in q.iter() {
-        jobs.push(JobInfo {
-            id: job.id,
-            title: job.title.clone(),
-            status: "queued".to_string(),
-            percent: 0.0,
-        });
-    }
-    jobs
+    app.state::<JobQueue>().snapshot()
 }
 
 // ─── Version File (supplemental DCP) ───────────────────────────────────────
@@ -1429,7 +1500,7 @@ async fn run_queue_worker(app: AppHandle) {
             queue.current_id.store(job.id, Ordering::Relaxed);
             *queue.current_title.lock().unwrap() = job.title.clone();
             *queue.current_output.lock().unwrap() = Some(job.output_dir.clone());
-            *queue.current_status.lock().unwrap() = "running".to_string();
+            *queue.current_status.lock().unwrap() = STATUS_RUNNING.to_string();
             queue.cancel.store(false, Ordering::Relaxed);
             queue.pause.store(false, Ordering::Relaxed);
             queue.record(crate::job_store::StoredJobState::Running, "", &job);
@@ -1445,29 +1516,25 @@ async fn run_queue_worker(app: AppHandle) {
         let queue = app.state::<JobQueue>();
         match result {
             Ok(Ok(_)) => {
-                *queue.current_status.lock().unwrap() = "done".to_string();
+                *queue.current_status.lock().unwrap() = STATUS_DONE.to_string();
                 queue.record(crate::job_store::StoredJobState::Done, "", &job);
                 emit_progress(&app, job.id, "done", "Complete", 0, 0, 0.0, 0.0, 100.0);
             }
             Ok(Err(e)) => {
                 let cancelled = queue.cancel.load(Ordering::Relaxed);
-                *queue.current_status.lock().unwrap() = if cancelled {
-                    "cancelled".to_string()
-                } else {
-                    format!("failed: {e}")
-                };
                 let state = if cancelled {
                     crate::job_store::StoredJobState::Cancelled
                 } else {
                     crate::job_store::StoredJobState::Failed
                 };
+                *queue.current_status.lock().unwrap() = status_of(state).to_string();
                 queue.record(state, &e, &job);
                 let stage = if cancelled { "cancelled" } else { "error" };
                 emit_progress(&app, job.id, stage, &e, 0, 0, 0.0, 0.0, 0.0);
             }
             // a panic leaves no error event, so the panel would wait forever
             Err(e) => {
-                *queue.current_status.lock().unwrap() = format!("panic: {e}");
+                *queue.current_status.lock().unwrap() = STATUS_FAILED.to_string();
                 queue.record(
                     crate::job_store::StoredJobState::Failed,
                     &format!("Build panicked: {e}"),
@@ -3508,5 +3575,40 @@ mod tests {
         assert_eq!(failed.state, StoredJobState::Failed);
         assert_eq!(failed.message, crate::job_store::INTERRUPTED_MESSAGE);
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn finished_jobs_from_the_last_run_are_listed_newest_first() {
+        use crate::job_store::{record, StoredJobState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("gui-jobs.jsonl");
+
+        let mut interrupted = test_job();
+        interrupted.id = 7;
+        interrupted.title = "Interrupted".into();
+        let mut finished = test_job();
+        finished.id = 8;
+        finished.title = "Finished".into();
+        record(&path, StoredJobState::Running, "", &interrupted);
+        record(&path, StoredJobState::Done, "", &finished);
+
+        let queue = JobQueue::with_jobs_file(path);
+        assert_eq!(queue.load_jobs_file(), 0);
+
+        let listed = queue.snapshot();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|job| job.status != "queued"));
+
+        assert_eq!(listed[0].id, 8);
+        assert_eq!(listed[0].title, "Finished");
+        assert_eq!(listed[0].status, "done");
+        assert_eq!(listed[0].percent, 100.0);
+        assert_eq!(listed[0].message, "");
+
+        assert_eq!(listed[1].id, 7);
+        assert_eq!(listed[1].title, "Interrupted");
+        assert_eq!(listed[1].status, "failed");
+        assert_eq!(listed[1].message, crate::job_store::INTERRUPTED_MESSAGE);
     }
 }
