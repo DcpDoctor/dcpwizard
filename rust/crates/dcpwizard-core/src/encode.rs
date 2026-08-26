@@ -90,20 +90,24 @@ pub enum XyzRoute {
 
 /// The route a source carrying `space` takes to X'Y'Z' inside the encode.
 ///
-/// Rec.709 is the compressor's own transform, X'Y'Z' is already there, and P3
-/// and Rec.2020 go through postkit's matrix for that space. ACES, ACEScg and
-/// LogC are refused: they are scene-referred or log, so no 3x3 matrix converts
-/// them and approximating one would be silently wrong colour.
+/// Rec.709 is the compressor's own transform, X'Y'Z' is already there, and P3,
+/// Rec.2020 and LogC go through postkit's own per-frame transform: that space's
+/// curve, its matrix, and the compressor's transform off. ACES and ACEScg are
+/// refused: they are scene-referred, so no matrix reaches X'Y'Z' from them and
+/// approximating one would be silently wrong colour.
 pub fn xyz_route(space: postkit::colour::ColourSpace) -> Result<XyzRoute, String> {
     use postkit::colour::ColourSpace;
     match space {
         ColourSpace::Rec709 => Ok(XyzRoute::CompressorTransform),
         ColourSpace::Xyz => Ok(XyzRoute::AlreadyXyz),
-        ColourSpace::P3 | ColourSpace::Rec2020 => Ok(XyzRoute::FrameTransform(space)),
-        other => Err(format!(
-            "--source-colourspace {other:?} is scene-referred or log, which no 3x3 matrix \
-             converts: it needs a 3D LUT that lands on X'Y'Z' (pass it as --hdr-to-dci-lut), \
-             and then --source-colourspace xyz"
+        ColourSpace::P3 | ColourSpace::Rec2020 | ColourSpace::LogC => {
+            Ok(XyzRoute::FrameTransform(space))
+        }
+        ColourSpace::Aces | ColourSpace::AcesCg => Err(format!(
+            "--source-colourspace {space:?} is scene-referred: no matrix reaches X'Y'Z' from \
+             it, so it needs a rendering transform. Pass --hdr-to-dci-lut a 3D LUT that lands \
+             on X'Y'Z', or convert the source first with `dcpwizard colour --target xyz --lut \
+             <LUT>` and pass --source-colourspace xyz"
         )),
     }
 }
@@ -316,7 +320,7 @@ mod tests {
     #[test]
     fn the_wide_gamut_spaces_convert_through_postkit_and_not_the_compressor() {
         use postkit::colour::ColourSpace;
-        for space in [ColourSpace::P3, ColourSpace::Rec2020] {
+        for space in [ColourSpace::P3, ColourSpace::Rec2020, ColourSpace::LogC] {
             let route = xyz_route(space).unwrap();
             assert_eq!(route, XyzRoute::FrameTransform(space));
             assert!(
@@ -335,22 +339,44 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_referred_or_log_space_is_refused_rather_than_approximated() {
+    fn a_scene_referred_space_is_refused_rather_than_approximated() {
         use postkit::colour::ColourSpace;
-        for space in [ColourSpace::Aces, ColourSpace::AcesCg, ColourSpace::LogC] {
+        for space in [ColourSpace::Aces, ColourSpace::AcesCg] {
             let err = xyz_route(space).unwrap_err();
+            assert!(err.contains(&format!("{space:?}")), "{err}");
             assert!(
                 err.contains("3D LUT"),
                 "{space:?} must name the LUT pass: {err}"
             );
+            assert!(
+                err.contains("--hdr-to-dci-lut"),
+                "{space:?} must name the flag that takes the LUT: {err}"
+            );
         }
+    }
+
+    /// postkit's `DcdmTransform` decodes LogC3 ahead of the matrix, so LogC is
+    /// encoded rather than refused.
+    #[test]
+    fn logc_carries_the_logc3_decode_into_the_encode() {
+        use postkit::colour::ColourSpace;
+        assert_eq!(
+            xyz_route(ColourSpace::LogC).unwrap(),
+            XyzRoute::FrameTransform(ColourSpace::LogC)
+        );
+        assert!(postkit::colour::DcdmTransform::to_xyz(ColourSpace::LogC).is_ok());
     }
 
     #[test]
     fn precompressed_picture_takes_the_default_colour_space_and_nothing_else() {
         use postkit::colour::ColourSpace;
         assert!(check_precompressed_colourspace(ColourSpace::Rec709).is_ok());
-        for space in [ColourSpace::P3, ColourSpace::Rec2020, ColourSpace::Xyz] {
+        for space in [
+            ColourSpace::P3,
+            ColourSpace::Rec2020,
+            ColourSpace::Xyz,
+            ColourSpace::LogC,
+        ] {
             let err = check_precompressed_colourspace(space).unwrap_err();
             assert!(
                 err.contains("already encoded"),

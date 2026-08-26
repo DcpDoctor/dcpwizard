@@ -493,9 +493,10 @@ impl CreateBurnAppearance {
 /// keep, and how long to hold a still. Boxed into the Create variant.
 #[derive(Args)]
 struct CreateSourceOpts {
-    /// Colour space the source carries. rec709 (default) and xyz are the two the
-    /// encoder can land on X'Y'Z' by itself; convert any other space first with
-    /// `dcpwizard colour --target xyz` and then pass xyz.
+    /// Colour space the source carries: rec709 (default), xyz, p3, rec2020 or
+    /// logc, all of which the encode lands on X'Y'Z' itself. aces and acescg are
+    /// scene-referred and refused: convert those first with `dcpwizard colour
+    /// --target xyz --lut <LUT>` and then pass xyz.
     #[arg(long, default_value = "rec709")]
     source_colourspace: String,
     /// Trim this much off the head of the source before encoding. Duration with
@@ -1461,7 +1462,7 @@ enum Commands {
         #[arg(short, long)]
         output: String,
 
-        /// Source colour space (rec709, p3, aces, logc)
+        /// Source colour space (rec709, p3, rec2020, xyz, logc)
         #[arg(short, long, default_value = "rec709")]
         colour_space: String,
 

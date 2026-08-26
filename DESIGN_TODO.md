@@ -92,17 +92,12 @@ user-facing surface is here.
   job encodes through postkit and reports per-frame progress. One queue for both
   needs a job type that carries a GUI build, or the GUI build path moved into CORE
   behind the existing IPC. GUI + CORE.
-- `--source-colourspace` refuses aces and acescg correctly, they need a rendering
-  transform (LUT). For logc "correctly" is softer: DCP-o-matic handles Sony
-  S-Log3/S-Gamut3 analytically (inverse log curve then matrix, libdcp
-  `s_gamut3_to_xyz`), and ARRI LogC's EOTF is published math, so a
-  transfer-function-ahead-of-matrix arm in `DcdmTransform` is the shape if a
-  customer shows up with LogC masters. An image sequence grk_compress reads
-  straight from file also stays refused for p3 and rec2020, since it only converts
-  Rec.709. A sequence that a burn, a picture change or jpeg/png frames route
-  through ffmpeg reaches the same per-frame transform a video does. DCP-o-matic
-  also allows fully custom conversions (user chromaticities, white point, gamma),
-  a flexibility we do not have anywhere.
+- An image sequence grk_compress reads straight from file is refused for p3,
+  rec2020 and logc, since it only converts Rec.709. A sequence that a burn, a
+  picture change or jpeg/png frames route through ffmpeg reaches the same
+  per-frame transform a video does. DCP-o-matic also allows fully custom
+  conversions (user chromaticities, white point, gamma), a flexibility we do not
+  have anywhere.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.

@@ -1,7 +1,9 @@
 //! Verifies that `create --source-colourspace p3` reaches the codestream as real
 //! P3 X'Y'Z': encode a solid frame through the route the create handler builds,
 //! decode the stored codestream with grk_decompress, and check the X'Y'Z' code
-//! values against an independently computed expectation.
+//! values against an independently computed expectation. `logc` is checked
+//! against the Rec.709 frame carrying the same scene linear instead, since both
+//! are D65 neutral at that luminance and must land on one X'Y'Z'.
 
 use std::path::Path;
 use std::process::Command;
@@ -15,6 +17,15 @@ use postkit::grok_encoder::{self, CompressParams, RawFrame};
 const W: u32 = 48;
 const H: u32 = 48;
 const FPS: u32 = 24;
+
+/// The LogC3 code ARRI publishes for an 18% grey card at EI 800.
+const LOGC3_GREY_CODE: f64 = 0.391;
+/// The Rec.709 code for the same 0.18 scene linear at gamma 2.2, 0.18^(1/2.2).
+const REC709_GREY_CODE: f64 = 0.4586;
+
+fn code16(normalised: f64) -> u16 {
+    (normalised * 65535.0).round() as u16
+}
 
 // SMPTE RP 431-2 P3-DCI primaries with the DCI white point.
 const P3_DCI_TO_XYZ: [[f64; 3]; 3] = [
@@ -143,6 +154,43 @@ fn a_p3_source_encodes_to_p3_xyz_code_values() {
                 "channel {c} off by {diff} (got {got:?}, want {want:?}) for p3 {rgb16:?}"
             );
         }
+    }
+}
+
+#[test]
+fn logc_mid_grey_lands_on_the_rec709_mid_grey_codes() {
+    if !grk_decompress_bin().is_file() {
+        eprintln!("skip: grk_decompress not found");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+
+    let logc_dir = dir.path().join("logc");
+    let logc = decode_first_pixel(
+        &encode_solid(
+            [code16(LOGC3_GREY_CODE); 3],
+            xyz_route(ColourSpace::LogC).unwrap(),
+            &logc_dir,
+        ),
+        &logc_dir,
+    );
+    let rec709_dir = dir.path().join("rec709");
+    let rec709 = decode_first_pixel(
+        &encode_solid(
+            [code16(REC709_GREY_CODE); 3],
+            xyz_route(ColourSpace::Rec709).unwrap(),
+            &rec709_dir,
+        ),
+        &rec709_dir,
+    );
+
+    eprintln!("logc grey {logc:?} rec709 grey {rec709:?}");
+    for c in 0..3 {
+        let diff = (logc[c] as i32 - rec709[c] as i32).abs();
+        assert!(
+            diff <= 1,
+            "channel {c} off by {diff} (logc {logc:?}, rec709 {rec709:?})"
+        );
     }
 }
 
