@@ -50,7 +50,6 @@ fn plain_video() -> PictureSource {
     PictureSource {
         input_type: postkit::encode::InputType::Video,
         still_hold: false,
-        trims_picture: false,
     }
 }
 

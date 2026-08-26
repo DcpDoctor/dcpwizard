@@ -2202,7 +2202,6 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         &dcpwizard_core::overlapped_picture::PictureSource {
             input_type: postkit::encode::detect_input_type(&encode_input),
             still_hold: job.still_length_frames > 0,
-            trims_picture: job.trim_start_frames + job.trim_end_frames > 0,
         },
         &dcpwizard_core::overlapped_picture::PackageShape {
             stereoscopic: job.right_eye.is_some(),

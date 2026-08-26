@@ -36,8 +36,6 @@ pub struct PictureSource {
     pub input_type: postkit::encode::InputType,
     /// The source is one image held for a run of frames.
     pub still_hold: bool,
-    /// A head or tail trim drops picture frames after the encode.
-    pub trims_picture: bool,
 }
 
 /// What the package does to its own picture essence. `create_dcp` reads it off
@@ -116,12 +114,6 @@ fn source_refusal(source: &PictureSource) -> Option<&'static str> {
              an image sequence can go straight to grk_compress",
         );
     }
-    if source.trims_picture {
-        return Some(
-            "a head or tail trim drops frames after the encode, so the MXF would carry frames the \
-             composition does not",
-        );
-    }
     None
 }
 
@@ -190,7 +182,6 @@ mod tests {
         PictureSource {
             input_type: postkit::encode::InputType::Video,
             still_hold: false,
-            trims_picture: false,
         }
     }
 
@@ -222,10 +213,6 @@ mod tests {
             },
             PictureSource {
                 input_type: postkit::encode::InputType::ImageSequence,
-                ..plain_video()
-            },
-            PictureSource {
-                trims_picture: true,
                 ..plain_video()
             },
         ] {
