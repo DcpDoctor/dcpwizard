@@ -318,6 +318,7 @@ fn encode_item_picture(
             &cancel,
             false,
             Some(&filters.join(",")),
+            None,
             |_progress: EncodeProgress| {},
         );
         if !result.success {

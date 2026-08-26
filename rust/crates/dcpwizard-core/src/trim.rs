@@ -2,11 +2,37 @@
 //! timed text that follows both.
 //!
 //! Trim runs before padding, so `--trim-start 2s --pad-head 1s` drops two seconds
-//! of source and then prepends one second of black. The picture is trimmed by
-//! relinking the encoded codestreams rather than by re-encoding, so a trim costs
-//! no encoder time but does not save any either.
+//! of source and then prepends one second of black. A source the encoder reads
+//! is windowed by [`encode_window`], so only the kept frames are ever compressed.
+//! A codestream directory is never encoded, so its kept frames are relinked by
+//! [`link_trimmed_frames`] instead.
 
 use std::path::Path;
+
+/// The window a trimmed encode asks for, or None when the picture reaches the
+/// package without being encoded here and the kept codestreams are linked out of
+/// it instead.
+///
+/// This is the one place that decides which of the two the picture takes, so the
+/// command line and the GUI cannot answer it differently.
+pub fn encode_window(
+    picture: &Path,
+    start_frames: u64,
+    kept_frames: u64,
+) -> Option<postkit::encode::FrameRange> {
+    if kept_frames == 0 {
+        return None;
+    }
+    match postkit::encode::detect_input_type(picture) {
+        postkit::encode::InputType::Video | postkit::encode::InputType::ImageSequence => {
+            Some(postkit::encode::FrameRange {
+                first_frame: start_frames,
+                frame_count: kept_frames,
+            })
+        }
+        postkit::encode::InputType::J2kSequence | postkit::encode::InputType::Unknown => None,
+    }
+}
 
 /// Number of J2K codestreams in a frame directory, in the order they wrap.
 pub fn frame_count(dir: &Path) -> u64 {
@@ -87,6 +113,29 @@ mod tests {
         let err = kept_frames(100, 60, 40).unwrap_err();
         assert!(err.contains("leaves nothing"), "got: {err}");
         assert!(kept_frames(100, 100, 0).is_err());
+    }
+
+    #[test]
+    fn only_an_encoded_source_gets_a_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let window = encode_window(Path::new("/in/movie.mov"), 2, 5).unwrap();
+        assert_eq!(window.first_frame, 2);
+        assert_eq!(window.frame_count, 5);
+
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::write(images.join("frame_00000000.tif"), b"x").unwrap();
+        assert!(encode_window(&images, 2, 5).is_some());
+
+        let codestreams = dir.path().join("j2k");
+        std::fs::create_dir_all(&codestreams).unwrap();
+        std::fs::write(codestreams.join("frame_00000000.j2c"), b"x").unwrap();
+        assert!(
+            encode_window(&codestreams, 2, 5).is_none(),
+            "a codestream directory is never encoded, so its kept frames are linked"
+        );
+
+        assert!(encode_window(Path::new("/in/movie.mov"), 0, 0).is_none());
     }
 
     #[test]

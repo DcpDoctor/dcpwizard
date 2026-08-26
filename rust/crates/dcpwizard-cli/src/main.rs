@@ -2390,25 +2390,40 @@ impl TrimPlan {
         }
     }
 
-    /// Trim the encoded codestreams into `out_dir`, and the sound to match.
-    /// Returns the trimmed frame directory, or `j2k_dir` when nothing was asked.
+    /// The window the encoder is given, so nothing outside it is compressed.
+    /// None where the picture is not encoded here and [`Self::apply`] links the
+    /// kept codestreams instead.
+    fn encode_window(&self, picture: &Path) -> Option<postkit::encode::FrameRange> {
+        dcpwizard_core::trim::encode_window(picture, self.start_frames, self.kept_frames)
+    }
+
+    /// Trim the sound to the kept window, and the picture too when `window` says
+    /// the encoder was not given it. Returns the frame directory the package
+    /// takes, which is `j2k_dir` unless the codestreams were relinked.
     fn apply(
         &self,
         j2k_dir: &Path,
         out_dir: &Path,
         audio: Option<PathBuf>,
         fps: u32,
+        window: Option<postkit::encode::FrameRange>,
     ) -> Result<(PathBuf, Option<PathBuf>), String> {
         if !self.is_active() {
             return Ok((j2k_dir.to_path_buf(), audio));
         }
-        let kept = dcpwizard_core::trim::link_trimmed_frames(
-            j2k_dir,
-            self.start_frames,
-            self.end_frames,
-            out_dir,
-        )?;
-        tracing::info!("Trimmed the picture to {kept} frame(s)");
+        let picture = match window {
+            Some(_) => j2k_dir.to_path_buf(),
+            None => {
+                let kept = dcpwizard_core::trim::link_trimmed_frames(
+                    j2k_dir,
+                    self.start_frames,
+                    self.end_frames,
+                    out_dir,
+                )?;
+                tracing::info!("Trimmed the picture to {kept} frame(s)");
+                out_dir.to_path_buf()
+            }
+        };
         let audio = match audio {
             Some(input) => {
                 let out = out_dir.with_extension("wav");
@@ -2423,7 +2438,7 @@ impl TrimPlan {
             }
             None => None,
         };
-        Ok((out_dir.to_path_buf(), audio))
+        Ok((picture, audio))
     }
 }
 
@@ -4215,12 +4230,29 @@ fn run() {
                     cancel_clone.store(true, std::sync::atomic::Ordering::Relaxed);
                 });
 
+                // only the kept frames are compressed, so a trim never pays for
+                // the encoder time it then throws away
+                let encode_window = trim.encode_window(&encode_video_path);
+                let encode_frames = match encode_window {
+                    Some(window) => window.frame_count,
+                    None => total_frames as u64,
+                };
+                if let Some(window) = encode_window {
+                    tracing::info!(
+                        "Encoding frames {}..{} of the source",
+                        window.first_frame,
+                        window.end_frame()
+                    );
+                }
+
                 // persist encode identity so an interrupted run can --resume the
                 // J2K frames on disk (dom#344). --resume verifies the params match
-                // before reusing them.
+                // before reusing them. The count is the window's, so changing a
+                // trim refuses the resume rather than reusing another window's
+                // codestreams.
                 let encode_state = dcpwizard_core::encode_qol::EncodeState {
                     source: video_path.to_string_lossy().to_string(),
-                    total_frames: total_frames as u64,
+                    total_frames: encode_frames,
                     fps,
                     width,
                     height,
@@ -4234,10 +4266,16 @@ fn run() {
                     tracing::warn!("could not save resume state: {e}");
                 }
 
+                // the window is cut after this chain, so a fade is placed in
+                // source time and the fade-out belongs at the end of the window
+                let faded_frames = match encode_window {
+                    Some(window) => window.end_frame(),
+                    None => total_frames as u64,
+                };
                 let fade_filter = match dcpwizard_core::audio_adjust::video_fade_filter(
                     video_fade_in,
                     video_fade_out,
-                    total_frames as f64 / fps.max(1) as f64,
+                    faded_frames as f64 / fps.max(1) as f64,
                 ) {
                     Ok(f) => f,
                     Err(e) => {
@@ -4254,12 +4292,13 @@ fn run() {
                     &encode_video_path,
                     &j2k_dir,
                     &params,
-                    total_frames as u64,
+                    encode_frames,
                     width,
                     height,
                     &cancel,
                     resume,
                     video_filter.as_deref(),
+                    encode_window,
                     |p: EncodeProgress| {
                         let percent = if p.total_frames > 0 {
                             (p.frames_encoded as f64 / p.total_frames as f64) * 100.0
@@ -4307,17 +4346,19 @@ fn run() {
                     let _ = std::fs::create_dir_all(&j2k_right);
                     tracing::info!("Encoding right eye: {}", re_path.display());
                     // both eyes are one picture track, so the right eye is
-                    // cropped, turned and fitted exactly as the left one was
+                    // cropped, turned, fitted and windowed exactly as the left
+                    // one was
                     let re_result = grok_encoder::encode_video_pipeline_resumable(
                         &re_path,
                         &j2k_right,
                         &params,
-                        total_frames as u64,
+                        encode_frames,
                         width,
                         height,
                         &cancel,
                         false,
                         picture_filter.as_deref(),
+                        encode_window,
                         |_p: EncodeProgress| {},
                     );
                     if !re_result.success {
@@ -4392,27 +4433,37 @@ fn run() {
                     (_, audio_path) => audio_path,
                 };
 
-                // trim after the pull-up, whose resample changes what a frame of
-                // audio is worth, and before sign language, which is packed to
-                // cover the picture the package actually carries
-                let (packaged_j2k_dir, audio_path) =
-                    match trim.apply(&j2k_dir, &output_dir.join("j2k_trimmed"), audio_path, fps) {
-                        Ok(pair) => pair,
+                // the picture already holds only the kept frames, so this cuts
+                // the sound: after the pull-up, whose resample changes what a
+                // frame of audio is worth, and before sign language, which is
+                // packed to cover the picture the package actually carries
+                let (packaged_j2k_dir, audio_path) = match trim.apply(
+                    &j2k_dir,
+                    &output_dir.join("j2k_trimmed"),
+                    audio_path,
+                    fps,
+                    encode_window,
+                ) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+                let packaged_right_eye_dir = match right_eye_dir.as_ref() {
+                    Some(dir) => match trim.apply(
+                        dir,
+                        &output_dir.join("j2k_right_trimmed"),
+                        None,
+                        fps,
+                        encode_window,
+                    ) {
+                        Ok((trimmed, _)) => Some(trimmed),
                         Err(e) => {
-                            tracing::error!("{e}");
+                            tracing::error!("right eye: {e}");
                             std::process::exit(1);
                         }
-                    };
-                let packaged_right_eye_dir = match right_eye_dir.as_ref() {
-                    Some(dir) => {
-                        match trim.apply(dir, &output_dir.join("j2k_right_trimmed"), None, fps) {
-                            Ok((trimmed, _)) => Some(trimmed),
-                            Err(e) => {
-                                tracing::error!("right eye: {e}");
-                                std::process::exit(1);
-                            }
-                        }
-                    }
+                    },
                     None => None,
                 };
                 let picture_frames = if trim.is_active() {
@@ -4661,11 +4712,14 @@ fn run() {
                     }
                 };
 
+                // nothing was encoded here, so the kept codestreams are linked
+                // out of the source directory
                 let (packaged_j2k_dir, prepared_audio) = match trim.apply(
                     &source_j2k_dir,
                     &output_dir.join("j2k_trimmed"),
                     prepared_audio,
                     fps,
+                    None,
                 ) {
                     Ok(pair) => pair,
                     Err(e) => {
@@ -6652,5 +6706,54 @@ mod tests {
         // ffmpeg colorspace targets are not dcdm-module targets
         assert_eq!(parse_dcdm_target("rec709"), None);
         assert_eq!(parse_dcdm_target("p3"), None);
+    }
+
+    fn codestream_dir(root: &Path, frames: u64) -> PathBuf {
+        let dir = root.join("j2k");
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..frames {
+            std::fs::write(dir.join(format!("frame_{index:08}.j2c")), [index as u8]).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_windowed_encode_leaves_the_codestreams_where_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let trim = resolve_trim(Some("2f"), Some("2f"), 12, 24).unwrap();
+        assert_eq!(trim.kept_frames, 8);
+
+        let window = trim.encode_window(Path::new("/in/movie.mov")).unwrap();
+        assert_eq!(window.first_frame, 2);
+        assert_eq!(window.frame_count, 8);
+
+        // the encoder already wrote only the kept frames
+        let encoded = codestream_dir(dir.path(), 8);
+        let trimmed = dir.path().join("j2k_trimmed");
+        let (picture, audio) = trim
+            .apply(&encoded, &trimmed, None, 24, Some(window))
+            .unwrap();
+        assert_eq!(picture, encoded);
+        assert!(audio.is_none());
+        assert!(
+            !trimmed.exists(),
+            "a windowed encode must not relink a second copy of the picture"
+        );
+    }
+
+    #[test]
+    fn a_codestream_directory_is_relinked_instead() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = codestream_dir(dir.path(), 12);
+        let trim = resolve_trim(Some("2f"), Some("2f"), 12, 24).unwrap();
+        assert!(
+            trim.encode_window(&source).is_none(),
+            "nothing encodes a codestream directory, so it has no window to ask for"
+        );
+
+        let trimmed = dir.path().join("j2k_trimmed");
+        let (picture, _) = trim.apply(&source, &trimmed, None, 24, None).unwrap();
+        assert_eq!(picture, trimmed);
+        assert_eq!(dcpwizard_core::trim::frame_count(&trimmed), 8);
     }
 }

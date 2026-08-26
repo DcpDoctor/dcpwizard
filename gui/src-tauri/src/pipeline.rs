@@ -1937,25 +1937,62 @@ fn encode_still(
     })
 }
 
-/// Trim the encoded frames and the sound to the kept window, or hand both back
-/// unchanged when no trim was asked for.
+/// The window the encode is given so only the kept frames are ever compressed,
+/// or None when nothing is trimmed, the picture is not encoded here, or the
+/// source was never probed for a length.
+fn job_encode_window(
+    job: &JobConfig,
+    encode_input: &std::path::Path,
+) -> Result<Option<postkit::encode::FrameRange>, String> {
+    if job.trim_start_frames + job.trim_end_frames == 0 {
+        return Ok(None);
+    }
+    // without a probed length the kept frames are counted off the encode, the
+    // way they always were
+    let Some(total) = job
+        .source
+        .as_ref()
+        .map(|info| u64::from(info.total_frames))
+        .filter(|total| *total > 0)
+    else {
+        return Ok(None);
+    };
+    let kept =
+        dcpwizard_core::trim::kept_frames(total, job.trim_start_frames, job.trim_end_frames)?;
+    Ok(dcpwizard_core::trim::encode_window(
+        encode_input,
+        job.trim_start_frames,
+        kept,
+    ))
+}
+
+/// Trim the sound to the kept window, and the encoded frames too when `window`
+/// says the encoder was not given it. Hands both back unchanged when no trim was
+/// asked for.
 fn apply_trim(
     job: &JobConfig,
     j2k_dir: &std::path::Path,
     output: &std::path::Path,
     audio: Option<PathBuf>,
     fps: u32,
+    window: Option<postkit::encode::FrameRange>,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if job.trim_start_frames + job.trim_end_frames == 0 {
         return Ok((j2k_dir.to_path_buf(), audio));
     }
-    let trimmed = output.join("j2k_trimmed");
-    let kept = dcpwizard_core::trim::link_trimmed_frames(
-        j2k_dir,
-        job.trim_start_frames,
-        job.trim_end_frames,
-        &trimmed,
-    )?;
+    let (picture, kept) = match window {
+        Some(window) => (j2k_dir.to_path_buf(), window.frame_count),
+        None => {
+            let trimmed = output.join("j2k_trimmed");
+            let kept = dcpwizard_core::trim::link_trimmed_frames(
+                j2k_dir,
+                job.trim_start_frames,
+                job.trim_end_frames,
+                &trimmed,
+            )?;
+            (trimmed, kept)
+        }
+    };
     let audio = match audio {
         Some(input) => {
             let out = output.join("audio_work").join("trimmed.wav");
@@ -1965,7 +2002,7 @@ fn apply_trim(
         }
         None => None,
     };
-    Ok((trimmed, audio))
+    Ok((picture, audio))
 }
 
 fn build_dcp_config(
@@ -2130,10 +2167,25 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         &format_stage_timing("preflight", preflight_started.elapsed()),
     );
 
+    // only the kept frames are compressed, so a trim never pays for the encoder
+    // time it then throws away. Both eyes take the same window.
+    let encode_window = job_encode_window(job, &encode_input)?;
+    if let Some(window) = encode_window {
+        log_to(
+            &log_file,
+            &format!(
+                "[ENCODE] Encoding frames {}..{} of the source",
+                window.first_frame,
+                window.end_frame()
+            ),
+        );
+    }
+
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
         fps: encode_fps,
         read_source_at: conform.read_source_at,
+        frame_range: encode_window,
         source_colour: job.source_colour.clone(),
         codestream_byte_cap: Some(if job.hdr_dci {
             dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)
@@ -2285,11 +2337,18 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
 
     // trim before sign language, which is packed to cover the picture the
     // package actually carries
-    let (j2k_dir, audio_path) =
-        apply_trim(job, &encode_result.j2k_dir, output, audio_path, fps_num).map_err(|e| {
-            log_to(&log_file, &format!("[TRIM] {e}"));
-            e
-        })?;
+    let (j2k_dir, audio_path) = apply_trim(
+        job,
+        &encode_result.j2k_dir,
+        output,
+        audio_path,
+        fps_num,
+        encode_window,
+    )
+    .map_err(|e| {
+        log_to(&log_file, &format!("[TRIM] {e}"));
+        e
+    })?;
 
     // sign-language video (ISDCF Doc 13): pack VP9 onto channel 15, replacing
     // the sound track with the combined 16-channel WAV.
@@ -2919,7 +2978,7 @@ mod tests {
         job.trim_end_frames = 12;
 
         let (trimmed_dir, trimmed_audio) =
-            apply_trim(&job, &j2k, dir.path(), Some(wav), 24).unwrap();
+            apply_trim(&job, &j2k, dir.path(), Some(wav), 24, None).unwrap();
         assert_eq!(dcpwizard_core::trim::frame_count(&trimmed_dir), 24);
         let reader = WavReader::open(trimmed_audio.unwrap()).unwrap();
         assert_eq!(reader.duration(), 48_000, "24 frames at 24 fps");
@@ -2943,12 +3002,77 @@ mod tests {
         std::fs::write(j2k.join("frame_00000000.j2c"), [0u8]).unwrap();
 
         let job = test_job();
-        let (same, audio) = apply_trim(&job, &j2k, dir.path(), None, 24).unwrap();
+        let (same, audio) = apply_trim(&job, &j2k, dir.path(), None, 24, None).unwrap();
         assert_eq!(same, j2k, "an untrimmed job must not relink a thing");
         assert!(audio.is_none());
         assert_eq!(
             build_dcp_config(&job, j2k, None, None, None, Vec::new()).source_trim,
             dcpwizard_core::subtitle::SourceTrim::default()
+        );
+    }
+
+    #[test]
+    fn a_windowed_encode_leaves_the_frames_where_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let j2k = dir.path().join("j2k");
+        std::fs::create_dir_all(&j2k).unwrap();
+        for i in 0..24u64 {
+            std::fs::write(j2k.join(format!("frame_{i:08}.j2c")), [i as u8]).unwrap();
+        }
+        let wav = dir.path().join("sound.wav");
+        write_mono(&wav, 1234, 96_000);
+
+        let mut job = test_job();
+        job.trim_start_frames = 12;
+        job.trim_end_frames = 12;
+        let window = postkit::encode::FrameRange {
+            first_frame: 12,
+            frame_count: 24,
+        };
+
+        let (picture, audio) =
+            apply_trim(&job, &j2k, dir.path(), Some(wav), 24, Some(window)).unwrap();
+        assert_eq!(picture, j2k, "the encode already wrote only the kept frames");
+        assert!(
+            !dir.path().join("j2k_trimmed").exists(),
+            "a windowed encode must not relink a second copy of the picture"
+        );
+        let reader = WavReader::open(audio.unwrap()).unwrap();
+        assert_eq!(reader.duration(), 48_000, "24 frames at 24 fps");
+    }
+
+    #[test]
+    fn a_probed_video_is_windowed_and_a_codestream_directory_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut job = test_job();
+        job.trim_start_frames = 12;
+        job.trim_end_frames = 12;
+        job.source = Some(postkit::probe::VideoInfo {
+            width: 1920,
+            height: 1080,
+            fps_num: 24,
+            fps_den: 1,
+            has_audio: true,
+            total_frames: 48,
+        });
+
+        let window = job_encode_window(&job, std::path::Path::new("/in/movie.mov"))
+            .unwrap()
+            .expect("a probed video is encoded, so it takes a window");
+        assert_eq!(window.first_frame, 12);
+        assert_eq!(window.frame_count, 24);
+
+        let codestreams = dir.path().join("j2k");
+        std::fs::create_dir_all(&codestreams).unwrap();
+        std::fs::write(codestreams.join("frame_00000000.j2c"), [0u8]).unwrap();
+        assert!(job_encode_window(&job, &codestreams).unwrap().is_none());
+
+        job.source = None;
+        assert!(
+            job_encode_window(&job, std::path::Path::new("/in/movie.mov"))
+                .unwrap()
+                .is_none(),
+            "no probed length leaves the count to the relink"
         );
     }
 
