@@ -52,7 +52,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **JPEG 2000 encoding** via Grok (create, pipeline, and DCP transcode paths)
 - **Video file import**, QuickTime (.mov), MP4, MXF, AVI, MKV
 - **Video transcoding**, ProRes, H.264, H.265, DNxHR → image sequence → J2K (via ffmpeg)
-- **Image sequence input**, DPX, TIFF, EXR, PNG
+- **Image sequence input**, DPX, TIFF, EXR, PNG, JPEG, BMP
 - **Scale / Crop / Letterbox**, target resolution adaptation
 - **Colour conversion** to XYZ (DCI, gamma 2.6)
 - **Encode QoL** on `create`: `--start-at` (scheduled wall-clock start), `--resume` (reuse on-disk J2K frames after an interruption, survives restarts), average-fps ETA in progress output, `--shutdown-when-done` (power off after a clean encode)
@@ -749,7 +749,7 @@ docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --port 8080
 | Stereoscopic 3D | ✅ | ✅ |
 | Frame rates 24–60 fps | ✅ | ✅ |
 | High Bitrate (500 Mbps) | ✅ | ✅ |
-| DPX/TIFF/PNG/QuickTime input | ✅ | ✅ |
+| DPX/TIFF/EXR/PNG/JPEG/BMP/QuickTime input | ✅ | ✅ |
 | Scale/Crop/Letterbox | ✅ | ✅ |
 | J2K Transcoder | ✅ | ✅ |
 | Audio (PCM 5.1) | ✅ | ✅ |
