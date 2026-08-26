@@ -5,7 +5,7 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as _open, save, confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
 import { documentDir, join } from "@tauri-apps/api/path";
-import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, isPreviewVisible, setPreviewCrop, setPreviewSubtitleFile, setPreviewCaptionFile } from "../../extern/guikit/src/preview.js";
+import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, previewFrameStepBack, previewFrameStepForward, PREVIEW_SEEK_SECONDS, isPreviewVisible, setPreviewCrop, setPreviewSubtitleFile, setPreviewCaptionFile } from "../../extern/guikit/src/preview.js";
 import { initPlaylist, addToPlaylist } from "../../extern/guikit/src/playlist.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
 import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
@@ -58,7 +58,6 @@ function switchView(viewName) {
 }
 
 const SHORTCUTS_KEY = "dcpwizard-shortcuts";
-const PREVIEW_SEEK_SECONDS = 5;
 
 const PROJECT_BUTTON_SHORTCUTS = [
   { id: "new-project", label: "New project", binding: "Ctrl+N", buttonId: "btn-new-project" },
@@ -106,6 +105,8 @@ initShortcuts({
     previewAction("preview-play-pause", "Play / pause", "Space", previewPlayPause),
     previewAction("preview-back", `Back ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowLeft", () => previewSeek(-PREVIEW_SEEK_SECONDS)),
     previewAction("preview-forward", `Forward ${PREVIEW_SEEK_SECONDS} seconds`, "ArrowRight", () => previewSeek(PREVIEW_SEEK_SECONDS)),
+    previewAction("preview-frame-back", "Step back one frame", ",", previewFrameStepBack),
+    previewAction("preview-frame-forward", "Step forward one frame", ".", previewFrameStepForward),
     previewAction("preview-start", "Go to start", "Home", () => previewSeekAbsolute(0)),
     clickAction(THEME_BUTTON_SHORTCUT, "Appearance"),
   ],

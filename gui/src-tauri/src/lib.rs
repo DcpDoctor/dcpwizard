@@ -42,6 +42,8 @@ pub fn run() {
             guikit::preview::preview_play_pause,
             guikit::preview::preview_seek,
             guikit::preview::preview_seek_absolute,
+            guikit::preview::preview_frame_step,
+            guikit::preview::preview_frame_back_step,
             guikit::preview::preview_stop,
             guikit::preview::preview_load_dcp,
             guikit::preview::preview_get_position,

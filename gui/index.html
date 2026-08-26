@@ -1288,7 +1288,14 @@
 
       <!-- Global Transport / Scrubber (always visible) -->
       <div class="timeline-transport" id="global-transport">
+        <!-- guikit wires these by id and writes the skip tooltips from
+             PREVIEW_SEEK_SECONDS -->
+        <button id="timeline-start-btn" class="btn-sm" title="Go to start">⏮</button>
+        <button id="timeline-skip-back-btn" class="btn-sm">⏪</button>
+        <button id="timeline-frame-back-btn" class="btn-sm" title="Step back one frame">◁</button>
         <button id="timeline-play-btn" class="btn-sm" title="Play/Pause">▶</button>
+        <button id="timeline-frame-forward-btn" class="btn-sm" title="Step forward one frame">▷</button>
+        <button id="timeline-skip-forward-btn" class="btn-sm">⏩</button>
         <span id="timeline-position" class="timecode">00:00:00:00</span>
         <div id="timeline-scrubber" class="timeline-scrubber">
           <div class="timeline-scrubber-track">
