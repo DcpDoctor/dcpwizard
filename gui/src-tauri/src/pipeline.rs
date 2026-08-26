@@ -297,7 +297,6 @@ pub struct JobConfig {
     burn_subtitle: Option<String>,
     burn_subtitle_font: Option<String>,
     // how the burnt-in text and the packaged track look
-    #[serde(with = "crate::job_store::burn_style")]
     burn_style: postkit::subtitle_raster::BurnStyleOverrides,
     subtitle_appearance: dcpwizard_core::subtitle::TimedTextAppearance,
     ccap: Option<String>,
@@ -333,7 +332,6 @@ pub struct JobConfig {
     // colour space the source carries, which decides the encoder transform
     source_colourspace: postkit::colour::ColourSpace,
     // stereo -> 5.1 upmix applied before loudness normalization
-    #[serde(with = "crate::job_store::optional_upmixer")]
     upmix: Option<postkit::upmix::Upmixer>,
     reel_length_minutes: u32,
     // explicit reel boundaries in frames, from the panel's split timecodes
@@ -354,7 +352,6 @@ pub struct JobConfig {
     naming: NamingMetadata,
     /// What ffprobe read from the source. The probe counts frames by decoding,
     /// so the check runs one and the build reads it back rather than paying twice.
-    #[serde(with = "crate::job_store::optional_video_info")]
     source: Option<postkit::probe::VideoInfo>,
     /// What the pre-build check found, carried through so the job log lists it
     /// without measuring the source a second time.
