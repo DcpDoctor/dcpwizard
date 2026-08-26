@@ -162,11 +162,10 @@ named scope types. Their clear leads are GPU J2K speed with 8K SDI output, camer
 RAW ingest, Dolby Vision cinema authoring (DV2, eCMU, licensed), IMF App4/App5/RDD45
 breadth, QC detectors, and the render-farm/cloud story. Items worth landing here:
 
-- Black-frame and repeated/freeze-frame detection everywhere picture is read. It
-  runs during a postkit stream encode, so the GUI job log and `pipeline` carry the
-  findings, but `create` compresses through `grok_encoder`'s resumable pipeline,
-  which decodes with ffmpeg's stderr closed, and `report` on a finished DCP decodes
-  no picture at all.
+- Black-frame and repeated/freeze-frame detection over a finished DCP. Every encode
+  reports it now, but `report` decodes no picture, so it carries no such pass, and a
+  joined library item is encoded through `library_reel`, which drops the findings
+  its encode returns.
 - Side-by-side / wipe / difference compare in the preview. `frame_compare` has the
   metrics (PSNR/SSIM/VMAF); nothing shows two compositions ganged. guikit, so both
   wizards. Transkoder 2026 adds semantic composition diffing on top; metrics plus a

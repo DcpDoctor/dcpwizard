@@ -4385,6 +4385,11 @@ fn run() {
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
+                // a window restamps its kept frames from zero ahead of the
+                // detection branch, so a trim needs no offset here
+                for finding in result.picture_findings.describe(fps as f64) {
+                    tracing::warn!("{finding}");
+                }
                 if let Some(progress) = last_encode_progress.as_ref() {
                     tracing::info!("Encode breakdown: {}", encode_phase_breakdown(progress));
                 }
@@ -4415,6 +4420,9 @@ fn run() {
                     if !re_result.success {
                         tracing::error!("Right-eye encode failed: {}", re_result.error);
                         std::process::exit(1);
+                    }
+                    for finding in re_result.picture_findings.describe(fps as f64) {
+                        tracing::warn!("right eye: {finding}");
                     }
                     Some(j2k_right)
                 } else {
