@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use crate::pipeline::JobConfig;
 
 /// What a job that was still running when the process ended is failed with.
-pub use dcpwizard_core::job_queue::INTERRUPTED_MESSAGE;
+/// What a job left running when the window closed reports on the next launch.
+pub const INTERRUPTED_MESSAGE: &str = "the app closed while this job was running";
 
 /// Where the Jobs panel keeps its queue.
 pub fn jobs_path() -> PathBuf {

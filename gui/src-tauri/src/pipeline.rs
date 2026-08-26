@@ -3082,7 +3082,10 @@ mod tests {
 
         let (picture, audio) =
             apply_trim(&job, &j2k, dir.path(), Some(wav), 24, Some(window)).unwrap();
-        assert_eq!(picture, j2k, "the encode already wrote only the kept frames");
+        assert_eq!(
+            picture, j2k,
+            "the encode already wrote only the kept frames"
+        );
         assert!(
             !dir.path().join("j2k_trimmed").exists(),
             "a windowed encode must not relink a second copy of the picture"

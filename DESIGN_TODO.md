@@ -91,6 +91,9 @@ user-facing surface is here.
   `DcpConfig` of already-encoded J2K, while a GUI job encodes through postkit and
   reports per-frame progress. One queue for both needs a job type that carries a GUI
   build, or the GUI build path moved into CORE behind the existing IPC. GUI + CORE.
+  Smaller: a GUI job that was running when the window closed is written back as
+  failed but never shown, since `list_jobs` returns only the current job and the
+  queue.
 - `--source-colourspace` refuses aces and acescg correctly, they need a rendering
   transform (LUT). For logc "correctly" is softer: DCP-o-matic handles Sony
   S-Log3/S-Gamut3 analytically (inverse log curve then matrix, libdcp
