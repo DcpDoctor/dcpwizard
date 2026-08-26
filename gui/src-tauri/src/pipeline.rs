@@ -59,7 +59,7 @@ pub struct JobInfo {
 // ─── ISDCF naming ──────────────────────────────────────────────────────────
 
 /// One certification rating as the panel collects it.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct RatingInput {
     pub agency: String,
     pub label: String,
@@ -68,7 +68,7 @@ pub struct RatingInput {
 /// The naming fieldset plus the ISDCF naming setting. Every field is package
 /// metadata in its own right, so it lands in the CPL whether or not the built
 /// name replaces the title.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct NamingMetadata {
     pub audio_language: Option<String>,
@@ -269,10 +269,9 @@ pub async fn isdcf_name_preview(request: IsdcfNameRequest) -> Result<String, Str
 
 // ─── Job types ─────────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-#[allow(dead_code)]
-struct JobConfig {
-    id: u64,
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobConfig {
+    pub(crate) id: u64,
     video_path: PathBuf,
     title: String,
     output_dir: PathBuf,
@@ -298,6 +297,7 @@ struct JobConfig {
     burn_subtitle: Option<String>,
     burn_subtitle_font: Option<String>,
     // how the burnt-in text and the packaged track look
+    #[serde(with = "crate::job_store::burn_style")]
     burn_style: postkit::subtitle_raster::BurnStyleOverrides,
     subtitle_appearance: dcpwizard_core::subtitle::TimedTextAppearance,
     ccap: Option<String>,
@@ -333,6 +333,7 @@ struct JobConfig {
     // colour space the source carries, which decides the encoder transform
     source_colourspace: postkit::colour::ColourSpace,
     // stereo -> 5.1 upmix applied before loudness normalization
+    #[serde(with = "crate::job_store::optional_upmixer")]
     upmix: Option<postkit::upmix::Upmixer>,
     reel_length_minutes: u32,
     // explicit reel boundaries in frames, from the panel's split timecodes
@@ -353,6 +354,7 @@ struct JobConfig {
     naming: NamingMetadata,
     /// What ffprobe read from the source. The probe counts frames by decoding,
     /// so the check runs one and the build reads it back rather than paying twice.
+    #[serde(with = "crate::job_store::optional_video_info")]
     source: Option<postkit::probe::VideoInfo>,
     /// What the pre-build check found, carried through so the job log lists it
     /// without measuring the source a second time.
@@ -375,10 +377,17 @@ pub struct JobQueue {
     current_status: Mutex<String>,
     /// Output folder of the running job, so a second build cannot write into it
     current_output: Mutex<Option<PathBuf>>,
+    /// One JSON line per job record, appended when a job is queued and on every
+    /// state change after it. The last record for an id is the job.
+    jobs_file: PathBuf,
 }
 
 impl JobQueue {
     pub fn new() -> Self {
+        Self::with_jobs_file(crate::job_store::jobs_path())
+    }
+
+    pub fn with_jobs_file(jobs_file: PathBuf) -> Self {
         Self {
             queue: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
@@ -388,7 +397,29 @@ impl JobQueue {
             current_title: Mutex::new(String::new()),
             current_status: Mutex::new(String::new()),
             current_output: Mutex::new(None),
+            jobs_file,
         }
+    }
+
+    fn record(&self, state: crate::job_store::StoredJobState, message: &str, job: &JobConfig) {
+        crate::job_store::record(&self.jobs_file, state, message, job);
+    }
+
+    /// Put the jobs the last run left queued back in the queue and rewrite the
+    /// file with one line per job. Nothing is started here: a restored job runs
+    /// when the queue worker next runs, as a queued job always has.
+    pub fn load_jobs_file(&self) -> usize {
+        let loaded = crate::job_store::load(&self.jobs_file);
+        let mut queue = self.queue.lock().unwrap();
+        let mut highest_id = 0;
+        for stored in loaded.jobs {
+            highest_id = highest_id.max(stored.config.id);
+            if stored.state == crate::job_store::StoredJobState::Queued {
+                queue.push_back(stored.config);
+            }
+        }
+        self.next_id.store(highest_id + 1, Ordering::Relaxed);
+        loaded.skipped
     }
 
     /// Is a job already running or queued that writes into `output`?
@@ -933,6 +964,7 @@ pub async fn submit_job(
         ..job
     };
 
+    queue.record(crate::job_store::StoredJobState::Queued, "", &job);
     {
         let mut q = queue.queue.lock().unwrap();
         q.push_back(job);
@@ -1264,8 +1296,14 @@ pub async fn cancel_job(app: AppHandle, job_id: u64) -> Result<(), String> {
         queue.cancel.store(true, Ordering::Relaxed);
         return Ok(());
     }
-    let mut q = queue.queue.lock().unwrap();
-    q.retain(|j| j.id != job_id);
+    let cancelled = {
+        let mut q = queue.queue.lock().unwrap();
+        let at = q.iter().position(|j| j.id == job_id);
+        at.and_then(|at| q.remove(at))
+    };
+    if let Some(job) = cancelled {
+        queue.record(crate::job_store::StoredJobState::Cancelled, "", &job);
+    }
     Ok(())
 }
 
@@ -1397,6 +1435,7 @@ async fn run_queue_worker(app: AppHandle) {
             *queue.current_status.lock().unwrap() = "running".to_string();
             queue.cancel.store(false, Ordering::Relaxed);
             queue.pause.store(false, Ordering::Relaxed);
+            queue.record(crate::job_store::StoredJobState::Running, "", &job);
         }
 
         let result = tokio::task::spawn_blocking({
@@ -1410,6 +1449,7 @@ async fn run_queue_worker(app: AppHandle) {
         match result {
             Ok(Ok(_)) => {
                 *queue.current_status.lock().unwrap() = "done".to_string();
+                queue.record(crate::job_store::StoredJobState::Done, "", &job);
                 emit_progress(&app, job.id, "done", "Complete", 0, 0, 0.0, 0.0, 100.0);
             }
             Ok(Err(e)) => {
@@ -1419,12 +1459,23 @@ async fn run_queue_worker(app: AppHandle) {
                 } else {
                     format!("failed: {e}")
                 };
+                let state = if cancelled {
+                    crate::job_store::StoredJobState::Cancelled
+                } else {
+                    crate::job_store::StoredJobState::Failed
+                };
+                queue.record(state, &e, &job);
                 let stage = if cancelled { "cancelled" } else { "error" };
                 emit_progress(&app, job.id, stage, &e, 0, 0, 0.0, 0.0, 0.0);
             }
             // a panic leaves no error event, so the panel would wait forever
             Err(e) => {
                 *queue.current_status.lock().unwrap() = format!("panic: {e}");
+                queue.record(
+                    crate::job_store::StoredJobState::Failed,
+                    &format!("Build panicked: {e}"),
+                    &job,
+                );
                 emit_progress(
                     &app,
                     job.id,
@@ -3400,5 +3451,62 @@ mod tests {
                 (core.resolution_width, core.resolution_height)
             );
         }
+    }
+
+    #[test]
+    fn a_queued_job_comes_back_and_a_running_one_is_failed() {
+        use crate::job_store::{record, StoredJobState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("gui-jobs.jsonl");
+
+        let mut queued = test_job();
+        queued.id = 4;
+        queued.title = "Restored".into();
+        queued.upmix = Some(postkit::upmix::Upmixer::A);
+        queued.burn_style.colour = Some(postkit::subtitle_formats::Rgba {
+            r: 1,
+            g: 2,
+            b: 3,
+            a: 4,
+        });
+        queued.burn_style.effect = Some(postkit::subtitle_raster::BurnEffect::Outline);
+        queued.source = Some(postkit::probe::VideoInfo {
+            width: 1920,
+            height: 1080,
+            fps_num: 24,
+            fps_den: 1,
+            has_audio: true,
+            total_frames: 100,
+        });
+
+        let mut interrupted = test_job();
+        interrupted.id = 5;
+        record(&path, StoredJobState::Queued, "", &queued);
+        record(&path, StoredJobState::Queued, "", &interrupted);
+        record(&path, StoredJobState::Running, "", &interrupted);
+
+        let queue = JobQueue::with_jobs_file(path.clone());
+        assert_eq!(queue.load_jobs_file(), 0);
+
+        let restored: Vec<JobConfig> = queue.queue.lock().unwrap().iter().cloned().collect();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, 4);
+        assert_eq!(restored[0].title, "Restored");
+        assert_eq!(restored[0].burn_style, queued.burn_style);
+        assert_eq!(restored[0].source.as_ref().unwrap().width, 1920);
+        assert!(matches!(
+            restored[0].upmix,
+            Some(postkit::upmix::Upmixer::A)
+        ));
+        // a new build must not reuse a restored job's id
+        assert_eq!(queue.next_id.load(Ordering::Relaxed), 6);
+
+        let saved = crate::job_store::load(&path);
+        assert_eq!(saved.jobs.len(), 2);
+        let failed = saved.jobs.iter().find(|job| job.config.id == 5).unwrap();
+        assert_eq!(failed.state, StoredJobState::Failed);
+        assert_eq!(failed.message, crate::job_store::INTERRUPTED_MESSAGE);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
     }
 }

@@ -7,6 +7,7 @@
 //! [`postkit::picture_processing::PictureProcessing`], so the CLI and the GUI
 //! cannot disagree about what a crop means.
 
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use postkit::picture_processing::{
@@ -16,7 +17,7 @@ use postkit::picture_processing::{
 
 /// What the caller asked for. Crops are source pixels, taken before any
 /// rotation, which is the orientation the source is stored in.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourcePictureOptions {
     pub crop: Crop,
     pub auto_crop: bool,

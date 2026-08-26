@@ -84,16 +84,13 @@ user-facing surface is here.
   them on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
   frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
   so the colour conversion would have to happen before the pipe either way. GUI.
-- The daemon queue (CORE/job_queue.rs) is a Mutex around an in-memory map with
-  no save or load, so a daemon crash or reboot loses every pending job, and unlike
-  DCP-o-matic, whose batch jobs are film projects on disk that can be re-added, our
-  jobs carry their whole config as JSON params in memory, so losing the queue loses
-  the specifications. The GUI is worse: its Jobs panel is a separate JobQueue in
-  tauri state (gui pipeline.rs), never talks to the daemon (only `serve` proxies to
-  it), and dies with the window. Both halves are mostly plumbing: Job is already
-  Serialize/Deserialize, so persist to an XDG-dir JSONL on submit and state change
-  and reload pending jobs on daemon start, and have the GUI submit over the existing
-  IPC when the daemon is up, falling back to in-process when it is not.
+- The GUI's Jobs panel never submits to the daemon. It runs its own queue in tauri
+  state (gui pipeline.rs), and only `serve` proxies to the daemon, so two queues
+  exist on one machine and neither can see the other's jobs. The daemon cannot take
+  a GUI job as things stand: its `CreateDcp` runs `create_dcp_with_progress` over a
+  `DcpConfig` of already-encoded J2K, while a GUI job encodes through postkit and
+  reports per-frame progress. One queue for both needs a job type that carries a GUI
+  build, or the GUI build path moved into CORE behind the existing IPC. GUI + CORE.
 - `--source-colourspace` refuses aces and acescg correctly, they need a rendering
   transform (LUT). For logc "correctly" is softer: DCP-o-matic handles Sony
   S-Log3/S-Gamut3 analytically (inverse log curve then matrix, libdcp

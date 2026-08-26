@@ -11,14 +11,14 @@ use crate::ContentType;
 use crate::dcp::DcpConfig;
 use crate::encrypt::{ContentKey, GeneratedKey, KeyType};
 use crate::reel::{ReelRange, WavInfo, collect_frames, plan_reel_ranges, register_asset};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Dolby Atmos IAB bitstream data-essence UL, as used in real Atmos DCP AuxData.
 const ATMOS_DATA_TYPE_UL: &str = "urn:smpte:ul:060e2b34.04010105.0e090604.00000000";
 
 /// One language/subtitle version layered over the shared master.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VersionSpec {
     /// CPL title / ContentTitleText. Required, non-empty, unique in the manifest.

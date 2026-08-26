@@ -18,6 +18,7 @@ const MAIN_WINDOW_MINIMUM_HEIGHT: f64 = 500.0;
 #[cfg(target_os = "linux")]
 const MAIN_WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 0, 255);
 
+mod job_store;
 mod library;
 mod pipeline;
 mod timeline;
@@ -28,6 +29,7 @@ pub fn run() {
     guikit::startup::fork_terminal_guard();
 
     let job_queue = pipeline::JobQueue::new();
+    job_queue.load_jobs_file();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

@@ -20,3 +20,12 @@ pub fn default_history_path() -> PathBuf {
 pub fn default_templates_path() -> PathBuf {
     data_dir().join("kdm-templates.json")
 }
+
+/// where the daemon keeps its job queue. `DCPWIZARD_JOBS_FILE` points a second
+/// daemon, or a test, at a file of its own.
+pub fn jobs_path() -> PathBuf {
+    match std::env::var("DCPWIZARD_JOBS_FILE") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => data_dir().join("jobs.jsonl"),
+    }
+}

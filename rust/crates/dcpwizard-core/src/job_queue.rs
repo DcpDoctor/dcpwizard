@@ -7,9 +7,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
+
+/// What a job that was still Running when the queue was loaded again is failed
+/// with. Nothing can pick a half-run job back up.
+pub const INTERRUPTED_MESSAGE: &str = "the daemon stopped while this job was running";
 
 /// Job type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,7 +72,8 @@ pub enum IpcResponse {
     Error(String),
 }
 
-/// Thread-safe in-memory job queue.
+/// Thread-safe job queue, backed by a JSONL file so a crash or a reboot does not
+/// lose what is queued.
 #[derive(Clone)]
 pub struct JobQueue {
     jobs: Arc<Mutex<HashMap<String, Job>>>,
@@ -74,6 +81,9 @@ pub struct JobQueue {
     /// cooperative-cancel flag per running job; the job loop and the running
     /// operation both watch it so a cancel stops in-flight work between stages.
     cancel_flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// one JSON line per job record, appended on submit and on every state
+    /// change. the last record for an id is the job.
+    jobs_file: Arc<PathBuf>,
 }
 
 impl Default for JobQueue {
@@ -84,10 +94,78 @@ impl Default for JobQueue {
 
 impl JobQueue {
     pub fn new() -> Self {
+        Self::with_jobs_file(crate::store::jobs_path())
+    }
+
+    pub fn with_jobs_file(jobs_file: PathBuf) -> Self {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(false)),
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            jobs_file: Arc::new(jobs_file),
+        }
+    }
+
+    /// Read the jobs file back into the queue and rewrite it with one line per
+    /// job. A job left Running is failed with [`INTERRUPTED_MESSAGE`]. Returns
+    /// how many lines could not be read.
+    pub fn load_jobs_file(&self) -> usize {
+        let path = self.jobs_file.as_path();
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(e) => {
+                tracing::error!("could not read {}: {e}", path.display());
+                return 0;
+            }
+        };
+
+        let mut loaded: HashMap<String, Job> = HashMap::new();
+        let mut skipped = 0;
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Job>(line) {
+                Ok(mut job) => {
+                    if job.state == JobState::Running {
+                        job.state = JobState::Failed;
+                        job.message = INTERRUPTED_MESSAGE.to_string();
+                    }
+                    loaded.insert(job.id.clone(), job);
+                }
+                Err(e) => {
+                    skipped += 1;
+                    tracing::error!(
+                        "{} line {}: not a job record: {e}",
+                        path.display(),
+                        index + 1
+                    );
+                }
+            }
+        }
+        tracing::info!("loaded {} jobs from {}", loaded.len(), path.display());
+        if skipped > 0 {
+            tracing::error!("skipped {skipped} unreadable lines in {}", path.display());
+        }
+
+        let mut compacted: Vec<&Job> = loaded.values().collect();
+        compacted.sort_by_key(|job| job.created_at);
+        write_jobs_file(path, &compacted);
+
+        if let Ok(mut jobs) = self.jobs.lock() {
+            *jobs = loaded;
+        }
+        skipped
+    }
+
+    fn record(&self, job: &Job) {
+        if let Err(e) = append_job_record(&self.jobs_file, job) {
+            tracing::error!(
+                "could not record job {} in {}: {e}",
+                job.id,
+                self.jobs_file.display()
+            );
         }
     }
 
@@ -108,8 +186,9 @@ impl JobQueue {
         };
 
         if let Ok(mut jobs) = self.jobs.lock() {
-            jobs.insert(id.clone(), job);
+            jobs.insert(id.clone(), job.clone());
         }
+        self.record(&job);
 
         tracing::info!("Submitted job {id}");
         id
@@ -118,22 +197,31 @@ impl JobQueue {
     /// Cancel a job by ID. A pending job never starts; a running job is asked to
     /// stop via its cancel flag and the job loop finalises it as Cancelled.
     pub fn cancel(&self, id: &str) -> bool {
-        if let Ok(mut jobs) = self.jobs.lock()
-            && let Some(job) = jobs.get_mut(id)
-            && (job.state == JobState::Pending || job.state == JobState::Running)
-        {
-            job.state = JobState::Cancelled;
-            job.updated_at = current_epoch_secs();
-            // signal a running operation to bail between stages
-            if let Ok(flags) = self.cancel_flags.lock()
-                && let Some(flag) = flags.get(id)
+        let cancelled = {
+            let mut cancelled = None;
+            if let Ok(mut jobs) = self.jobs.lock()
+                && let Some(job) = jobs.get_mut(id)
+                && (job.state == JobState::Pending || job.state == JobState::Running)
             {
-                flag.store(true, Ordering::Relaxed);
+                job.state = JobState::Cancelled;
+                job.updated_at = current_epoch_secs();
+                cancelled = Some(job.clone());
             }
-            tracing::info!("Cancelled job {id}");
-            return true;
+            cancelled
+        };
+
+        let Some(job) = cancelled else {
+            return false;
+        };
+        self.record(&job);
+        // signal a running operation to bail between stages
+        if let Ok(flags) = self.cancel_flags.lock()
+            && let Some(flag) = flags.get(id)
+        {
+            flag.store(true, Ordering::Relaxed);
         }
-        false
+        tracing::info!("Cancelled job {id}");
+        true
     }
 
     /// Get a job by ID.
@@ -155,14 +243,56 @@ impl JobQueue {
 
     /// Update a job's state and progress.
     pub fn update_job(&self, id: &str, state: JobState, progress: u32, message: &str) {
-        if let Ok(mut jobs) = self.jobs.lock()
-            && let Some(job) = jobs.get_mut(id)
-        {
-            job.state = state;
-            job.progress_percent = progress;
-            job.message = message.to_string();
-            job.updated_at = current_epoch_secs();
+        let updated = {
+            let mut updated = None;
+            if let Ok(mut jobs) = self.jobs.lock()
+                && let Some(job) = jobs.get_mut(id)
+            {
+                job.state = state;
+                job.progress_percent = progress;
+                job.message = message.to_string();
+                job.updated_at = current_epoch_secs();
+                updated = Some(job.clone());
+            }
+            updated
+        };
+        if let Some(job) = updated {
+            self.record(&job);
         }
+    }
+}
+
+/// Append one job record as a JSON line, creating the file and its parent dir.
+fn append_job_record(path: &Path, job: &Job) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    let mut line = serde_json::to_string(job).map_err(|e| format!("serialize job: {e}"))?;
+    line.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("cannot append: {e}"))
+}
+
+/// Replace the file with one line per job.
+fn write_jobs_file(path: &Path, jobs: &[&Job]) {
+    let mut text = String::new();
+    for job in jobs {
+        match serde_json::to_string(job) {
+            Ok(line) => {
+                text.push_str(&line);
+                text.push('\n');
+            }
+            Err(e) => tracing::error!("could not serialize job {}: {e}", job.id),
+        }
+    }
+    if let Err(e) = std::fs::write(path, text) {
+        tracing::error!("could not rewrite {}: {e}", path.display());
     }
 }
 
@@ -386,6 +516,8 @@ pub fn start_daemon_ipc(queue: &JobQueue) -> i32 {
 
     tracing::info!("Daemon listening on {addr}");
 
+    queue.load_jobs_file();
+
     // Start the job processor thread
     start_job_queue(queue);
 
@@ -477,4 +609,48 @@ pub fn is_daemon_running() -> bool {
         std::time::Duration::from_millis(500),
     )
     .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_keeps_pending_and_fails_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("jobs.jsonl");
+
+        let queue = JobQueue::with_jobs_file(path.clone());
+        let pending = queue.submit(JobType::VerifyDcp, "/dcp/one");
+        let running = queue.submit(JobType::VerifyDcp, "/dcp/two");
+        queue.update_job(&running, JobState::Running, 40, "Processing...");
+
+        let reloaded = JobQueue::with_jobs_file(path.clone());
+        assert_eq!(reloaded.load_jobs_file(), 0);
+
+        assert_eq!(reloaded.get(&pending).unwrap().state, JobState::Pending);
+        let interrupted = reloaded.get(&running).unwrap();
+        assert_eq!(interrupted.state, JobState::Failed);
+        assert_eq!(interrupted.message, INTERRUPTED_MESSAGE);
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2);
+    }
+
+    #[test]
+    fn corrupt_line_is_skipped_and_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.jsonl");
+
+        let queue = JobQueue::with_jobs_file(path.clone());
+        let id = queue.submit(JobType::VerifyDcp, "/dcp/one");
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str("{not json}\n");
+        std::fs::write(&path, text).unwrap();
+
+        let reloaded = JobQueue::with_jobs_file(path.clone());
+        assert_eq!(reloaded.load_jobs_file(), 1);
+        assert_eq!(reloaded.list().len(), 1);
+        assert_eq!(reloaded.get(&id).unwrap().state, JobState::Pending);
+    }
 }

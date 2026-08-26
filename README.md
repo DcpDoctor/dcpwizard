@@ -497,7 +497,11 @@ dcpwizard serve --bind 127.0.0.1:8080
 # Watch folder for auto-DCP creation
 dcpwizard watch ./incoming
 
-# Job queue daemon
+# Job queue daemon. $DCPWIZARD_DAEMON_ADDR sets the address it listens on
+# (default 127.0.0.1:9457). The queue is written to
+# ~/.local/share/dcpwizard/jobs.jsonl, one JSON line per job on submit and on
+# every state change, and read back on start, so a crash or a reboot does not
+# lose queued jobs. $DCPWIZARD_JOBS_FILE points a second daemon at another file.
 dcpwizard daemon
 
 # Manage job queue
