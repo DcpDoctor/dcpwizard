@@ -120,7 +120,7 @@ pub fn generate_solid_frame(
     }
 
     let params = CompressParams {
-        frame_rate: fps.max(1) as u16,
+        edit_rate: postkit::encode::FrameRate::whole(fps.max(1)),
         ..CompressParams::default()
     };
 

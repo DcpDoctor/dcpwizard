@@ -85,7 +85,7 @@ user-facing surface is here.
   frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
   so the colour conversion would have to happen before the pipe either way. GUI.
 - The GUI's Jobs panel lists both queues but they stay separate: the GUI runs its own
-  queue in tauri state (gui pipeline.rs) and only `serve` proxies to the daemon, so
+  queue in tauri state (`postkit::gui_job_queue`) and only `serve` proxies to the daemon, so
   two queues exist on one machine and neither can take the other's jobs. The daemon
   cannot take a GUI job as things stand: its `CreateDcp` runs
   `create_dcp_with_progress` over a `DcpConfig` of already-encoded J2K, while a GUI

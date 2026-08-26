@@ -512,6 +512,12 @@ dcpwizard watch ./incoming
 # ~/.local/share/dcpwizard/jobs.jsonl, one JSON line per job on submit and on
 # every state change, and read back on start, so a crash or a reboot does not
 # lose queued jobs. $DCPWIZARD_JOBS_FILE points a second daemon at another file.
+#
+# The desktop GUI runs a queue of its own, written to
+# ~/.local/share/dcpwizard/gui-jobs.jsonl in the same format and listed in the
+# Jobs panel beside the daemon's. $DCPWIZARD_GUI_JOBS_FILE points a second GUI
+# at another file. The two variables name different files: DCPWIZARD_JOBS_FILE
+# is the daemon's jobs.jsonl, DCPWIZARD_GUI_JOBS_FILE the GUI's gui-jobs.jsonl.
 dcpwizard daemon
 
 # Manage job queue

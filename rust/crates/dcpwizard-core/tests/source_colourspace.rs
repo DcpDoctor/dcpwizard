@@ -93,7 +93,7 @@ fn encode_solid(rgb16: [u16; 3], route: XyzRoute, dir: &Path) -> std::path::Path
         }
     }
     let params = CompressParams {
-        frame_rate: FPS as u16,
+        edit_rate: postkit::encode::FrameRate::whole(FPS),
         apply_xyz_transform: route.compressor_transform(),
         source_preparation: postkit::grok_encoder::SourcePreparation {
             subtitle_burn: None,

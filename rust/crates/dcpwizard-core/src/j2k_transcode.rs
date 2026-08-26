@@ -500,7 +500,7 @@ fn encode_tiffs(tiff_dir: &Path, out_dir: &Path, ratio: f64, fps: u32) -> bool {
     let total = frames.len() as u64;
     let params = CompressParams {
         compression_ratio: ratio,
-        frame_rate: fps as u16,
+        edit_rate: postkit::encode::FrameRate::whole(fps),
         ..CompressParams::default()
     };
     let cancel = Arc::new(AtomicBool::new(false));

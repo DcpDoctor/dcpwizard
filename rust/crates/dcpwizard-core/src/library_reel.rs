@@ -302,7 +302,7 @@ fn encode_item_picture(
                 (bitrate_mbps > 0).then_some(bitrate_mbps),
                 false,
             ),
-            frame_rate: format.fps as u16,
+            edit_rate: rate,
             apply_xyz_transform: ITEM_COLOUR_ROUTE.compressor_transform(),
             ..CompressParams::default()
         };

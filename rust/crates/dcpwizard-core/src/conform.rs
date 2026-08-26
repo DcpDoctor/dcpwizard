@@ -261,7 +261,7 @@ fn reel_to_dcp(
     let j2k_dir = work.join("j2k");
     std::fs::create_dir_all(&j2k_dir).map_err(|e| e.to_string())?;
     let params = CompressParams {
-        frame_rate: fps as u16,
+        edit_rate: postkit::encode::FrameRate::whole(fps),
         apply_xyz_transform: true,
         ..CompressParams::default()
     };

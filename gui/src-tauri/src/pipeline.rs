@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
@@ -46,53 +44,6 @@ pub struct PipelineProgress {
     pub fps: f64,
     pub elapsed_secs: f64,
     pub percent: f64,
-}
-
-/// The states the Jobs panel prints for a GUI job. The daemon's `batch list`
-/// prints the same words, so one row reads the same whichever queue it came from.
-const STATUS_RUNNING: &str = "running";
-const STATUS_QUEUED: &str = "queued";
-const STATUS_DONE: &str = "done";
-const STATUS_FAILED: &str = "failed";
-const STATUS_CANCELLED: &str = "cancelled";
-
-fn status_of(state: crate::job_store::StoredJobState) -> &'static str {
-    match state {
-        crate::job_store::StoredJobState::Queued => STATUS_QUEUED,
-        crate::job_store::StoredJobState::Running => STATUS_RUNNING,
-        crate::job_store::StoredJobState::Done => STATUS_DONE,
-        crate::job_store::StoredJobState::Failed => STATUS_FAILED,
-        crate::job_store::StoredJobState::Cancelled => STATUS_CANCELLED,
-    }
-}
-
-#[derive(Clone, Serialize)]
-pub struct JobInfo {
-    pub id: u64,
-    pub title: String,
-    pub status: String,
-    pub percent: f64,
-    pub message: String,
-}
-
-/// One job that has reached Done, Failed or Cancelled, as the panel lists it.
-fn finished_job_info(
-    id: u64,
-    title: String,
-    state: crate::job_store::StoredJobState,
-    message: String,
-) -> JobInfo {
-    JobInfo {
-        id,
-        title,
-        status: status_of(state).to_string(),
-        percent: if state == crate::job_store::StoredJobState::Done {
-            100.0
-        } else {
-            0.0
-        },
-        message,
-    }
 }
 
 // ─── ISDCF naming ──────────────────────────────────────────────────────────
@@ -407,128 +358,26 @@ pub struct JobConfig {
 
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
 
-pub struct JobQueue {
-    queue: Mutex<VecDeque<JobConfig>>,
-    next_id: AtomicU64,
-    cancel: Arc<AtomicBool>,
-    pause: Arc<AtomicBool>,
-    current_id: AtomicU64,
-    current_title: Mutex<String>,
-    current_status: Mutex<String>,
-    /// Output folder of the running job, so a second build cannot write into it
-    current_output: Mutex<Option<PathBuf>>,
-    /// Jobs that are neither running nor queued any more, oldest first. Read from
-    /// the jobs file once at startup and appended to as jobs finish, because
-    /// loading the file rewrites it.
-    history: Mutex<Vec<JobInfo>>,
-    /// One JSON line per job record, appended when a job is queued and on every
-    /// state change after it. The last record for an id is the job.
-    jobs_file: PathBuf,
+impl postkit::gui_job_queue::GuiJob for JobConfig {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn output_dir(&self) -> &Path {
+        &self.output_dir
+    }
 }
 
-impl JobQueue {
-    pub fn new() -> Self {
-        Self::with_jobs_file(crate::job_store::jobs_path())
-    }
+pub type JobQueue = postkit::gui_job_queue::GuiJobQueue<JobConfig>;
 
-    pub fn with_jobs_file(jobs_file: PathBuf) -> Self {
-        Self {
-            queue: Mutex::new(VecDeque::new()),
-            next_id: AtomicU64::new(1),
-            cancel: Arc::new(AtomicBool::new(false)),
-            pause: Arc::new(AtomicBool::new(false)),
-            current_id: AtomicU64::new(0),
-            current_title: Mutex::new(String::new()),
-            current_status: Mutex::new(String::new()),
-            current_output: Mutex::new(None),
-            history: Mutex::new(Vec::new()),
-            jobs_file,
-        }
-    }
-
-    fn record(&self, state: crate::job_store::StoredJobState, message: &str, job: &JobConfig) {
-        crate::job_store::record(&self.jobs_file, state, message, job);
-        if state != crate::job_store::StoredJobState::Queued
-            && state != crate::job_store::StoredJobState::Running
-        {
-            self.history.lock().unwrap().push(finished_job_info(
-                job.id,
-                job.title.clone(),
-                state,
-                message.to_string(),
-            ));
-        }
-    }
-
-    /// What the Jobs panel lists: the running job, then the queued ones, then
-    /// the finished ones newest first.
-    pub fn snapshot(&self) -> Vec<JobInfo> {
-        let mut jobs = Vec::new();
-
-        let current_id = self.current_id.load(Ordering::Relaxed);
-        let status = self.current_status.lock().unwrap().clone();
-        // between a job finishing and the worker picking up the next one the
-        // current slot still holds the finished job, which history already has
-        if current_id > 0 && status == STATUS_RUNNING {
-            jobs.push(JobInfo {
-                id: current_id,
-                title: self.current_title.lock().unwrap().clone(),
-                status,
-                percent: 0.0,
-                message: String::new(),
-            });
-        }
-
-        for job in self.queue.lock().unwrap().iter() {
-            jobs.push(JobInfo {
-                id: job.id,
-                title: job.title.clone(),
-                status: STATUS_QUEUED.to_string(),
-                percent: 0.0,
-                message: String::new(),
-            });
-        }
-
-        jobs.extend(self.history.lock().unwrap().iter().rev().cloned());
-        jobs
-    }
-
-    /// Put the jobs the last run left queued back in the queue and rewrite the
-    /// file with one line per job. Nothing is started here: a restored job runs
-    /// when the queue worker next runs, as a queued job always has.
-    pub fn load_jobs_file(&self) -> usize {
-        let loaded = crate::job_store::load(&self.jobs_file);
-        let mut queue = self.queue.lock().unwrap();
-        let mut history = self.history.lock().unwrap();
-        let mut highest_id = 0;
-        for stored in loaded.jobs {
-            highest_id = highest_id.max(stored.config.id);
-            if stored.state == crate::job_store::StoredJobState::Queued {
-                queue.push_back(stored.config);
-                continue;
-            }
-            history.push(finished_job_info(
-                stored.config.id,
-                stored.config.title,
-                stored.state,
-                stored.message,
-            ));
-        }
-        self.next_id.store(highest_id + 1, Ordering::Relaxed);
-        loaded.skipped
-    }
-
-    /// Is a job already running or queued that writes into `output`?
-    pub fn is_building_into(&self, output: &std::path::Path) -> bool {
-        if self.current_output.lock().unwrap().as_deref() == Some(output) {
-            return true;
-        }
-        self.queue
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|job| job.output_dir == output)
-    }
+/// Where the Jobs panel keeps its queue. `DCPWIZARD_JOBS_FILE` is the daemon's
+/// own jobs.jsonl and names a different file.
+pub fn jobs_path() -> PathBuf {
+    postkit::gui_job_queue::jobs_path("DCPWIZARD_GUI_JOBS_FILE", dcpwizard_core::store::data_dir())
 }
 
 /// Files a finished DCP always has at its root.
@@ -664,7 +513,7 @@ pub async fn submit_job(
     hints_accepted: Option<bool>,
 ) -> Result<SubmitResult, String> {
     let queue = app.state::<JobQueue>();
-    let id = queue.next_id.fetch_add(1, Ordering::Relaxed);
+    let id = queue.reserve_job_id();
 
     // Never encrypt without an explicit key destination.
     if encrypt.unwrap_or(false) && key_out.as_deref().unwrap_or("").is_empty() {
@@ -1062,13 +911,9 @@ pub async fn submit_job(
         ..job
     };
 
-    queue.record(crate::job_store::StoredJobState::Queued, "", &job);
-    {
-        let mut q = queue.queue.lock().unwrap();
-        q.push_back(job);
-    }
+    queue.submit(job);
 
-    if queue.current_id.load(Ordering::Relaxed) == 0 {
+    if !queue.has_running_job() {
         let app2 = app.clone();
         tauri::async_runtime::spawn(async move {
             run_queue_worker(app2).await;
@@ -1389,38 +1234,24 @@ pub async fn delete_dcp(app: AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cancel_job(app: AppHandle, job_id: u64) -> Result<(), String> {
-    let queue = app.state::<JobQueue>();
-    if queue.current_id.load(Ordering::Relaxed) == job_id {
-        queue.cancel.store(true, Ordering::Relaxed);
-        return Ok(());
-    }
-    let cancelled = {
-        let mut q = queue.queue.lock().unwrap();
-        let at = q.iter().position(|j| j.id == job_id);
-        at.and_then(|at| q.remove(at))
-    };
-    if let Some(job) = cancelled {
-        queue.record(crate::job_store::StoredJobState::Cancelled, "", &job);
-    }
+    app.state::<JobQueue>().cancel(job_id);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn pause_job(app: AppHandle) -> Result<(), String> {
-    let queue = app.state::<JobQueue>();
-    queue.pause.store(true, Ordering::Relaxed);
+    app.state::<JobQueue>().pause();
     Ok(())
 }
 
 #[tauri::command]
 pub async fn resume_job(app: AppHandle) -> Result<(), String> {
-    let queue = app.state::<JobQueue>();
-    queue.pause.store(false, Ordering::Relaxed);
+    app.state::<JobQueue>().resume();
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_jobs(app: AppHandle) -> Vec<JobInfo> {
+pub async fn list_jobs(app: AppHandle) -> Vec<postkit::gui_job_queue::JobInfo> {
     app.state::<JobQueue>().snapshot()
 }
 
@@ -1488,29 +1319,14 @@ pub async fn create_vf(
 
 async fn run_queue_worker(app: AppHandle) {
     loop {
-        let job = {
-            let queue = app.state::<JobQueue>();
-            let mut q = queue.queue.lock().unwrap();
-            q.pop_front()
-        };
+        let job = app.state::<JobQueue>().take_next();
 
         let Some(job) = job else {
-            let queue = app.state::<JobQueue>();
-            queue.current_id.store(0, Ordering::Relaxed);
-            *queue.current_output.lock().unwrap() = None;
+            app.state::<JobQueue>().clear_current();
             break;
         };
 
-        {
-            let queue = app.state::<JobQueue>();
-            queue.current_id.store(job.id, Ordering::Relaxed);
-            *queue.current_title.lock().unwrap() = job.title.clone();
-            *queue.current_output.lock().unwrap() = Some(job.output_dir.clone());
-            *queue.current_status.lock().unwrap() = STATUS_RUNNING.to_string();
-            queue.cancel.store(false, Ordering::Relaxed);
-            queue.pause.store(false, Ordering::Relaxed);
-            queue.record(crate::job_store::StoredJobState::Running, "", &job);
-        }
+        app.state::<JobQueue>().start(&job);
 
         let result = tokio::task::spawn_blocking({
             let app = app.clone();
@@ -1522,29 +1338,26 @@ async fn run_queue_worker(app: AppHandle) {
         let queue = app.state::<JobQueue>();
         match result {
             Ok(Ok(_)) => {
-                *queue.current_status.lock().unwrap() = STATUS_DONE.to_string();
-                queue.record(crate::job_store::StoredJobState::Done, "", &job);
+                queue.finish(&job, postkit::gui_job_queue::StoredJobState::Done, "");
                 emit_progress(&app, job.id, "done", "Complete", 0, 0, 0.0, 0.0, 100.0);
             }
             Ok(Err(e)) => {
-                let cancelled = queue.cancel.load(Ordering::Relaxed);
+                let cancelled = queue.is_cancelled();
                 let state = if cancelled {
-                    crate::job_store::StoredJobState::Cancelled
+                    postkit::gui_job_queue::StoredJobState::Cancelled
                 } else {
-                    crate::job_store::StoredJobState::Failed
+                    postkit::gui_job_queue::StoredJobState::Failed
                 };
-                *queue.current_status.lock().unwrap() = status_of(state).to_string();
-                queue.record(state, &e, &job);
+                queue.finish(&job, state, &e);
                 let stage = if cancelled { "cancelled" } else { "error" };
                 emit_progress(&app, job.id, stage, &e, 0, 0, 0.0, 0.0, 0.0);
             }
             // a panic leaves no error event, so the panel would wait forever
             Err(e) => {
-                *queue.current_status.lock().unwrap() = STATUS_FAILED.to_string();
-                queue.record(
-                    crate::job_store::StoredJobState::Failed,
-                    &format!("Build panicked: {e}"),
+                queue.finish(
                     &job,
+                    postkit::gui_job_queue::StoredJobState::Failed,
+                    &format!("Build panicked: {e}"),
                 );
                 emit_progress(
                     &app,
@@ -2207,8 +2020,8 @@ fn build_dcp_config(
 fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let job_started = Instant::now();
     let queue = app.state::<JobQueue>();
-    let cancel = queue.cancel.clone();
-    let pause = queue.pause.clone();
+    let cancel = queue.cancel_flag();
+    let pause = queue.pause_flag();
 
     let output = &job.output_dir;
     let log_path = output.join("dcpwizard.log");
@@ -2920,26 +2733,6 @@ mod tests {
     }
 
     #[test]
-    fn a_second_build_into_the_same_folder_is_refused() {
-        // clicking Build twice must not queue a second job into the first
-        // job's folder.
-        let queue = JobQueue::new();
-        let output = PathBuf::from("/out");
-        assert!(!queue.is_building_into(&output));
-
-        queue.queue.lock().unwrap().push_back(test_job());
-        assert!(queue.is_building_into(&output));
-        assert!(!queue.is_building_into(&PathBuf::from("/other")));
-
-        queue.queue.lock().unwrap().clear();
-        *queue.current_output.lock().unwrap() = Some(output.clone());
-        assert!(queue.is_building_into(&output));
-
-        *queue.current_output.lock().unwrap() = None;
-        assert!(!queue.is_building_into(&output));
-    }
-
-    #[test]
     fn audio_input_order_maps_to_core() {
         assert_eq!(
             parse_audio_input_order(Some("lrc-ls-rs-lfe")).unwrap(),
@@ -3557,8 +3350,8 @@ mod tests {
     }
 
     #[test]
-    fn a_queued_job_comes_back_and_a_running_one_is_failed() {
-        use crate::job_store::{record, StoredJobState};
+    fn a_queued_job_comes_back_from_the_jobs_file() {
+        use postkit::gui_job_queue::{load, record, StoredJobState};
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("gui-jobs.jsonl");
@@ -3583,68 +3376,20 @@ mod tests {
             total_frames: 100,
         });
 
-        let mut interrupted = test_job();
-        interrupted.id = 5;
         record(&path, StoredJobState::Queued, "", &queued);
-        record(&path, StoredJobState::Queued, "", &interrupted);
-        record(&path, StoredJobState::Running, "", &interrupted);
 
-        let queue = JobQueue::with_jobs_file(path.clone());
+        let queue = JobQueue::new(path.clone());
         assert_eq!(queue.load_jobs_file(), 0);
 
-        let restored: Vec<JobConfig> = queue.queue.lock().unwrap().iter().cloned().collect();
-        assert_eq!(restored.len(), 1);
-        assert_eq!(restored[0].id, 4);
-        assert_eq!(restored[0].title, "Restored");
-        assert_eq!(restored[0].burn_style, queued.burn_style);
-        assert_eq!(restored[0].source.as_ref().unwrap().width, 1920);
-        assert!(matches!(
-            restored[0].upmix,
-            Some(postkit::upmix::Upmixer::A)
-        ));
-        // a new build must not reuse a restored job's id
-        assert_eq!(queue.next_id.load(Ordering::Relaxed), 6);
+        let restored = queue.take_next().unwrap();
+        assert_eq!(restored.id, 4);
+        assert_eq!(restored.title, "Restored");
+        assert_eq!(restored.burn_style, queued.burn_style);
+        assert_eq!(restored.source.as_ref().unwrap().width, 1920);
+        assert!(matches!(restored.upmix, Some(postkit::upmix::Upmixer::A)));
 
-        let saved = crate::job_store::load(&path);
-        assert_eq!(saved.jobs.len(), 2);
-        let failed = saved.jobs.iter().find(|job| job.config.id == 5).unwrap();
-        assert_eq!(failed.state, StoredJobState::Failed);
-        assert_eq!(failed.message, crate::job_store::INTERRUPTED_MESSAGE);
-        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
-    }
-
-    #[test]
-    fn finished_jobs_from_the_last_run_are_listed_newest_first() {
-        use crate::job_store::{record, StoredJobState};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state").join("gui-jobs.jsonl");
-
-        let mut interrupted = test_job();
-        interrupted.id = 7;
-        interrupted.title = "Interrupted".into();
-        let mut finished = test_job();
-        finished.id = 8;
-        finished.title = "Finished".into();
-        record(&path, StoredJobState::Running, "", &interrupted);
-        record(&path, StoredJobState::Done, "", &finished);
-
-        let queue = JobQueue::with_jobs_file(path);
-        assert_eq!(queue.load_jobs_file(), 0);
-
-        let listed = queue.snapshot();
-        assert_eq!(listed.len(), 2);
-        assert!(listed.iter().all(|job| job.status != "queued"));
-
-        assert_eq!(listed[0].id, 8);
-        assert_eq!(listed[0].title, "Finished");
-        assert_eq!(listed[0].status, "done");
-        assert_eq!(listed[0].percent, 100.0);
-        assert_eq!(listed[0].message, "");
-
-        assert_eq!(listed[1].id, 7);
-        assert_eq!(listed[1].title, "Interrupted");
-        assert_eq!(listed[1].status, "failed");
-        assert_eq!(listed[1].message, crate::job_store::INTERRUPTED_MESSAGE);
+        let saved = load::<JobConfig>(&path);
+        assert_eq!(saved.jobs.len(), 1);
+        assert_eq!(saved.jobs[0].state, StoredJobState::Queued);
     }
 }

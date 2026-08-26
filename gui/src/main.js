@@ -7,6 +7,7 @@ import { open as _open, save, confirm as tauriConfirm, message as tauriMessage }
 import { documentDir, join } from "@tauri-apps/api/path";
 import { initPreview, previewDcp, previewFile, previewPlayPause, previewSeek, previewSeekAbsolute, previewFrameStepBack, previewFrameStepForward, PREVIEW_SEEK_SECONDS, isPreviewVisible, setPreviewCrop, setPreviewSubtitleFile, setPreviewCaptionFile } from "../../extern/guikit/src/preview.js";
 import { initPlaylist, addToPlaylist } from "../../extern/guikit/src/playlist.js";
+import { initJobsPanel, refreshJobs, startJobsPolling, stopJobsPolling } from "../../extern/guikit/src/jobs.js";
 import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
 import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
 
@@ -1559,27 +1560,10 @@ document.getElementById("vf-create")?.addEventListener("click", async () => {
 renderVfReplacements();
 
 // === Jobs ===
-let jobsPollInterval = null;
-
-const JOBS_TABLE_COLUMNS = 6;
-const CANCELLABLE_JOB_STATES = ["running", "queued"];
-const GUI_JOB_SOURCE = "gui";
 const DAEMON_JOB_SOURCE = "daemon";
-
-function escapeHtml(text) {
-  const replacements = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
-  return String(text).replace(/[&<>"]/g, ch => replacements[ch]);
-}
-
-function jobRow({ source, id, label, state, progress, message }) {
-  const cancel = CANCELLABLE_JOB_STATES.includes(state)
-    ? `<button class="btn-sm btn-cancel" data-job-id="${id}" data-job-source="${source}">✕</button>`
-    : "";
-  const rowTitle = message ? ` title="${escapeHtml(message)}"` : "";
-  return `<tr${rowTitle}><td>${id}</td><td>${source}</td><td>${escapeHtml(label)}</td>` +
-    `<td>${state}</td><td>${progress}</td><td>${cancel}</td></tr>`;
-}
-
+const DAEMON_ONLINE_STATUS = "Online";
+const DAEMON_OFFLINE_STATUS = "Offline";
+const DAEMON_ERROR_STATUS = "Error";
 // The daemon prints a header and a rule before its jobs.
 const DAEMON_JOB_LIST_HEADER_LINES = 2;
 
@@ -1588,62 +1572,39 @@ function daemonJobRows(stdout) {
   if (lines.length <= 1 || lines[0].startsWith("No jobs")) return [];
   return lines.slice(DAEMON_JOB_LIST_HEADER_LINES).filter(line => line.trim()).map(line => {
     const [id, state, progress, type] = line.trim().split(/\s+/);
-    return jobRow({ source: DAEMON_JOB_SOURCE, id, label: type, state, progress, message: "" });
+    return {
+      id,
+      label: type,
+      state,
+      progress,
+      message: "",
+      cancel: () => Command.sidecar("dcpwizard", ["batch", "cancel", id]).execute(),
+    };
   });
 }
 
-async function refreshJobs() {
-  const statusBadge = document.getElementById("jobs-status");
-  const tbody = document.getElementById("jobs-tbody");
-  if (!tbody) return;
-
-  const guiJobs = await invoke("list_jobs").catch(() => []);
-  const rows = guiJobs.map(job => jobRow({
-    source: GUI_JOB_SOURCE,
-    id: job.id,
-    label: job.title,
-    state: job.status,
-    progress: job.percent > 0 ? `${Math.round(job.percent)}%` : "",
-    message: job.message,
-  }));
-
+async function batchDaemonJobs() {
   try {
     const result = await Command.sidecar("dcpwizard", ["batch", "list"]).execute();
-    if (result.code === 0) {
-      statusBadge.textContent = "Online";
-      rows.push(...daemonJobRows(result.stdout));
-    } else {
-      statusBadge.textContent = "Offline";
+    if (result.code !== 0) {
+      return { source: DAEMON_JOB_SOURCE, status: DAEMON_OFFLINE_STATUS, rows: [] };
     }
+    return {
+      source: DAEMON_JOB_SOURCE,
+      status: DAEMON_ONLINE_STATUS,
+      rows: daemonJobRows(result.stdout),
+    };
   } catch {
-    statusBadge.textContent = "Error";
+    return { source: DAEMON_JOB_SOURCE, status: DAEMON_ERROR_STATUS, rows: [] };
   }
-
-  tbody.innerHTML = rows.length
-    ? rows.join("")
-    : `<tr><td colspan="${JOBS_TABLE_COLUMNS}" style="text-align:center">No jobs</td></tr>`;
-
-  tbody.querySelectorAll(".btn-cancel").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const jobId = btn.dataset.jobId;
-      if (btn.dataset.jobSource === GUI_JOB_SOURCE) {
-        await invoke("cancel_job", { jobId: Number(jobId) });
-      } else {
-        await Command.sidecar("dcpwizard", ["batch", "cancel", jobId]).execute();
-      }
-      refreshJobs();
-    });
-  });
 }
 
-function startJobsPolling() {
-  if (!jobsPollInterval) jobsPollInterval = setInterval(refreshJobs, 3000);
-}
-function stopJobsPolling() {
-  if (jobsPollInterval) { clearInterval(jobsPollInterval); jobsPollInterval = null; }
-}
-
-document.getElementById("jobs-refresh")?.addEventListener("click", refreshJobs);
+initJobsPanel({
+  tableBody: document.getElementById("jobs-tbody"),
+  statusBadge: document.getElementById("jobs-status"),
+  refreshButton: document.getElementById("jobs-refresh"),
+  extraRows: batchDaemonJobs,
+});
 
 // === Status bar ===
 function setStatus(text) {

@@ -50,7 +50,7 @@ fn encode(
 ) -> u64 {
     let params = CompressParams {
         compression_ratio: 10.0,
-        frame_rate: FPS as u16,
+        edit_rate: postkit::encode::FrameRate::whole(FPS),
         apply_xyz_transform: true,
         ..CompressParams::default()
     };

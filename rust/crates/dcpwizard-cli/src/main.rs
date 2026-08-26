@@ -3282,7 +3282,7 @@ fn trailer_to_dcp(mp4: &Path, output_dir: &Path, fps_arg: u32) -> i32 {
     }
     let params = CompressParams {
         compression_ratio: 10.0,
-        frame_rate: fps as u16,
+        edit_rate: postkit::encode::FrameRate::whole(fps),
         apply_xyz_transform: true,
         ..CompressParams::default()
     };
@@ -4265,7 +4265,7 @@ fn run() {
                     compression_ratio,
                     quality_psnr,
                     codestream_byte_cap,
-                    frame_rate: fps as u16,
+                    edit_rate: postkit::encode::FrameRate::whole(fps),
                     // grok converts only what nothing else has converted
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
                     source_preparation: postkit::grok_encoder::SourcePreparation {

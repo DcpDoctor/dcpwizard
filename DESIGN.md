@@ -8,7 +8,8 @@ DCP creation tool. Rust core with CLI and Tauri GUI.
 - `rust/crates/dcpwizard-cli`: clap CLI (create, encode, pipeline, kdm, certificate, verify, batch/daemon, serve, dashboard, ...).
 - `gui/`: Tauri app; builds run through postkit::pipeline with the CLI as sidecar.
 - Shares code via postkit (path dep at `extern/postkit`), asdcplib-rs (git), and dcpdoctor-core (git) for verify/info/report.
-- Shared GUI code lives in guikit (`extern/guikit`), not in postkit, which must stay free of a tauri dependency because the CLI and wasm use it too. The preview server, the preview surface hosts, `preview.js` and `shortcuts.js` are guikit's, and both wizards depend on it and register its commands.
+- Shared GUI code lives in guikit (`extern/guikit`), not in postkit, which must stay free of a tauri dependency because the CLI and wasm use it too. The preview server, the preview surface hosts, `preview.js`, `jobs.js` and `shortcuts.js` are guikit's, and both wizards depend on it and register its commands.
+- The GUI's build queue is `postkit::gui_job_queue`: `GuiJobQueue<JobConfig>` holds it, the `GuiJob` trait reads a job's id, title and output folder, and `record`/`load` keep `gui-jobs.jsonl`. `gui/src-tauri/src/pipeline.rs` supplies `JobConfig` and its trait impl and nothing else about queueing. The Jobs panel that lists it is guikit's `jobs.js`: `initJobsPanel` takes the table elements and dcpwizard's `extraRows` hook, which runs the sidecar's `batch list` and `batch cancel` for the daemon's rows.
 - CPL/PKL/ASSETMAP/VOLINDEX XML, `escape_xml`, and SRT parsing come from `postkit::packaging` / `postkit::subtitle_retime` (the app maps its configs onto those writers; no hand-rolled XML remains in cpl/pkl/assetmap).
 - `~15` core modules are thin `pub use postkit::...` re-export shims.
 

@@ -57,7 +57,7 @@ fn apv_source_becomes_a_valid_dcp() {
     // decode APV → J2K via the real pipeline
     let j2k = dir.path().join("j2k");
     let params = CompressParams {
-        frame_rate: FPS as u16,
+        edit_rate: postkit::encode::FrameRate::whole(FPS),
         ..CompressParams::default()
     };
     let cancel = Arc::new(AtomicBool::new(false));
