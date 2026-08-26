@@ -14,15 +14,10 @@ user-facing surface is here.
   stops or clears the preview when the queue owns it, one advance per end of
   file), and the transport bar tracking live during playback after postkit's
   non-blocking render fix (its DESIGN_TODO has the entry).
-- Preview transport controls beyond play/pause: a to-start button, skip
-  back/forward buttons (the seconds ArrowLeft/ArrowRight already seek), and
-  single-frame stepping. Frame stepping is mpv's `frame-step` and
-  `frame-back-step`, which need two new guikit preview commands each wizard
-  registers in its src-tauri handler list. The buttons go in `#global-transport`
-  in `gui/index.html` beside the play button and are wired by id in guikit's
-  `preview.js`; the shortcut list in `gui/src/main.js` gains `,` and `.` for the
-  frame steps. Shared with imfwizard through guikit; the markup and shortcut
-  registrations are per wizard.
+- `vf` and `assemble` still write no `CompositionMetadataAsset`: both can
+  replace or combine the sound, so the source CPL's `MainSoundConfiguration`
+  need not describe their output, and they would have to read the sound essence
+  to declare it. `decrypt` and `j2k_transcode` carry the source's block over.
 - Hints not ported from DCP-o-matic's list, each for a reason. Signing certificate
   checks (utf8 subject strings, a chain valid for more than 15 years) are about
   the configured signer rather than the job, and our signer is held to ST 430-2
@@ -227,6 +222,18 @@ breadth, QC detectors, and the render-farm/cloud story. Items worth landing here
   analyzer") but never enumerates them. guikit, both wizards.
 
 ## Done 2026-08-26
+
+- Preview transport controls beyond play/pause, shared with imfwizard through
+  guikit. The transport bar gained a to-start button, skip back and skip forward
+  buttons and single-frame step buttons either side of play, with `,` and `.` as
+  the frame-step shortcuts. Frame stepping is mpv's `frame-step` and
+  `frame-back-step`, sent by guikit's `preview_frame_step` and
+  `preview_frame_back_step` commands, which each wizard registers. guikit's
+  `preview.js` wires the buttons by id and owns `PREVIEW_SEEK_SECONDS`, so the
+  skip buttons and the ArrowLeft/ArrowRight shortcuts move by the same amount.
+  guikit tests the buttons against a stubbed tauri bridge and the two frame steps
+  on a real libmpv player. Not yet clicked through in a running window, which
+  belongs to the GUI pass already owed.
 
 - `decrypt` and `j2k_transcode` write a `CompositionMetadataAsset` again. Both
   rebuild the CPL around the source's own sound MXF, so `cpl::main_sound_from_cpl`
