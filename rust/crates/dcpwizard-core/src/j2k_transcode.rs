@@ -272,7 +272,8 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         rating: String::new(),
         reels: cpl_reels,
         standard,
-        main_sound: None,
+        // only the picture is re-encoded, so the source's sound layout still holds
+        main_sound: crate::cpl::main_sound_from_cpl(&cpl_content),
         sign_language: None,
         ..Default::default()
     };

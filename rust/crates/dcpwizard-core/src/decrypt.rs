@@ -294,7 +294,8 @@ fn decrypt_dcp_inner(config: &DcpDecryptConfig) -> Result<usize, String> {
         rating: String::new(),
         reels: cpl_reels,
         standard,
-        main_sound: None,
+        // the source sound MXF ships unchanged, so its layout still describes the output
+        main_sound: crate::cpl::main_sound_from_cpl(&cpl_content),
         sign_language: None,
         ..Default::default()
     };

@@ -280,6 +280,27 @@ pub fn active_area_from_cpl(cpl_xml: &str) -> Option<(u32, u32)> {
     Some((edge("Width")?, edge("Height")?))
 }
 
+/// The sound layout a CPL declares in its CompositionMetadataAsset. Used by the
+/// paths that rebuild a CPL around the source's own sound MXF, so the block they
+/// write describes the essence they ship. An Interop CPL has no such block.
+pub fn main_sound_from_cpl(cpl_xml: &str) -> Option<MainSound> {
+    let doc = roxmltree::Document::parse(cpl_xml).ok()?;
+    let element_text = |name: &str| -> Option<String> {
+        doc.descendants()
+            .find(|n| n.has_tag_name(name))
+            .and_then(|n| n.text())
+            .map(|t| t.trim().to_string())
+    };
+    let configuration = element_text("MainSoundConfiguration")?;
+    // the element is a rational, "48000 1"
+    let rate = element_text("MainSoundSampleRate")?;
+    let sample_rate = rate.split_whitespace().next()?.parse().ok()?;
+    Some(MainSound {
+        configuration,
+        sample_rate,
+    })
+}
+
 /// Generate a Composition Playlist XML via the shared postkit writer.
 pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i32 {
     use postkit::packaging::{self, DcpCpl, DcpCplReel, DcpRating};
@@ -1008,6 +1029,44 @@ mod tests {
         let meta_pos = xml.find("<meta:CompositionMetadataAsset").unwrap();
         let close_pos = xml.find("</AssetList>").unwrap();
         assert!(meta_pos < close_pos);
+    }
+
+    #[test]
+    fn main_sound_reads_back_from_a_generated_cpl() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_sound = dir.path().join("CPL_sound.xml");
+        let config = CplConfig {
+            title: "Read Back".into(),
+            content_kind: "feature".into(),
+            reels: vec![sound_reel()],
+            standard: crate::Standard::Smpte,
+            main_sound: Some(MainSound {
+                configuration: "51/L,R,C,LFE,Ls,Rs".into(),
+                sample_rate: 48000,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &with_sound), 0);
+        let read_back = main_sound_from_cpl(&std::fs::read_to_string(&with_sound).unwrap())
+            .expect("the generated CPL declares its sound layout");
+        assert_eq!(read_back.configuration, "51/L,R,C,LFE,Ls,Rs");
+        assert_eq!(read_back.sample_rate, 48000);
+
+        let without_sound = dir.path().join("CPL_nosound.xml");
+        let bare = CplConfig {
+            main_sound: None,
+            ..config
+        };
+        assert_eq!(generate_cpl(&bare, "cpl2", &without_sound), 0);
+        let xml = std::fs::read_to_string(&without_sound).unwrap();
+        assert!(!xml.contains("MainSoundConfiguration"));
+        assert!(main_sound_from_cpl(&xml).is_none());
+
+        let unparsable_rate = "<CompositionPlaylist>\
+             <MainSoundConfiguration>51/L,R,C,LFE,Ls,Rs</MainSoundConfiguration>\
+             <MainSoundSampleRate>forty-eight</MainSoundSampleRate>\
+             </CompositionPlaylist>";
+        assert!(main_sound_from_cpl(unparsable_rate).is_none());
     }
 
     #[test]

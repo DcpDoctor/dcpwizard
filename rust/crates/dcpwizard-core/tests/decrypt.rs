@@ -236,6 +236,8 @@ fn decrypt_recovers_cleartext_validates_and_fails_loud() {
         result.errors
     );
 
+    assert_main_sound_carried_over(&enc_dcp, &dec_dcp, &result.warnings);
+
     // picture + sound are cleartext now
     let dec_pic = find_mxf(&dec_dcp, "picture").expect("decrypted picture");
     let dec_snd = find_mxf(&dec_dcp, "sound").expect("decrypted sound");
@@ -333,10 +335,9 @@ fn transcode_dcp_decrypts_encrypted_source() {
     );
 
     // output validates and its picture is cleartext (decrypted, re-encoded)
-    assert!(
-        dcpwizard_core::verify::verify_dcp(&out).valid,
-        "transcoded DCP must validate"
-    );
+    let result = dcpwizard_core::verify::verify_dcp(&out);
+    assert!(result.valid, "transcoded DCP must validate");
+    assert_main_sound_carried_over(&enc_dcp, &out, &result.warnings);
     let pic = find_mxf(&out, "picture").expect("transcoded picture");
     assert!(
         !is_encrypted(&pic, "picture"),
@@ -362,8 +363,8 @@ fn transcode_dcp_decrypts_encrypted_source() {
     );
 }
 
-/// Markers a package was authored with, as (label, offset) pairs in file order.
-fn cpl_markers(dcp_dir: &Path) -> Vec<(String, u64)> {
+/// The CPL a package was written with.
+fn cpl_xml(dcp_dir: &Path) -> String {
     let cpl = std::fs::read_dir(dcp_dir)
         .unwrap()
         .flatten()
@@ -374,8 +375,29 @@ fn cpl_markers(dcp_dir: &Path) -> Vec<(String, u64)> {
                 .is_some_and(|n| n.starts_with("CPL_"))
         })
         .expect("CPL written");
-    let xml = std::fs::read_to_string(cpl).unwrap();
-    dcpwizard_core::markers::markers_from_cpl(&xml)
+    std::fs::read_to_string(cpl).unwrap()
+}
+
+/// Assert the rebuilt CPL declares the sound layout the source declared, which is
+/// what dcpdoctor's CompositionMetadataAsset check reads.
+fn assert_main_sound_carried_over(source_dir: &Path, rebuilt_dir: &Path, warnings: &[String]) {
+    let source = dcpwizard_core::cpl::main_sound_from_cpl(&cpl_xml(source_dir))
+        .expect("the source CPL declares its sound layout");
+    let rebuilt = dcpwizard_core::cpl::main_sound_from_cpl(&cpl_xml(rebuilt_dir))
+        .expect("the rebuilt CPL must declare a sound layout");
+    assert_eq!(rebuilt.configuration, source.configuration);
+    assert_eq!(rebuilt.sample_rate, source.sample_rate);
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.contains("missing_required_element")),
+        "no element may be reported missing: {warnings:?}"
+    );
+}
+
+/// Markers a package was authored with, as (label, offset) pairs in file order.
+fn cpl_markers(dcp_dir: &Path) -> Vec<(String, u64)> {
+    dcpwizard_core::markers::markers_from_cpl(&cpl_xml(dcp_dir))
         .into_iter()
         .flatten()
         .map(|entry| (entry.marker.label().to_string(), entry.frame))

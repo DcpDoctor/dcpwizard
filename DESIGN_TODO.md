@@ -8,15 +8,6 @@ user-facing surface is here.
 
 ## Open
 
-- The paths that rebuild a CPL from an existing package (CORE `vf`, `assemble`,
-  `decrypt`, `j2k_transcode`) write no `CompositionMetadataAsset`, so dcpdoctor's
-  `missing_required_element` fires on their output the way it did on the mono
-  build. Each passes `main_sound: None` and none of them knows the layout or
-  sample rate that block declares. `decrypt` and `j2k_transcode` ship the source's
-  own sound MXF, so they can carry the source CPL's `MainSoundConfiguration` and
-  `MainSoundSampleRate` over the way `cpl::active_area_from_cpl` carries the
-  masking; `vf` and `assemble` can replace or combine sound and would have to read
-  the essence.
 - GUI re-verification owed (2026-08-17): the QC overlays drawn at and across end
   of file without freezing and without the frame-rate hit the old vf chain
   caused (watch the HUD decoder fps), the playlist fixes live (clearing rows
@@ -234,6 +225,21 @@ breadth, QC detectors, and the render-farm/cloud story. Items worth landing here
   visual compare is the part worth matching.
 - Waveform and vectorscope in the preview. Transkoder implies scopes ("HDR
   analyzer") but never enumerates them. guikit, both wizards.
+
+## Done 2026-08-26
+
+- `decrypt` and `j2k_transcode` write a `CompositionMetadataAsset` again. Both
+  rebuild the CPL around the source's own sound MXF, so `cpl::main_sound_from_cpl`
+  reads the source CPL's `MainSoundConfiguration` and `MainSoundSampleRate` and
+  hands them to `generate_cpl`, which was writing no block at all while
+  `main_sound` was `None`. The sample rate is the first token of the rational the
+  element carries ("48000 1"), a missing element or a rate that does not parse
+  reads as no layout, and an Interop source has no such block and gets none. The
+  decrypt and transcode tests now compare the rebuilt block against the source's
+  and check dcpdoctor reports no `missing_required_element`. `vf` and `assemble`
+  still write no block: both can replace or combine the sound, so the source's
+  layout need not describe their output, and they would have to read the essence
+  to know it.
 
 ## Done 2026-08-22
 
