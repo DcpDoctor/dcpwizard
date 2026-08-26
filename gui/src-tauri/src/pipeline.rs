@@ -320,6 +320,10 @@ pub struct JobConfig {
     resolution: String,
     framerate: String,
     bandwidth: u32,
+    /// PSNR target in dB for the J2K encode, None when the encode allocates by
+    /// compression ratio.
+    #[serde(default)]
+    quality_psnr: Option<f64>,
     colour: String,
     content_kind: String,
     encrypt: bool,
@@ -590,6 +594,7 @@ pub async fn submit_job(
     resolution: Option<String>,
     framerate: Option<String>,
     bandwidth: Option<u32>,
+    quality_psnr: Option<f64>,
     colour: Option<String>,
     content_kind: Option<String>,
     encrypt: Option<bool>,
@@ -989,6 +994,7 @@ pub async fn submit_job(
         resolution: resolution.unwrap_or_else(|| DEFAULT_RESOLUTION.into()),
         framerate,
         bandwidth: bandwidth.unwrap_or(DEFAULT_BANDWIDTH_MBPS),
+        quality_psnr,
         colour: colour.unwrap_or_else(|| DEFAULT_COLOUR.into()),
         content_kind: content_kind.unwrap_or_else(|| DEFAULT_CONTENT_KIND.into()),
         encrypt: encrypt.unwrap_or(false),
@@ -2049,6 +2055,7 @@ fn encode_still(
         j2k_dir,
         frames_encoded: job.still_length_frames,
         elapsed_secs: started.elapsed().as_secs_f64(),
+        picture_findings: postkit::picture_findings::PictureFindings::default(),
     })
 }
 
@@ -2296,17 +2303,39 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         );
     }
 
+    let dci_codestream_byte_cap = if job.hdr_dci {
+        dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)
+    } else {
+        postkit::j2k::dci_codestream_byte_cap(fps_num)
+    };
+    // under a PSNR target the bandwidth is a ceiling per frame rather than what
+    // the allocation aims at
+    let codestream_byte_cap = match job.quality_psnr {
+        Some(_) => dci_codestream_byte_cap.min(dcpwizard_core::encode::video_codestream_byte_cap(
+            fps_num,
+            job.bandwidth,
+            job.right_eye.is_some(),
+        )),
+        None => dci_codestream_byte_cap,
+    };
+    if let Some(db) = job.quality_psnr {
+        log_to(
+            &log_file,
+            &format!(
+                "[ENCODE] PSNR {db} dB (bandwidth {} Mbit/s, at most {codestream_byte_cap} bytes a frame)",
+                job.bandwidth
+            ),
+        );
+    }
+
     let encode_options = postkit::pipeline::EncodeRunOptions {
         compression_ratio,
+        quality_psnr: job.quality_psnr,
         fps: encode_fps,
         read_source_at: conform.read_source_at,
         frame_range: encode_window,
         source_colour: job.source_colour.clone(),
-        codestream_byte_cap: Some(if job.hdr_dci {
-            dcpwizard_core::hdr::hdr_codestream_byte_cap(fps_num)
-        } else {
-            postkit::j2k::dci_codestream_byte_cap(fps_num)
-        }),
+        codestream_byte_cap: Some(codestream_byte_cap),
         subtitle_burn: job_subtitle_burn(job, encode_fps)?,
         picture: resolved_picture.processing.clone(),
     };
@@ -2407,6 +2436,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             )?,
         }
     };
+    for finding in encode_result.picture_findings.describe(encode_fps.as_f64()) {
+        log_to(&log_file, &format!("[ENCODE] {finding}"));
+    }
 
     // Stereoscopic 3D: encode the right eye into its own subdir at the same
     // ratio/fps (the main input is the left eye).
@@ -2429,6 +2461,9 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             |_p| {},
             |msg| log_to(&log_ref, msg),
         )?;
+        for finding in re_result.picture_findings.describe(encode_fps.as_f64()) {
+            log_to(&log_file, &format!("[ENCODE] right eye: {finding}"));
+        }
         Some(re_result.j2k_dir)
     } else {
         None
@@ -2700,6 +2735,7 @@ mod tests {
             resolution: "2k-flat".into(),
             framerate: "24".into(),
             bandwidth: 250,
+            quality_psnr: None,
             colour: "xyz".into(),
             content_kind: "feature".into(),
             encrypt: false,

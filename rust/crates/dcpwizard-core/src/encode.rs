@@ -57,6 +57,22 @@ pub fn video_compression_ratio(
     }
 }
 
+/// Below this a PSNR target asks for less than the 10:1 default ratio already
+/// gives, so grok's quality allocation has nothing to do.
+pub const MINIMUM_QUALITY_PSNR_DB: f64 = 20.0;
+/// A 12-bit component tops out near this, so a higher target only spends bits
+/// without changing the picture.
+pub const MAXIMUM_QUALITY_PSNR_DB: f64 = 80.0;
+
+/// The bytes one frame may take at `mbps` and `fps`. Under a PSNR target this is
+/// the ceiling the encoder holds to instead of a ratio, and a 3D encode splits
+/// it between the eyes exactly as [`video_compression_ratio`] splits the ratio.
+pub fn video_codestream_byte_cap(fps: u32, mbps: u32, stereoscopic: bool) -> u64 {
+    let fps = fps.max(1) as f64;
+    let eyes = if stereoscopic { STEREOSCOPIC_EYES } else { 1.0 };
+    (mbps as f64 * 1_000_000.0 / 8.0 / fps / eyes) as u64
+}
+
 /// Parse a `--source-colourspace` value into postkit's [`ColourSpace`].
 ///
 /// [`ColourSpace`]: postkit::colour::ColourSpace
@@ -280,6 +296,15 @@ mod tests {
             "3D must halve the per-eye budget: flat {flat}, per eye {per_eye}"
         );
         assert!((per_eye - bandwidth_to_ratio(2048, 1080, 24, 125)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_bandwidth_becomes_the_bytes_one_frame_may_take() {
+        assert_eq!(video_codestream_byte_cap(24, 250, false), 1_302_083);
+        assert_eq!(video_codestream_byte_cap(48, 250, false), 651_041);
+        assert_eq!(video_codestream_byte_cap(24, 5, false), 26_041);
+        // both eyes share the track's bit rate, so each gets half the bytes
+        assert_eq!(video_codestream_byte_cap(24, 250, true), 651_041);
     }
 
     #[test]

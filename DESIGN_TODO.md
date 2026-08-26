@@ -162,11 +162,11 @@ named scope types. Their clear leads are GPU J2K speed with 8K SDI output, camer
 RAW ingest, Dolby Vision cinema authoring (DV2, eCMU, licensed), IMF App4/App5/RDD45
 breadth, QC detectors, and the render-farm/cloud story. Items worth landing here:
 
-- Two-pass J2K encoding with PSNR/bitrate targeting. We enforce
-  `codestream_byte_cap`; nothing targets quality. postkit's encode path. imfwizard
-  too.
-- Black-frame and repeated/freeze-frame detection. Cheap passes over frames postkit
-  already decodes, surfaced in the QC report. imfwizard too.
+- Black-frame and repeated/freeze-frame detection everywhere picture is read. It
+  runs during a postkit stream encode, so the GUI job log and `pipeline` carry the
+  findings, but `create` compresses through `grok_encoder`'s resumable pipeline,
+  which decodes with ffmpeg's stderr closed, and `report` on a finished DCP decodes
+  no picture at all.
 - Side-by-side / wipe / difference compare in the preview. `frame_compare` has the
   metrics (PSNR/SSIM/VMAF); nothing shows two compositions ganged. guikit, so both
   wizards. Transkoder 2026 adds semantic composition diffing on top; metrics plus a

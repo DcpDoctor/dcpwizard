@@ -288,6 +288,16 @@ dcpwizard create --title "My Film" --video ./j2k --output ./dcp --standard inter
 dcpwizard create --title "My Trailer" --video trailer.mov --output ./dcp \
     --content-type TLR --fourk --video-bit-rate 500
 
+# Encode to a quality target instead of a ratio. --quality-psnr is a PSNR target
+# in dB, at least 20 and at most 80. The encoder allocates to that quality rather
+# than to a compression ratio, and --video-bit-rate becomes a per-frame byte cap
+# no frame may exceed: a frame the quality target pushes over it is encoded again
+# by ratio to fit. The DCI cap (or the HDR Addendum's, with --hdr-dci) still
+# applies, so the cap is the smaller of the two, and a 3D encode gives each eye
+# half of it.
+dcpwizard create --title "My Film" --video movie.mov --output ./dcp \
+    --video-bit-rate 100 --quality-psnr 45
+
 # Create with frame rate override
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --frame-rate 25
 

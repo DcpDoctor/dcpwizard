@@ -121,6 +121,8 @@ smoke "create start-at+resume" create --title x --video "$C" --output "$C" \
 smoke "create audio-delay" create --title x --video "$C" --output "$C" --audio-delay -250
 smoke "create trim"      create --title x --video "$C" --output "$C" --trim-start 48f --trim-end 2s
 smoke "create colourspace" create --title x --video "$C" --output "$C" --source-colourspace xyz
+smoke "create quality-psnr" create --title x --video "$C" --output "$C" \
+                            --video-bit-rate 250 --quality-psnr 45
 # KDM formulation + forensic marking, on all three KDM commands
 smoke "kdm formulation"  kdm --cpl-id "$UUID" --content-title x --cert "$C" \
                             --signer-cert "$C" --signer-key "$C" -o "$C" \
@@ -215,6 +217,9 @@ refuse "create --source-colourspace p3 on J2K input" "already encoded" \
        create --title x --video "$C" --output "$C" --source-colourspace p3
 refuse "create --source-colourspace logc on J2K input" "already encoded" \
        create --title x --video "$C" --output "$C" --source-colourspace logc
+# a PSNR target outside 20..80 dB is refused before anything is encoded
+refuse "create --quality-psnr out of range" "outside the range" \
+       create --title x --video "$C" --output "$C" --quality-psnr 5
 # --still-length only means something for a single-image --video
 refuse "create --still-length without a still" "carries its own length" \
        create --title x --video "$C" --output "$C" --still-length 5s

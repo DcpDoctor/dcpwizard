@@ -799,6 +799,12 @@ enum Commands {
         /// J2K bandwidth in Mbit/s (default: 250 for 2K, 500 for 4K)
         #[arg(long)]
         video_bit_rate: Option<u32>,
+        /// PSNR target in dB for the J2K encode, at least 20 and at most 80.
+        /// The encoder allocates to this quality instead of a compression
+        /// ratio, and the bandwidth becomes a per-frame byte cap no frame may
+        /// exceed.
+        #[arg(long)]
+        quality_psnr: Option<f64>,
         /// Split into reels of at most N minutes each (default: single reel)
         #[arg(long)]
         reel_length: Option<u32>,
@@ -3457,6 +3463,7 @@ fn run() {
             container,
             threads,
             video_bit_rate,
+            quality_psnr,
             reel_length,
             profile,
             right_eye,
@@ -3733,6 +3740,19 @@ fn run() {
             let frame_rate = frame_rate.or_else(|| profile.as_ref().map(|p| p.frame_rate));
             let video_bit_rate =
                 video_bit_rate.or_else(|| profile.as_ref().map(|p| p.bitrate_mbps));
+
+            let quality_psnr_range = dcpwizard_core::encode::MINIMUM_QUALITY_PSNR_DB
+                ..=dcpwizard_core::encode::MAXIMUM_QUALITY_PSNR_DB;
+            if let Some(db) = quality_psnr
+                && !quality_psnr_range.contains(&db)
+            {
+                tracing::error!(
+                    "--quality-psnr {db} is outside the range: at least {} and at most {} dB",
+                    quality_psnr_range.start(),
+                    quality_psnr_range.end()
+                );
+                std::process::exit(1);
+            }
 
             // DCI HDR Addendum: validate the flag combo + raised codestream cap.
             // The ST 2084 / P3-D65 ULs are written onto the picture MXF in create_dcp.
@@ -4211,10 +4231,40 @@ fn run() {
                     right_eye.is_some(),
                 );
 
+                // under a PSNR target the bandwidth is a ceiling per frame
+                // rather than what the allocation aims at
+                let codestream_byte_cap = quality_psnr.map(|_| {
+                    let dci_cap = if hdr_dci {
+                        dcpwizard_core::hdr::hdr_codestream_byte_cap(fps)
+                    } else {
+                        postkit::j2k::dci_codestream_byte_cap(fps)
+                    };
+                    match video_bit_rate {
+                        Some(mbps) => {
+                            dci_cap.min(dcpwizard_core::encode::video_codestream_byte_cap(
+                                fps,
+                                mbps,
+                                right_eye.is_some(),
+                            ))
+                        }
+                        None => dci_cap,
+                    }
+                });
+                if let (Some(db), Some(cap)) = (quality_psnr, codestream_byte_cap) {
+                    match video_bit_rate {
+                        Some(mbps) => tracing::info!(
+                            "PSNR {db} dB (bandwidth {mbps} Mbit/s, at most {cap} bytes a frame)"
+                        ),
+                        None => tracing::info!("PSNR {db} dB (at most {cap} bytes a frame)"),
+                    }
+                }
+
                 let _num_threads = threads.unwrap_or(0); // reserved for future use
 
                 let params = CompressParams {
                     compression_ratio,
+                    quality_psnr,
+                    codestream_byte_cap,
                     frame_rate: fps as u16,
                     // grok converts only what nothing else has converted
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
@@ -4968,6 +5018,9 @@ fn run() {
                 }
             };
             tracing::info!("Encoded {} frames", encode.frames_encoded);
+            for finding in encode.picture_findings.describe(fps as f64) {
+                tracing::warn!("{finding}");
+            }
 
             // Auto-demux audio from video if --audio not provided
             let audio_path = if let Some(a) = audio {

@@ -1065,6 +1065,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       resolution: document.getElementById("prop-resolution")?.value || "2k-full",
       framerate: document.getElementById("prop-framerate")?.value || String(DEFAULT_FRAMERATE),
       bandwidth: parseInt(document.getElementById("prop-bandwidth")?.value) || DEFAULT_BANDWIDTH_MBPS,
+      qualityPsnr: parseFloat(document.getElementById("prop-quality-psnr")?.value) || null,
       contentKind: document.getElementById("prop-content-kind")?.value || "feature",
       encrypt,
       keyOut: keyOut || null,
