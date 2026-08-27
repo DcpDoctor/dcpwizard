@@ -72,20 +72,28 @@ user-facing surface is here.
   lacks is the list, since `PlaybackOptions` names one `input` and one `cpl_uuid`,
   so this needs a queue above it plus GUI ordering. Nothing about package
   correctness depends on it.
-- Nothing decodes J2K with grok, only libavcodec. Both decode paths are ffmpeg's
-  native software jpeg2000 codec: the frame-accurate preview (PK preview.rs)
-  resolves the CPL and decrypts itself, then pipes each codestream to ffmpeg
-  through `decode_j2c_to_xyz12le`, one process per frame, and live playback (PK
-  mpv.rs, and the embedded surface through PK mpv_render, which is libmpv's render
-  API and still decodes inside mpv) hands the picture MXF to mpv. `report
-  --scan-picture` takes the same ffmpeg decode over a whole track. At
-  DCP bitrates that decoder runs at a few fps, which is why a 250 Mbps track sits
-  black for seconds on load and can read as a frozen GUI. Grok is much faster and is
-  ours. Routing playback through it means postkit decoding frames itself (the
-  preview.rs machinery already resolves, decrypts and colour-manages) and presenting
-  them on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
+- Live playback decodes J2K with libavcodec, not grok. The frame-accurate preview
+  (PK preview.rs) is on grok now, in process through PK grok_decoder: 68 ms a
+  frame on 2K at 125 Mb/s against ffmpeg's 302 ms, and 5 ms at `reduce` 2. Live
+  playback is not: PK mpv.rs, and the embedded surface through PK mpv_render,
+  which is libmpv's render API and still decodes inside mpv, hand the picture MXF
+  to mpv and get ffmpeg's software jpeg2000 codec at a few fps, which is why a 250
+  Mbps track sits black for seconds on load and can read as a frozen GUI. Routing
+  playback through grok means postkit presenting the frames it can already decode
+  on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
   frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
   so the colour conversion would have to happen before the pipe either way. GUI.
+- `postkit::preview::extract_frame` is still ffmpeg, and it is the thumbnail path
+  both wizards actually call, `dcpwizard frame` and imfwizard's alike. For a
+  picture MXF that is ffmpeg's jpeg2000 decoder, and `-ss` sits after `-i`, so a
+  late frame decodes every frame before it at a few fps. Routing it to the
+  DCP-native path when the input is J2K essence would put both wizards on grok;
+  it needs a rule for what counts as J2K essence and a decision about encrypted
+  essence with no key, which ffmpeg renders as garbage and grok refuses.
+- `report --scan-picture` decodes through ffmpeg's filters, so it is bound by that
+  same few frames a second. Moving it to grok at `reduce` 2 would be around fifty
+  times faster, at the cost of writing the black and frozen tests in Rust rather
+  than reading blackdetect and freezedetect.
 - The GUI's Jobs panel lists both queues but they stay separate: the GUI runs its own
   queue in tauri state (`postkit::gui_job_queue`) and only `serve` proxies to the daemon, so
   two queues exist on one machine and neither can take the other's jobs. The daemon
@@ -194,8 +202,10 @@ one side, mirror the other:
   PostPerfection/setup-grok@v1 at grok-ref v20.3.12, windows on a separate msvc
   build of the same tag. All three platforms are required in ci, none are
   continue-on-error.
-  imfwizard mirrors the step but only in ci (it runs grk_compress at runtime, does not
-  link grok-ffi). dcpdoctor needs no grok.
+  imfwizard sets grok up in ci, release and gui-release the same way, and links
+  grok-ffi as this workspace does, so a postkit change that needs grok reaches
+  both wizards; it also shells out to grk_compress at runtime for one encode path.
+  dcpdoctor links no grok and sets it up in none of its workflows.
 - tests/cli_flags_test.sh: NOT the same harness as imfwizard's (this one runs the
   binary and checks clap parse errors, imf parses main.js). Different CLIs, leave
   separate.
