@@ -278,6 +278,7 @@ fn encode_item_picture(
             height,
             filters: &resolved.plan.filters,
             apply_xyz_transform: ITEM_COLOUR_ROUTE.compressor_transform(),
+            rsiz: postkit::encode::default_rsiz(),
             colour_transform: ITEM_COLOUR_ROUTE.frame_transform()?,
             burn: None,
             out_dir,

@@ -562,6 +562,14 @@ pub fn wrap_j2k_hdr_files(
         hmac_ctx = Some(hc);
     }
 
+    let codestream = match asdcplib::jp2k::CodestreamHeader::parse(&frames[0]) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("failed to parse the JPEG 2000 codestream header: {e}");
+            return None;
+        }
+    };
+
     let fps = if frame_rate == 0 { 24 } else { frame_rate };
     let desc = asdcplib::jp2k::PictureDescriptor {
         edit_rate: asdcplib::Rational::new(fps as i32, 1),
@@ -570,7 +578,7 @@ pub fn wrap_j2k_hdr_files(
         stored_height: header.height,
         aspect_ratio: asdcplib::Rational::new(header.width as i32, header.height as i32),
         container_duration: frames.len() as u32,
-        component_count: header.num_components,
+        codestream,
     };
     let hdr = dci_hdr_metadata();
 
@@ -965,6 +973,18 @@ mod tests {
         reader
             .open_read(&mxf.to_string_lossy())
             .expect("open hdr mxf");
+
+        let codestream = reader
+            .picture_descriptor()
+            .expect("picture descriptor")
+            .codestream;
+        assert!(
+            postkit::j2k::J2kProfile::from(codestream.rsize).is_dci_cinema(),
+            "RSIZ {:#06x} is not a DCI cinema profile",
+            codestream.rsize
+        );
+        assert_eq!((codestream.xsize, codestream.ysize), (2048, 1080));
+
         let tc = reader.transfer_characteristic().expect("read transfer");
         assert_eq!(
             tc,

@@ -4774,6 +4774,7 @@ fn run() {
                         height,
                         filters: &still_filters,
                         apply_xyz_transform: xyz_route.compressor_transform(),
+                        rsiz: postkit::encode::default_rsiz(),
                         colour_transform,
                         burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
                         out_dir: &still_j2k_dir,

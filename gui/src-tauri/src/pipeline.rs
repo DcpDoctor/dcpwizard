@@ -1856,6 +1856,7 @@ fn encode_still(
         height: picture.encode_height,
         filters: &picture.plan.filters,
         apply_xyz_transform: route.compressor_transform(),
+        rsiz: postkit::encode::default_rsiz(),
         colour_transform: route.frame_transform()?,
         burn: job_subtitle_burn(job, fps)?,
         out_dir: &j2k_dir,
@@ -2151,6 +2152,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         codestream_byte_cap: Some(codestream_byte_cap),
         subtitle_burn: job_subtitle_burn(job, encode_fps)?,
         picture: resolved_picture.processing.clone(),
+        rsiz: postkit::encode::default_rsiz(),
     };
 
     // the picture MXF is written as the frames finish where the job allows it, so
