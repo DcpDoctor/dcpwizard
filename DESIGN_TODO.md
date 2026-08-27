@@ -83,11 +83,6 @@ user-facing surface is here.
   on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
   frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
   so the colour conversion would have to happen before the pipe either way. GUI.
-- `frame-extract` takes no content key, so a frame of encrypted DCP essence
-  cannot be extracted. It refuses by name now rather than handing the ciphertext
-  to ffmpeg, which renders it as a picture. `postkit::preview::render_dcp_frame`
-  already takes a key, so this is a `--key` / `--keys-json` flag passed through.
-  Same entry in postkit's DESIGN_TODO.
 - `report --scan-picture` decodes through ffmpeg's filters, so it is bound by that
   same few frames a second. Moving it to grok at `reduce` 2 would be around fifty
   times faster, at the cost of writing the black and frozen tests in Rust rather

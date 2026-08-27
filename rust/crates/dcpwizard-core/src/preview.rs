@@ -37,6 +37,7 @@ mod tests {
             &PathBuf::from("/nonexistent.mxf"),
             0,
             &PathBuf::from("/tmp/out.png"),
+            None,
         );
         assert_ne!(rc, 0);
     }
