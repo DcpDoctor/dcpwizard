@@ -83,13 +83,11 @@ user-facing surface is here.
   on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
   frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
   so the colour conversion would have to happen before the pipe either way. GUI.
-- `postkit::preview::extract_frame` is still ffmpeg, and it is the thumbnail path
-  both wizards actually call, `dcpwizard frame` and imfwizard's alike. For a
-  picture MXF that is ffmpeg's jpeg2000 decoder, and `-ss` sits after `-i`, so a
-  late frame decodes every frame before it at a few fps. Routing it to the
-  DCP-native path when the input is J2K essence would put both wizards on grok;
-  it needs a rule for what counts as J2K essence and a decision about encrypted
-  essence with no key, which ffmpeg renders as garbage and grok refuses.
+- `frame-extract` takes no content key, so a frame of encrypted DCP essence
+  cannot be extracted. It refuses by name now rather than handing the ciphertext
+  to ffmpeg, which renders it as a picture. `postkit::preview::render_dcp_frame`
+  already takes a key, so this is a `--key` / `--keys-json` flag passed through.
+  Same entry in postkit's DESIGN_TODO.
 - `report --scan-picture` decodes through ffmpeg's filters, so it is bound by that
   same few frames a second. Moving it to grok at `reduce` 2 would be around fifty
   times faster, at the cost of writing the black and frozen tests in Rust rather
