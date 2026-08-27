@@ -72,11 +72,13 @@ user-facing surface is here.
   lacks is the list, since `PlaybackOptions` names one `input` and one `cpl_uuid`,
   so this needs a queue above it plus GUI ordering. Nothing about package
   correctness depends on it.
-- Live playback decodes J2K with libavcodec, not grok. Two decode paths exist: the
-  frame-accurate preview (PK preview.rs) resolves the CPL, decrypts and decodes
-  through grok, but live playback (PK mpv.rs, and the embedded surface through PK
-  mpv_render, which is libmpv's render API and still decodes inside mpv) hands the
-  picture MXF to mpv, whose decode is ffmpeg's native software jpeg2000 codec. At
+- Nothing decodes J2K with grok, only libavcodec. Both decode paths are ffmpeg's
+  native software jpeg2000 codec: the frame-accurate preview (PK preview.rs)
+  resolves the CPL and decrypts itself, then pipes each codestream to ffmpeg
+  through `decode_j2c_to_xyz12le`, one process per frame, and live playback (PK
+  mpv.rs, and the embedded surface through PK mpv_render, which is libmpv's render
+  API and still decodes inside mpv) hands the picture MXF to mpv. `report
+  --scan-picture` takes the same ffmpeg decode over a whole track. At
   DCP bitrates that decoder runs at a few fps, which is why a 250 Mbps track sits
   black for seconds on load and can read as a frozen GUI. Grok is much faster and is
   ours. Routing playback through it means postkit decoding frames itself (the
@@ -151,9 +153,6 @@ named scope types. Their clear leads are GPU J2K speed with 8K SDI output, camer
 RAW ingest, Dolby Vision cinema authoring (DV2, eCMU, licensed), IMF App4/App5/RDD45
 breadth, QC detectors, and the render-farm/cloud story. Items worth landing here:
 
-- Black-frame and repeated/freeze-frame detection over a finished DCP. Every encode
-  reports it now, joined library items included, but `report` decodes no picture, so
-  it carries no such pass.
 - Side-by-side / wipe / difference compare in the preview. `frame_compare` has the
   metrics (PSNR/SSIM/VMAF); nothing shows two compositions ganged. guikit, so both
   wizards. Transkoder 2026 adds semantic composition diffing on top; metrics plus a

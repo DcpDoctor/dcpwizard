@@ -86,6 +86,7 @@ smoke "transcode"       transcode -i "$C" -o "$C"
 smoke "loudness"        loudness "$C"
 smoke "copy"            copy --src "$C" --dst "$C"
 smoke "report"          report --dcp "$C" -o "$C/report.html"
+smoke "report scan"     report --dcp "$C" -o "$C/report.html" --scan-picture
 smoke "subtitle-convert" subtitle-convert -i "$C" -l en --fps 24 -o "$C"
 smoke "burnin"          burnin -i "$C" -s "$C" -o "$C"
 smoke "burnin styled"   burnin -i "$C" -s "$C" -o "$C" --colour FFFF00 \

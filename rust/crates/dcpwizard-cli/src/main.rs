@@ -1321,6 +1321,10 @@ enum Commands {
         /// Output HTML file
         #[arg(short, long)]
         output: String,
+        /// Decode every picture track to find black and frozen runs. Hours for
+        /// a feature, since the J2K decode is ffmpeg's software one
+        #[arg(long)]
+        scan_picture: bool,
     },
     /// Start REST API server
     Serve {
@@ -5483,9 +5487,15 @@ fn run() {
             }
         },
 
-        Commands::Report { dcp, output } => {
-            dcpwizard_core::report::generate_report(&PathBuf::from(dcp), &PathBuf::from(output))
-        }
+        Commands::Report {
+            dcp,
+            output,
+            scan_picture,
+        } => dcpwizard_core::report::generate_report(
+            &PathBuf::from(dcp),
+            &PathBuf::from(output),
+            scan_picture,
+        ),
 
         Commands::Serve { bind } => dcpwizard_core::rest_api::start_rest_api(&bind),
 

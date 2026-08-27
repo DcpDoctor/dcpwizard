@@ -99,7 +99,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 
 ### Quality Control
 - **Integrated QC** via dcpdoctor (SMPTE Bv2.1 compliance checking)
-- **HTML QC report** generation, with a Sound level section: Leq(m) per ISO 21727 for every sound track, against the content kind's limit (82 dB advertisement, 85 dB trailer)
+- **HTML QC report** generation, with a Sound level section: Leq(m) per ISO 21727 for every sound track, against the content kind's limit (82 dB advertisement, 85 dB trailer). `report --scan-picture` adds a Picture section, decoding each picture track for black and frozen runs; it is off by default because the J2K decode is ffmpeg's software one and a feature takes hours, and a report made without it says the picture was not scanned
 - **DCP verification**, validate structure, hashes, XML schemas
 - **Markers**, FFOC, LFOC, FFTC, LFTC, FFOI, LFOI, FFEC, LFEC, FFMC, LFMC; the
   default set is FFOC/LFOC, place any of the others with `--marker LABEL=timecode`
@@ -500,6 +500,9 @@ dcpwizard loudness audio.wav
 
 # Generate QC report
 dcpwizard report --dcp ./my_dcp --output report.html
+
+# ...and decode the picture too, listing black and frozen runs per reel (slow)
+dcpwizard report --dcp ./my_dcp --output report.html --scan-picture
 
 # Start REST API server
 dcpwizard serve --bind 127.0.0.1:8080

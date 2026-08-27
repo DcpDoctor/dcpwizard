@@ -79,7 +79,7 @@ fn the_report_measures_the_packaged_sound_against_the_trailer_limit() {
 
     let report_path = root.join("report.html");
     assert_eq!(
-        dcpwizard_core::report::generate_report(&out, &report_path),
+        dcpwizard_core::report::generate_report(&out, &report_path, false),
         0,
         "generate the report"
     );
