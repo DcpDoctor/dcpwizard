@@ -545,7 +545,7 @@ fn apply_rtl(cues: &mut [StyledCue], mode: RtlMode) {
         let active = match mode {
             RtlMode::Off => false,
             RtlMode::On => true,
-            RtlMode::Auto => is_rtl_text(&cue.plain_text()),
+            RtlMode::Auto => subtitle_formats::bidi::has_rtl(&cue.plain_text()),
         };
         if active {
             for run in &mut cue.runs {
@@ -553,19 +553,6 @@ fn apply_rtl(cues: &mut [StyledCue], mode: RtlMode) {
             }
         }
     }
-}
-
-/// Does the text contain any Hebrew/Arabic (and related) RTL code points?
-fn is_rtl_text(s: &str) -> bool {
-    s.chars().any(|c| {
-        let u = c as u32;
-        (0x0590..=0x05FF).contains(&u) // Hebrew
-            || (0x0600..=0x06FF).contains(&u) // Arabic
-            || (0x0700..=0x077F).contains(&u) // Syriac / Arabic Supplement
-            || (0x08A0..=0x08FF).contains(&u) // Arabic Extended-A
-            || (0xFB1D..=0xFDFF).contains(&u) // Hebrew / Arabic presentation forms A
-            || (0xFE70..=0xFEFF).contains(&u) // Arabic presentation forms B
-    })
 }
 
 fn font_ext(font_path: &Path) -> String {

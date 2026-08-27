@@ -114,19 +114,11 @@ user-facing surface is here.
   is fine since the match only sharpens the error. Non-Sony .mxf resolves to
   DNxHR.
 
-- cosmic-text's bidi handling could replace the hand-rolled `--subtitle-rtl`
-  reshaping.
-- The standalone `burnin` command is redundant for DCP work. `create
-  --burn-subtitle` burns in one generation on every input shape, while `burnin` costs
-  an extra lossy transcode and its `--font-size` is inert for subtitles (read only in
-  the `drawtext` watermark branch). Worth deciding whether it stays as a plain
-  video-to-video tool or goes.
-
 ### Batch E (easyDCP parity, surveyed 2026-08-16)
 
 From en.easydcp.com easyDCP Plus and IMF Studio (both now EUR 3567.62 permanent or
 EUR 164.22/month, so the README's "EUR 2,998" line is stale). Most of what those
-pages advertise is already here. These four are not.
+pages advertise is already here. These three are not.
 
 - GPU J2K encoding. Both easyDCP products sell GPU/CUDA acceleration, and
   DCP-o-matic reaches it through `config grok-licence`. The grok library has no
@@ -142,9 +134,6 @@ pages advertise is already here. These four are not.
 - Atmos KDM. easyDCP's KDM Generator+ advertises "SMPTE (incl. Dolby Atmos)". Not a
   new item: it is the tail of the encrypted timed text and Atmos bullet above, since
   a KDM can only carry an Atmos key once `wrap_atmos` encrypts the essence.
-- imfwizard's GUI frame-rate menu stops at 60 while its CLI takes an arbitrary
-  `--fps-num`/`--fps-den`, against easyDCP's advertised 23.98 to 120. Tracked in
-  imfwizard's own DESIGN_TODO, noted here so the survey stays whole.
 
 Two claims from those pages we could not judge and should read the specs for before
 calling them gaps: "Dolby Vision 4.0 packaging" (imfwizard converts RPU profiles 8.1
@@ -163,9 +152,8 @@ RAW ingest, Dolby Vision cinema authoring (DV2, eCMU, licensed), IMF App4/App5/R
 breadth, QC detectors, and the render-farm/cloud story. Items worth landing here:
 
 - Black-frame and repeated/freeze-frame detection over a finished DCP. Every encode
-  reports it now, but `report` decodes no picture, so it carries no such pass, and a
-  joined library item is encoded through `library_reel`, which drops the findings
-  its encode returns.
+  reports it now, joined library items included, but `report` decodes no picture, so
+  it carries no such pass.
 - Side-by-side / wipe / difference compare in the preview. `frame_compare` has the
   metrics (PSNR/SSIM/VMAF); nothing shows two compositions ganged. guikit, so both
   wizards. Transkoder 2026 adds semantic composition diffing on top; metrics plus a

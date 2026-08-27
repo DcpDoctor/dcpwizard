@@ -88,7 +88,11 @@ smoke "copy"            copy --src "$C" --dst "$C"
 smoke "report"          report --dcp "$C" -o "$C/report.html"
 smoke "subtitle-convert" subtitle-convert -i "$C" -l en --fps 24 -o "$C"
 smoke "burnin"          burnin -i "$C" -s "$C" -o "$C"
+smoke "burnin styled"   burnin -i "$C" -s "$C" -o "$C" --colour FFFF00 \
+                            --position top --video-codec libx264 --crf 0
 smoke "convert"         convert -i "$C" -t mov -m fast -o "$C"
+smoke "watermark"       watermark -i "$C" -o "$C" -p DIST-001 --font-size 40 \
+                            --colour yellow --position top --video-codec libx264 --crf 0
 smoke "create+encrypt"  create --title x --video "$C" --output "$C" --encrypt --key-out "$C"
 smoke "assemble"        assemble --input "$C" --input "$C" --output "$C" --title x
 smoke "edit"            edit --input "$C" --output "$C" --title x --annotation a --content-kind FTR --issuer i

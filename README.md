@@ -82,7 +82,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Multilingual subtitles** with RFC 5646 language tags
 - **Burn-in during the encode** via `create --burn-subtitle <file>` (+ `--burn-subtitle-font <ttf/otf>`): the cues are drawn into the picture as it encodes, so a burnt festival print costs one generation rather than two. Takes the same formats `--subtitle` does, and covers video, image sequences and held stills. Burnt text is part of the image and registers no timed-text track; the same file cannot be both, and burning onto an already-X'Y'Z' source or a J2K directory is refused
 - **Burn-in appearance** on `create`: `--burn-font-size <pct of frame height>`, `--burn-colour <RRGGBB[AA]>`, `--burn-effect none|outline|shadow`, `--burn-effect-colour <RRGGBB[AA]>`, `--burn-outline-width <pct of text height>`, `--burn-line-height <multiple of text height>`, `--burn-margin <pct of frame height>`, `--burn-x-scale`, `--burn-y-scale`, `--burn-fade-up <ms>` and `--burn-fade-down <ms>`. Each is laid over postkit's burn defaults, so an unnamed one keeps the value it always had. Any of them without `--burn-subtitle` is refused by name
-- **Subtitle burn-in as a standalone pass** via `burnin`, for rendering into a video file outside a package
+- **Subtitle burn-in as a standalone pass** via `burnin`, for a review copy rather than a package: it writes a video file, so a DCP burn goes through `create --burn-subtitle` instead of this. `--font-size`, `--colour <RRGGBB>` and `--position top|center|bottom` style the cues, and `--video-codec <encoder>` with `--crf <n>` name the output encoder and its quality rather than leaving both to ffmpeg's guess from the output file name: `--video-codec libx264 --crf 0` writes a lossless copy
 
 ### Audio
 - **PCM audio wrapping** (48 kHz)
@@ -137,7 +137,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 
 ### Mastering & Compliance
 - **DCDM creation**, Digital Cinema Distribution Master (X'Y'Z' 12/16-bit) intermediate
-- **Visible watermarking**, burned-in text mark (distributor ID/serial) across image frames
+- **Visible watermarking** via `watermark`, a burned-in text mark (distributor ID/serial) across image frames, with `--font-size`, `--colour`, `--position top|center|bottom` and the same `--video-codec`/`--crf` the standalone burn-in takes
 - **Trailer packaging**, ratings cards (MPAA/BBFC/FSK), green/red band, countdown leaders; the packaged mp4 is then encoded and wrapped into a real trailer DCP
 - **Content version tracker**, SQLite database of which version delivered where and when
 - **Accessibility compliance**, verify AD/HI/SL tracks against CVAA, EAA, AODA, Ofcom standards
@@ -560,8 +560,9 @@ dcpwizard subtitle-edit --input subs.srt --index 3 --text "Fixed line" \
 # Extract timed text from a DCP back to SRT (or .txt for text only)
 dcpwizard subtitle-extract --input ./my_dcp --output subs.srt
 
-# Burn subtitles into video
-dcpwizard burn-in --input movie.mov --subtitles subs.srt --output movie_burned.mov
+# Burn subtitles into a video file, for review rather than for a package
+dcpwizard burn-in --input movie.mov --subtitles subs.srt --output movie_burned.mov \
+    --colour FFFF00 --position bottom --video-codec libx264 --crf 0
 
 # Scale/crop video to DCI target resolution
 dcpwizard convert --input movie.mov --output movie_2k_scope.mov --target 2k-scope
@@ -588,7 +589,8 @@ dcpwizard dv-inject -i input.hevc -r metadata.bin -o output.hevc
 dcpwizard hdr10-inject -i input.mov -o output.mov --max-cll 1000 --max-fall 400
 
 # Burn a visible watermark into a video/image file
-dcpwizard watermark -i movie.mov -o movie_wm.mov -p "DIST-001-SERIAL"
+dcpwizard watermark -i movie.mov -o movie_wm.mov -p "DIST-001-SERIAL" \
+    --font-size 40 --colour yellow --position top
 
 # Batch KDM: one KDM per recipient certificate in a single pass.
 # List certs with repeated --cert, or point --cert-dir at a directory

@@ -327,6 +327,9 @@ fn encode_item_picture(
                 item.item.name, result.error
             ));
         }
+        for finding in result.picture_findings.describe(rate.as_f64()) {
+            tracing::warn!("library item '{}': {finding}", item.item.name);
+        }
     }
 
     let encoded = crate::reel::collect_frames(out_dir).len() as u64;

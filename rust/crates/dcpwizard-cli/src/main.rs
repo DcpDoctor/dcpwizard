@@ -1426,7 +1426,8 @@ enum Commands {
         #[arg(long, default_value_t = 24)]
         fps: u32,
     },
-    /// Burn subtitles into video
+    /// Burn subtitles into a video file, for a review copy rather than a
+    /// package: a DCP burn goes through `create --burn-subtitle`
     #[command(alias = "burn-in")]
     Burnin {
         /// Input video file
@@ -1441,6 +1442,20 @@ enum Commands {
         /// Font size for burn-in (default: 24)
         #[arg(long, default_value = "24")]
         font_size: u32,
+        /// Text colour as RRGGBB hex; unset keeps the subtitle file's own
+        #[arg(long)]
+        colour: Option<String>,
+        /// Placement: top, center or bottom (default: bottom)
+        #[arg(long, default_value = "bottom")]
+        position: String,
+        /// Video encoder for the output, e.g. libx264 or prores_ks; unset leaves
+        /// the choice to ffmpeg's guess from the output name
+        #[arg(long)]
+        video_codec: Option<String>,
+        /// Constant rate factor, 0 being lossless x264/x265; unset keeps the
+        /// encoder's default
+        #[arg(long)]
+        crf: Option<u32>,
     },
     /// Convert video to a target DCI container (scale/crop/letterbox)
     Convert {
@@ -1611,6 +1626,28 @@ enum Commands {
         /// Watermark payload (distributor ID, serial, etc.) rendered visibly
         #[arg(short, long)]
         payload: String,
+
+        /// Text size in pixels
+        #[arg(long, default_value_t = 24)]
+        font_size: u32,
+
+        /// Text colour: any ffmpeg colour name or hex
+        #[arg(long, default_value = "white")]
+        colour: String,
+
+        /// Placement: top, center or bottom
+        #[arg(long, default_value = "bottom")]
+        position: String,
+
+        /// Video encoder for the marked copy, e.g. libx264 or prores_ks; unset
+        /// leaves the choice to ffmpeg's guess from the output name
+        #[arg(long)]
+        video_codec: Option<String>,
+
+        /// Constant rate factor, 0 being lossless x264/x265; unset keeps the
+        /// encoder's default
+        #[arg(long)]
+        crf: Option<u32>,
     },
 
     /// Generate or inspect X.509 certificates for DCP encryption
@@ -5662,13 +5699,20 @@ fn run() {
             subtitles,
             output,
             font_size,
+            colour,
+            position,
+            video_codec,
+            crf,
         } => {
             let opts = dcpwizard_core::burnin::BurninOptions {
                 input: PathBuf::from(&input),
                 output: PathBuf::from(&output),
                 subtitle_file: Some(PathBuf::from(&subtitles)),
                 font_size,
-                position: "bottom".to_string(),
+                font_colour: colour.unwrap_or_default(),
+                position,
+                video_codec: video_codec.unwrap_or_default(),
+                video_crf: crf,
                 ..Default::default()
             };
             match dcpwizard_core::burnin::burnin(&opts) {
@@ -5951,11 +5995,24 @@ fn run() {
             input,
             output,
             payload,
+            font_size,
+            colour,
+            position,
+            video_codec,
+            crf,
         } => {
+            let style = dcpwizard_core::watermark::WatermarkStyle {
+                font_size,
+                colour,
+                position,
+                video_codec: video_codec.unwrap_or_default(),
+                video_crf: crf,
+            };
             match dcpwizard_core::watermark::embed_watermark(
                 PathBuf::from(&input),
                 PathBuf::from(&output),
                 &payload,
+                &style,
             ) {
                 Ok(()) => {
                     tracing::info!("Visible watermark burned into: {output}");
