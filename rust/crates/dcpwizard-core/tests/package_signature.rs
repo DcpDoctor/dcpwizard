@@ -6,6 +6,8 @@ use dcpwizard_core::dcp::{DcpConfig, create_dcp};
 use dcpwizard_core::package_signature::PackageSigner;
 use std::path::{Path, PathBuf};
 
+mod xmlsec_tool;
+
 const FPS: u32 = 24;
 const WIDTH: u32 = 2048;
 const HEIGHT: u32 = 1080;
@@ -109,28 +111,6 @@ fn cpl_id(cpl: &Path) -> String {
         .to_lowercase()
 }
 
-/// xmlsec1 must accept the document against `trusted_pem`. The whole-document
-/// enveloped profile needs no --id-attr hints.
-// no vcpkg port ships an xmlsec1 binary for windows
-#[cfg(not(windows))]
-fn assert_xmlsec1_verifies(doc: &Path, trusted_pem: &Path) {
-    let result = std::process::Command::new("xmlsec1")
-        .arg("--verify")
-        .arg("--trusted-pem")
-        .arg(trusted_pem)
-        .arg(doc)
-        .output()
-        .expect("run xmlsec1");
-    assert!(
-        result.status.success(),
-        "xmlsec1 must verify {}\n  status: {}\n  stdout: {}\n  stderr: {}",
-        doc.display(),
-        result.status,
-        String::from_utf8_lossy(&result.stdout).trim(),
-        String::from_utf8_lossy(&result.stderr).trim(),
-    );
-}
-
 #[test]
 fn signed_package_verifies_and_the_pkl_hash_matches_the_signed_cpl() {
     let dir = tempfile::tempdir().unwrap();
@@ -187,12 +167,9 @@ fn signed_package_verifies_and_the_pkl_hash_matches_the_signed_cpl() {
         "signed package must have no hash or signature errors, got {hash_or_signature_errors:?}"
     );
 
-    // no vcpkg port ships an xmlsec1 binary for windows
-    #[cfg(not(windows))]
-    {
-        assert_xmlsec1_verifies(&cpl, &certs.join("root.pem"));
-        assert_xmlsec1_verifies(&pkl, &certs.join("root.pem"));
-    }
+    // the whole-document enveloped profile needs no --id-attr hints
+    xmlsec_tool::assert_verifies(&cpl, &certs.join("root.pem"), &[]);
+    xmlsec_tool::assert_verifies(&pkl, &certs.join("root.pem"), &[]);
 }
 
 #[test]
@@ -218,22 +195,14 @@ fn tampering_with_a_signed_cpl_breaks_its_signature() {
         .expect_err("a tampered CPL must not verify");
     assert!(err.contains("digest mismatch"), "got: {err}");
 
-    // no vcpkg port ships an xmlsec1 binary for windows
-    #[cfg(not(windows))]
-    {
-        let tampered_path = out.join("CPL_tampered.xml");
-        std::fs::write(&tampered_path, &tampered).unwrap();
-        let ok = std::process::Command::new("xmlsec1")
-            .arg("--verify")
-            .arg("--trusted-pem")
-            .arg(certs.join("root.pem"))
-            .arg(&tampered_path)
-            .output()
-            .expect("run xmlsec1")
-            .status
-            .success();
-        assert!(!ok, "xmlsec1 must reject the tampered CPL");
-    }
+    let tampered_path = out.join("CPL_tampered.xml");
+    std::fs::write(&tampered_path, &tampered).unwrap();
+    let rejected = xmlsec_tool::verify(&tampered_path, &certs.join("root.pem"), &[]);
+    assert!(
+        !rejected.status.success(),
+        "xmlsec1 must reject the tampered {}",
+        xmlsec_tool::report(&tampered_path, &rejected)
+    );
 }
 
 #[test]

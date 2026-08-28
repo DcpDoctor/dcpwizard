@@ -33,8 +33,9 @@ fn make_clip(path: &Path) {
         .expect("ffmpeg");
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        "ffmpeg wrote no clip\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim(),
     );
 }
 

@@ -26,15 +26,18 @@ fn srt_wraps_into_a_registered_timed_text_track() {
 
     // 2. Validate against the vendored ST 428-7 schema.
     let xsd = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/DCDMSubtitle-2010.xsd");
-    let ok = std::process::Command::new("xmllint")
+    let lint = std::process::Command::new("xmllint")
         .args(["--noout", "--schema"])
         .arg(&xsd)
         .arg(&dcst)
         .output()
-        .expect("run xmllint")
-        .status
-        .success();
-    assert!(ok, "DCST XML must validate against ST 428-7 XSD");
+        .expect("run xmllint");
+    assert!(
+        lint.status.success(),
+        "DCST XML must validate against ST 428-7 XSD\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&lint.stdout).trim(),
+        String::from_utf8_lossy(&lint.stderr).trim(),
+    );
 
     // 3. Wrap the DCST XML into a timed-text MXF (real asdcplib).
     let mxf = dir.path().join("sub.mxf");

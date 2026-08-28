@@ -32,9 +32,17 @@ fn make_clip(path: &Path) {
             "yuv420p",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no source clip");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no source clip",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 fn codestream_name(index: u64) -> String {

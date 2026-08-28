@@ -31,9 +31,17 @@ fn make_apv(path: &Path, frames: u32) {
             "yuv422p10le",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no APV clip");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no APV clip",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 #[test]

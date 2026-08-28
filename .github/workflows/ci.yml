@@ -46,7 +46,8 @@ jobs:
             libssl-dev \
             libxerces-c-dev \
             xmlsec1 \
-            fonts-dejavu-core
+            fonts-dejavu-core \
+            e2fsprogs
 
       # apt's 6.1 and chocolatey's have no apv decoder, so linux and windows take
       # the same pinned 8.1 static build
@@ -60,13 +61,28 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install pkg-config libxml2 openssl@3 xerces-c libxmlsec1 ffmpeg
+          brew install pkg-config libxml2 openssl@3 xerces-c libxmlsec1
           OPENSSL_PREFIX=$(brew --prefix openssl@3)
           echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
           echo "LIBRARY_PATH=$OPENSSL_PREFIX/lib:$(brew --prefix xerces-c)/lib" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig:$(brew --prefix libxml2)/lib/pkgconfig:$(brew --prefix xerces-c)/lib/pkgconfig" >> $GITHUB_ENV
+
+      # homebrew's ffmpeg carries no libass or freetype, so the subtitle burn
+      # tests get "No such filter: subtitles"
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: ffmpeg
+          create-args: ffmpeg=8.1.1=gpl_h4b93310_102
+          init-shell: none
+
+      - name: Put ffmpeg on PATH (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "$(dirname "$("${MAMBA_EXE:-micromamba}" run -n ffmpeg which ffmpeg)")" >> "$GITHUB_PATH"
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -91,6 +107,13 @@ jobs:
           unzip -q ffmpeg.zip
           echo "$(cygpath -w "$PWD/ffmpeg-n8.1.2-47-g156bb4d299-win64-gpl-8.1/bin")" >> "$GITHUB_PATH"
 
+      - name: Install xmlsec1 (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          /c/msys64/usr/bin/pacman.exe -Sy --noconfirm --needed mingw-w64-x86_64-xmlsec
+          echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
+
       - name: Setup grok
         uses: PostPerfection/setup-grok@v1
         with:
@@ -104,7 +127,8 @@ jobs:
           xmllint --version
           grk_compress -h > /dev/null
           grk_decompress -h > /dev/null
-          if [ "$RUNNER_OS" != "Windows" ]; then xmlsec1 --version; fi
+          xmlsec1 --version
+          if [ "$RUNNER_OS" = "Linux" ]; then mkfs.ext2 -V; fi
 
       - name: Build
         working-directory: rust
@@ -154,12 +178,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev xvfb
+          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb
 
       - name: Setup grok
         uses: PostPerfection/setup-grok@v1
         with:
           grok-ref: v20.4.0
+
+      - uses: PostPerfection/setup-libmpv@v1
+        with:
+          mpv-release: 20260828
+          mpv-archive: mpv-dev-x86_64-20260828-git-182fa6ca49.7z
 
       - name: Build frontend
         working-directory: gui

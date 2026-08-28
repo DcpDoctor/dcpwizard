@@ -114,8 +114,9 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
         .expect("ffmpeg");
     assert!(
         made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
+        "ffmpeg wrote no card\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&made.stdout).trim(),
+        String::from_utf8_lossy(&made.stderr).trim(),
     );
 
     let srt = write_srt(dir.path());
@@ -204,8 +205,9 @@ fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16
         .expect("grk_decompress");
     assert!(
         output.status.success(),
-        "grk_decompress failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "grk_decompress failed\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim(),
     );
     let bytes = std::fs::read(out).expect("decoded ppm");
     // P6 header: magic, width, height, maxval, whitespace-separated, then one
@@ -243,8 +245,7 @@ fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16
 /// every component.
 #[test]
 fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
-    let grk_decompress =
-        dcpwizard_core::j2k_transcode::find_grk_decompress().expect("grk_decompress on PATH");
+    let grk_decompress = postkit::grok::find_grk_decompress().expect("grk_decompress on PATH");
     let dir = tempfile::tempdir().unwrap();
     let card = dir.path().join("card.png");
     let made = std::process::Command::new("ffmpeg")
@@ -262,8 +263,9 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
         .expect("ffmpeg");
     assert!(
         made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
+        "ffmpeg wrote no card\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&made.stdout).trim(),
+        String::from_utf8_lossy(&made.stderr).trim(),
     );
 
     let srt = write_srt(dir.path());

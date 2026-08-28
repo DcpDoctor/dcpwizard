@@ -52,9 +52,17 @@ fn make_stereo_wav(path: &Path) {
             "pcm_s24le",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no test sound");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no test sound",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 fn read_cpl(dir: &Path) -> String {

@@ -8,6 +8,8 @@ use dcpwizard_core::package_signature::PackageSigner;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod xmlsec_tool;
+
 /// A short 2048x1080 24fps clip via ffmpeg testsrc.
 fn make_clip(path: &Path, frames: u32) {
     let ok = Command::new("ffmpeg")
@@ -51,26 +53,6 @@ fn file_starting_with(dir: &Path, prefix: &str) -> PathBuf {
     hits.pop().unwrap()
 }
 
-// no vcpkg port ships an xmlsec1 binary for windows
-#[cfg(windows)]
-fn assert_xmlsec1_verifies(_doc: &Path, _trusted_pem: &Path) {}
-
-#[cfg(not(windows))]
-fn assert_xmlsec1_verifies(doc: &Path, trusted_pem: &Path) {
-    let result = Command::new("xmlsec1")
-        .args(["--verify", "--trusted-pem"])
-        .arg(trusted_pem)
-        .arg(doc)
-        .output()
-        .expect("run xmlsec1");
-    assert!(
-        result.status.success(),
-        "xmlsec1 must verify {}\n  stderr: {}",
-        doc.display(),
-        String::from_utf8_lossy(&result.stderr).trim(),
-    );
-}
-
 /// The delivered CPL and PKL each carry a ds:Signature that really verifies.
 fn assert_signed(out: &Path, trusted_pem: &Path) {
     for prefix in ["CPL_", "PKL_"] {
@@ -81,7 +63,7 @@ fn assert_signed(out: &Path, trusted_pem: &Path) {
             "{} carries no ds:Signature",
             doc.display()
         );
-        assert_xmlsec1_verifies(&doc, trusted_pem);
+        xmlsec_tool::assert_verifies(&doc, trusted_pem, &[]);
     }
 }
 

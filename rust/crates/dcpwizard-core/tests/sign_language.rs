@@ -28,11 +28,13 @@ fn make_sign_video(path: &Path) {
             "yuv420p",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
     assert!(
-        ok.success() && path.exists(),
-        "ffmpeg wrote no sign language clip"
+        ok.status.success() && path.exists(),
+        "ffmpeg wrote no sign language clip\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
     );
 }
 

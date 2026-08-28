@@ -36,9 +36,14 @@ fn make_clip(path: &Path, with_sound: bool) {
     let ok = command
         .args(["-frames:v", &CLIP_FRAMES.to_string(), "-shortest"])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no source clip");
+    assert!(
+        ok.status.success() && path.exists(),
+        "ffmpeg wrote no source clip\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 fn make_frames(dir: &Path) -> PathBuf {

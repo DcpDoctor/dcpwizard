@@ -575,6 +575,52 @@ mod tests {
         )
     }
 
+    /// xmlsec 1.3 searches keys strictly and prints no error detail, so a KDM
+    /// whose KeyInfo does not name its key needs --lax-key-search and the
+    /// failure text needs --verbose. Neither flag exists in 1.2.
+    fn xmlsec1_compatibility_flags() -> &'static [&'static str] {
+        static FLAGS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+        FLAGS
+            .get_or_init(|| {
+                // --help is a summary, the option list is under --help-all
+                let mut help = String::new();
+                for arg in ["--help", "--help-all"] {
+                    if let Ok(out) = std::process::Command::new("xmlsec1").arg(arg).output() {
+                        help.push_str(&String::from_utf8_lossy(&out.stdout));
+                        help.push_str(&String::from_utf8_lossy(&out.stderr));
+                    }
+                }
+                ["--lax-key-search", "--verbose"]
+                    .into_iter()
+                    .filter(|flag| help.contains(flag))
+                    .collect()
+            })
+            .as_slice()
+    }
+
+    /// A KDM signs two subtrees by Id, so the verify needs both --id-attr hints.
+    fn assert_kdm_verifies(kdm: &Path, root_pem: &Path, what: &str) {
+        let out = std::process::Command::new("xmlsec1")
+            .arg("--verify")
+            .args(xmlsec1_compatibility_flags())
+            .arg("--trusted-pem")
+            .arg(root_pem)
+            .args(["--id-attr:Id", "AuthenticatedPublic"])
+            .args(["--id-attr:Id", "AuthenticatedPrivate"])
+            .arg(kdm)
+            .output()
+            .expect("run xmlsec1");
+        assert!(
+            out.status.success(),
+            "xmlsec1 must verify the {what} against the root: {}\n  flags: {:?}\n  status: {}\n  stdout: {}\n  stderr: {}",
+            kdm.display(),
+            xmlsec1_compatibility_flags(),
+            out.status,
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+
     // Real end-to-end batch: distinct recipients, bound content KeyId, signed.
     #[test]
     fn batch_generates_one_signed_kdm_per_recipient_bound_to_the_key() {
@@ -652,22 +698,7 @@ mod tests {
             );
             assert!(xml.contains("<ds:Signature"), "KDM must be signed");
 
-            // no vcpkg port ships an xmlsec1 binary for windows
-            #[cfg(not(windows))]
-            {
-                let ok = std::process::Command::new("xmlsec1")
-                    .arg("--verify")
-                    .arg("--trusted-pem")
-                    .arg(dir.path().join("root.pem"))
-                    .args(["--id-attr:Id", "AuthenticatedPublic"])
-                    .args(["--id-attr:Id", "AuthenticatedPrivate"])
-                    .arg(kdm)
-                    .output()
-                    .expect("run xmlsec1")
-                    .status
-                    .success();
-                assert!(ok, "xmlsec1 must verify the batch KDM against the root");
-            }
+            assert_kdm_verifies(kdm, &dir.path().join("root.pem"), "batch KDM");
         }
     }
 
@@ -813,21 +844,6 @@ mod tests {
         );
         assert!(xml.contains("<ds:Signature"), "interop KDM must be signed");
 
-        // no vcpkg port ships an xmlsec1 binary for windows
-        #[cfg(not(windows))]
-        {
-            let ok = std::process::Command::new("xmlsec1")
-                .arg("--verify")
-                .arg("--trusted-pem")
-                .arg(dir.path().join("root.pem"))
-                .args(["--id-attr:Id", "AuthenticatedPublic"])
-                .args(["--id-attr:Id", "AuthenticatedPrivate"])
-                .arg(&out)
-                .output()
-                .expect("run xmlsec1")
-                .status
-                .success();
-            assert!(ok, "xmlsec1 must verify the interop KDM against the root");
-        }
+        assert_kdm_verifies(&out, &dir.path().join("root.pem"), "interop KDM");
     }
 }

@@ -425,8 +425,9 @@ mod tests {
                 .expect("run xmllint");
             assert!(
                 out.status.success(),
-                "signed {name} must validate against {xsd}: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "signed {name} must validate against {xsd}\n  stdout: {}\n  stderr: {}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim(),
             );
         }
     }

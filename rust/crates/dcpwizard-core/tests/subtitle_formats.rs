@@ -77,15 +77,18 @@ fn ass_dcst_validates_against_st428_7_schema() {
     assert!(xml.contains("Valign=\"top\""), "placement applied: {xml}");
 
     let xsd = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/DCDMSubtitle-2010.xsd");
-    let ok = std::process::Command::new("xmllint")
+    let lint = std::process::Command::new("xmllint")
         .args(["--noout", "--schema"])
         .arg(&xsd)
         .arg(&prepared.dcst_path)
         .output()
-        .expect("run xmllint")
-        .status
-        .success();
-    assert!(ok, "styled DCST must validate against ST 428-7 XSD");
+        .expect("run xmllint");
+    assert!(
+        lint.status.success(),
+        "styled DCST must validate against ST 428-7 XSD\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&lint.stdout).trim(),
+        String::from_utf8_lossy(&lint.stderr).trim(),
+    );
 }
 
 #[test]

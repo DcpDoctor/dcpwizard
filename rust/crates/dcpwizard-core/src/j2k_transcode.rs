@@ -105,7 +105,7 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         crate::Standard::Smpte
     };
 
-    let grk_decompress = match find_grk_decompress() {
+    let grk_decompress = match postkit::grok::find_grk_decompress() {
         Some(p) => p,
         None => {
             tracing::error!("grk_decompress not found (expected ~/bin/grok/bin or PATH)");
@@ -677,27 +677,6 @@ fn scale_tiff(tif: &Path, w: u32, h: u32) -> bool {
             false
         }
     }
-}
-
-/// Locate grk_decompress: beside grk_compress in `$HOME/bin/grok/bin`, else PATH.
-pub fn find_grk_decompress() -> Option<PathBuf> {
-    let exe = if cfg!(windows) {
-        "grk_decompress.exe"
-    } else {
-        "grk_decompress"
-    };
-    if let Some(comp) = crate::grok::find_grk_compress()
-        && let Some(dir) = comp.parent()
-    {
-        let p = dir.join(exe);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|d| d.join(exe))
-        .find(|p| p.is_file())
 }
 
 fn sorted_files(dir: &Path) -> Vec<PathBuf> {

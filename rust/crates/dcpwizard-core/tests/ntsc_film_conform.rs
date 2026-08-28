@@ -33,9 +33,17 @@ fn make_ntsc_clip(path: &Path) {
             "yuv420p",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no 23.976 clip");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no 23.976 clip",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 fn make_sine(path: &Path) {
@@ -56,9 +64,17 @@ fn make_sine(path: &Path) {
             "pcm_s24le",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no sine");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no sine",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 fn find_essence(dir: &Path, prefix: &str) -> std::path::PathBuf {

@@ -42,11 +42,13 @@ fn make_letterboxed_clip(path: &Path) {
             "yuv420p",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
     assert!(
-        ok.success() && path.exists(),
-        "ffmpeg wrote no letterboxed clip"
+        ok.status.success() && path.exists(),
+        "ffmpeg wrote no letterboxed clip\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
     );
 }
 

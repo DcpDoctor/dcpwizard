@@ -277,17 +277,16 @@ mod tests {
         assert!(err.contains("block device"), "{err}");
     }
 
+    // /proc/mounts and mkfs.ext2 are linux
+    #[cfg(target_os = "linux")]
     #[test]
     fn refuses_a_mounted_device() {
         // the device backing "/" is always in /proc/mounts; formatting it must
         // be refused before anything else.
-        let root_dev = mounted_devices()
+        let dev = mounted_devices()
             .into_iter()
-            .find(|d| d.starts_with("/dev/"));
-        let Some(dev) = root_dev else {
-            eprintln!("skip: no /dev mount source in /proc/mounts");
-            return;
-        };
+            .find(|d| d.starts_with("/dev/"))
+            .expect("a /dev mount source in /proc/mounts");
         let err = format_drive(Path::new(&dev), ExtFs::Ext2, None, true, false).unwrap_err();
         assert!(err.contains("mounted"), "{err}");
     }
@@ -302,12 +301,10 @@ mod tests {
         assert_eq!(info.fstype, None);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn format_and_check_roundtrip_on_image() {
-        if which("mkfs.ext2").is_none() {
-            eprintln!("skip: mkfs.ext2 not installed");
-            return;
-        }
+        which("mkfs.ext2").expect("mkfs.ext2 on PATH");
         let dir = tempfile::tempdir().unwrap();
         let img = dir.path().join("disk.img");
         // 8 MiB sparse image is enough for a tiny ext2 fs

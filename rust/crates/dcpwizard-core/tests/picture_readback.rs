@@ -64,9 +64,17 @@ fn red_clip(path: &Path) {
             "gbrp12le",
         ])
         .arg(path)
-        .status()
+        .output()
         .expect("run ffmpeg");
-    assert!(ok.success() && path.exists(), "ffmpeg wrote no red clip");
+    assert!(
+        ok.status.success() && path.exists(),
+        "{}
+  stdout: {}
+  stderr: {}",
+        "ffmpeg wrote no red clip",
+        String::from_utf8_lossy(&ok.stdout).trim(),
+        String::from_utf8_lossy(&ok.stderr).trim(),
+    );
 }
 
 /// Encode the red clip through the pipeline a `create --video` build runs, which

@@ -50,7 +50,7 @@ fn expected_xyz(rgb16: [u16; 3]) -> [u16; 3] {
 }
 
 fn grk_decompress_bin() -> std::path::PathBuf {
-    dcpwizard_core::j2k_transcode::find_grk_decompress().expect("grk_decompress on PATH")
+    postkit::grok::find_grk_decompress().expect("grk_decompress on PATH")
 }
 
 /// Read the first sample of a PGX plane written by grk_decompress.
@@ -63,14 +63,19 @@ fn first_pgx_sample(path: &Path) -> u16 {
 
 fn decode_first_pixel(j2c: &Path, dir: &Path) -> [u16; 3] {
     let out = dir.join("decoded.pgx");
-    let status = Command::new(grk_decompress_bin())
+    let decode = Command::new(grk_decompress_bin())
         .arg("-i")
         .arg(j2c)
         .arg("-o")
         .arg(&out)
-        .status()
+        .output()
         .expect("run grk_decompress");
-    assert!(status.success(), "grk_decompress failed");
+    assert!(
+        decode.status.success(),
+        "grk_decompress failed\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&decode.stdout).trim(),
+        String::from_utf8_lossy(&decode.stderr).trim(),
+    );
     let mut xyz = [0u16; 3];
     for (i, slot) in xyz.iter_mut().enumerate() {
         *slot = first_pgx_sample(&dir.join(format!("decoded_{i}.pgx")));
