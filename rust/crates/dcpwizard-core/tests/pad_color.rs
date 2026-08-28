@@ -36,12 +36,7 @@ fn first_pgx_sample(path: &Path) -> u16 {
 }
 
 fn grk_decompress_bin() -> std::path::PathBuf {
-    std::env::var("GRK_DECOMPRESS_BIN")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            std::path::PathBuf::from(home).join("bin/grok/bin/grk_decompress")
-        })
+    dcpwizard_core::j2k_transcode::find_grk_decompress().expect("grk_decompress on PATH")
 }
 
 fn decode_first_pixel(j2c: &Path, dir: &Path) -> [u16; 3] {
@@ -66,10 +61,6 @@ fn decode_first_pixel(j2c: &Path, dir: &Path) -> [u16; 3] {
 
 #[test]
 fn pad_color_frame_carries_expected_xyz() {
-    if !grk_decompress_bin().is_file() {
-        eprintln!("skip: grk_decompress not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
 
     for rgb8 in [[255u8, 0, 0], [0, 128, 0], [64, 96, 200]] {

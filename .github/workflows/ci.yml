@@ -35,9 +35,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # ffmpeg/ffprobe are how dcpwizard reads and writes every source, so
-      # without them the test run skips most of what it looks like it covers.
-      # No runner image ships them.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -45,14 +42,25 @@ jobs:
           sudo apt-get install -y \
             pkg-config \
             libxml2-dev \
+            libxml2-utils \
             libssl-dev \
             libxerces-c-dev \
-            ffmpeg
+            xmlsec1 \
+            fonts-dejavu-core
+
+      # apt's 6.1 and chocolatey's have no apv decoder, so linux and windows take
+      # the same pinned 8.1 static build
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-linux64-gpl-8.1.tar.xz
+          tar -xJf ffmpeg.tar.xz
+          echo "$PWD/ffmpeg-n8.1.2-47-g156bb4d299-linux64-gpl-8.1/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install pkg-config libxml2 openssl@3 xerces-c ffmpeg
+          brew install pkg-config libxml2 openssl@3 xerces-c libxmlsec1 ffmpeg
           OPENSSL_PREFIX=$(brew --prefix openssl@3)
           echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
@@ -67,26 +75,36 @@ jobs:
           # vcpkg reads curl 56 and 503 off github's archive host as permanent and
           # refuses to retry the source download, so retry the whole install
           for ($attempt = 1; $attempt -le 5; $attempt++) {
-            vcpkg install libxml2 openssl xerces-c --triplet x64-windows
+            vcpkg install libxml2[tools] openssl xerces-c --triplet x64-windows
             if ($LASTEXITCODE -eq 0) { break }
             if ($attempt -eq 5) { throw "vcpkg install failed after $attempt attempts" }
             Start-Sleep -Seconds (30 * $attempt)
           }
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          # choco sometimes reports success while installing nothing, so gate
-          # the retries on ffmpeg actually answering, not choco's exit code
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            choco install -y --no-progress ffmpeg
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-            if (Get-Command ffmpeg -ErrorAction SilentlyContinue) { break }
-            if ($attempt -eq 5) { throw "ffmpeg still missing after $attempt chocolatey installs" }
-            Start-Sleep -Seconds (30 * $attempt)
-          }
+          echo "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\tools\libxml2" >> $env:GITHUB_PATH
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -sSL -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-27-16-45/ffmpeg-n8.1.2-47-g156bb4d299-win64-gpl-8.1.zip
+          unzip -q ffmpeg.zip
+          echo "$(cygpath -w "$PWD/ffmpeg-n8.1.2-47-g156bb4d299-win64-gpl-8.1/bin")" >> "$GITHUB_PATH"
 
       - name: Setup grok
         uses: PostPerfection/setup-grok@v1
         with:
           grok-ref: v20.4.0
+
+      - name: Check test tools
+        shell: bash
+        run: |
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+          xmllint --version
+          grk_compress -h > /dev/null
+          grk_decompress -h > /dev/null
+          if [ "$RUNNER_OS" != "Windows" ]; then xmlsec1 --version; fi
 
       - name: Build
         working-directory: rust
@@ -107,6 +125,12 @@ jobs:
       - name: CLI flag consistency
         if: runner.os == 'Linux'
         run: bash tests/cli_flags_test.sh ./rust/target/release/dcpwizard
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: CLI tests
+        shell: bash
+        run: PATH="$PWD/rust/target/release:$PATH" uv run --no-project --with pytest pytest tests/test_cli.py -q
 
   gui:
     runs-on: ubuntu-24.04
@@ -130,7 +154,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev
+          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev xvfb
 
       - name: Setup grok
         uses: PostPerfection/setup-grok@v1
@@ -150,5 +174,10 @@ jobs:
           TRIPLE=$(rustc -vV | grep host | awk '{print $2}')
           cp target/release/dcpwizard ../gui/src-tauri/dcpwizard-${TRIPLE}
 
-      - name: Check Tauri backend
-        run: cargo check --manifest-path gui/src-tauri/Cargo.toml
+      - name: Build the GUI
+        run: cargo build --release --manifest-path gui/src-tauri/Cargo.toml
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: GUI tests
+        run: xvfb-run -a uv run --no-project --with pytest pytest tests/test_gui.py -q

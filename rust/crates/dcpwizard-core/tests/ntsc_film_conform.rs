@@ -17,8 +17,8 @@ const SOURCE_FRAMES: u32 = 1001;
 const SOURCE_SAMPLES: u64 = 1001 * 1001 * 2;
 const AUDIO_SAMPLE_RATE: u64 = 48_000;
 
-fn make_ntsc_clip(path: &Path) -> bool {
-    std::process::Command::new("ffmpeg")
+fn make_ntsc_clip(path: &Path) {
+    let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
             "-loglevel",
@@ -34,13 +34,12 @@ fn make_ntsc_clip(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no 23.976 clip");
 }
 
-fn make_sine(path: &Path) -> bool {
-    std::process::Command::new("ffmpeg")
+fn make_sine(path: &Path) {
+    let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
             "-loglevel",
@@ -58,9 +57,8 @@ fn make_sine(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no sine");
 }
 
 fn find_essence(dir: &Path, prefix: &str) -> std::path::PathBuf {
@@ -102,10 +100,8 @@ fn a_23_976_source_packages_1001_frames_of_picture_and_sound_at_24_fps() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("ntsc.mp4");
     let sine = dir.path().join("sound.wav");
-    if !make_ntsc_clip(&clip) || !make_sine(&sine) {
-        eprintln!("skipping: ffmpeg could not build the 23.976 source");
-        return;
-    }
+    make_ntsc_clip(&clip);
+    make_sine(&sine);
 
     let probed = dcpwizard_core::probe::probe_video(&clip).expect("probe the source");
     assert_eq!((probed.fps_num, probed.fps_den), (24_000, 1_001));

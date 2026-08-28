@@ -109,16 +109,10 @@ fn cpl_id(cpl: &Path) -> String {
         .to_lowercase()
 }
 
-fn xmlsec1_available() -> bool {
-    std::process::Command::new("xmlsec1")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// xmlsec1 must accept the document against `trusted_pem`. The whole-document
 /// enveloped profile needs no --id-attr hints.
+// no vcpkg port ships an xmlsec1 binary for windows
+#[cfg(not(windows))]
 fn assert_xmlsec1_verifies(doc: &Path, trusted_pem: &Path) {
     let result = std::process::Command::new("xmlsec1")
         .arg("--verify")
@@ -193,11 +187,11 @@ fn signed_package_verifies_and_the_pkl_hash_matches_the_signed_cpl() {
         "signed package must have no hash or signature errors, got {hash_or_signature_errors:?}"
     );
 
-    if xmlsec1_available() {
+    // no vcpkg port ships an xmlsec1 binary for windows
+    #[cfg(not(windows))]
+    {
         assert_xmlsec1_verifies(&cpl, &certs.join("root.pem"));
         assert_xmlsec1_verifies(&pkl, &certs.join("root.pem"));
-    } else {
-        eprintln!("skipping xmlsec1 cross-check: xmlsec1 not installed");
     }
 }
 
@@ -224,7 +218,9 @@ fn tampering_with_a_signed_cpl_breaks_its_signature() {
         .expect_err("a tampered CPL must not verify");
     assert!(err.contains("digest mismatch"), "got: {err}");
 
-    if xmlsec1_available() {
+    // no vcpkg port ships an xmlsec1 binary for windows
+    #[cfg(not(windows))]
+    {
         let tampered_path = out.join("CPL_tampered.xml");
         std::fs::write(&tampered_path, &tampered).unwrap();
         let ok = std::process::Command::new("xmlsec1")

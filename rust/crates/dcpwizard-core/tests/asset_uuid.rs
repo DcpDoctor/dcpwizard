@@ -2,7 +2,8 @@
 //! CPL, the Id in the PKL, the Id in the ASSETMAP and the AssetUUID the MXF
 //! itself carries must all be the same value. The MXF side is read back with an
 //! external asdcp-info binary, so dcpwizard cannot agree with itself and pass.
-//! Set DCPWIZARD_ASDCP_INFO to an asdcp-info binary to run these.
+//! The asdcplib-sys build script builds asdcp-info into its OUT_DIR, so the
+//! binary comes out of the build tree unless DCPWIZARD_ASDCP_INFO names another.
 
 use dcpwizard_core::dcp::DcpConfig;
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,17 +14,63 @@ const WIDTH: u32 = 2048;
 const HEIGHT: u32 = 1080;
 const FRAMES: usize = 24;
 
-/// The CPL asset element that describes the composition itself, not a track file.
-const COMPOSITION_METADATA_ASSET: &str = "CompositionMetadataAsset";
+/// CPL reel assets that describe the composition rather than name a track file:
+/// neither is packaged, and neither carries a Hash.
+const ASSETS_WITH_NO_TRACK_FILE: [&str; 2] = ["CompositionMetadataAsset", "MainMarkers"];
 
-fn asdcp_info() -> Option<String> {
-    match std::env::var("DCPWIZARD_ASDCP_INFO") {
-        Ok(tool) => Some(tool),
-        Err(_) => {
-            eprintln!("skipping: set DCPWIZARD_ASDCP_INFO to an asdcp-info binary");
-            None
+const ASDCP_INFO_EXE: &str = if cfg!(windows) {
+    "asdcp-info.exe"
+} else {
+    "asdcp-info"
+};
+
+/// The newest `asdcp-info` any asdcplib-sys build script left under `target/`.
+fn built_asdcp_info() -> Option<PathBuf> {
+    // target/<profile>/deps/<test binary>
+    let target = std::env::current_exe().ok()?;
+    let target = target.parent()?.parent()?.parent()?;
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for profile in std::fs::read_dir(target).ok()?.flatten() {
+        let builds = match std::fs::read_dir(profile.path().join("build")) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for build in builds.flatten() {
+            if !file_name(&build.path()).starts_with("asdcplib-sys-") {
+                continue;
+            }
+            let tool = build.path().join("out/bin").join(ASDCP_INFO_EXE);
+            if let Ok(meta) = std::fs::metadata(&tool)
+                && let Ok(modified) = meta.modified()
+            {
+                found.push((modified, tool));
+            }
         }
     }
+    found.sort();
+    found.pop().map(|(_, path)| path)
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn asdcp_info() -> String {
+    if let Ok(tool) = std::env::var("DCPWIZARD_ASDCP_INFO") {
+        return tool;
+    }
+    built_asdcp_info()
+        .unwrap_or_else(|| {
+            panic!(
+                "no {ASDCP_INFO_EXE} under target/*/build/asdcplib-sys-*/out/bin, and \
+                 DCPWIZARD_ASDCP_INFO names none"
+            )
+        })
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The AssetUUID an MXF actually carries, read by an independent binary.
@@ -151,7 +198,7 @@ fn cpl_track_asset_ids(cpl: &Path) -> BTreeSet<String> {
         n.has_tag_name("AssetList") && n.parent().is_some_and(|p| p.has_tag_name("Reel"))
     }) {
         for asset in list.children().filter(|c| c.is_element()) {
-            if asset.tag_name().name() == COMPOSITION_METADATA_ASSET {
+            if ASSETS_WITH_NO_TRACK_FILE.contains(&asset.tag_name().name()) {
                 continue;
             }
             let id = asset
@@ -229,7 +276,7 @@ fn assert_ids_agree(tool: &str, dcp_dir: &Path, expected_tracks: usize) {
 
 #[test]
 fn every_track_file_id_agrees_on_the_main_create_path() {
-    let Some(tool) = asdcp_info() else { return };
+    let tool = asdcp_info();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -260,7 +307,7 @@ fn every_track_file_id_agrees_on_the_main_create_path() {
 
 #[test]
 fn every_track_file_id_agrees_on_the_stereoscopic_path() {
-    let Some(tool) = asdcp_info() else { return };
+    let tool = asdcp_info();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -283,7 +330,7 @@ fn every_track_file_id_agrees_on_the_stereoscopic_path() {
 
 #[test]
 fn every_track_file_id_agrees_on_the_encrypted_path() {
-    let Some(tool) = asdcp_info() else { return };
+    let tool = asdcp_info();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 

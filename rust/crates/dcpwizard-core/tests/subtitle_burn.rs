@@ -23,14 +23,6 @@ const FPS: FrameRate = FrameRate {
 const SRT: &str = "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n\
                    2\n00:00:02,000 --> 00:00:03,000\nsecond line\n\n";
 
-fn have(bin: &str, arg: &str) -> bool {
-    std::process::Command::new(bin)
-        .arg(arg)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 fn write_srt(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("cues.srt");
     std::fs::write(&path, SRT).unwrap();
@@ -105,10 +97,6 @@ fn a_missing_burn_in_font_is_named() {
 /// one that proves the burn is not tied to the ffmpeg path.
 #[test]
 fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
-    if !have("ffmpeg", "-version") {
-        eprintln!("skipping: ffmpeg not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let card = dir.path().join("card.png");
     let made = std::process::Command::new("ffmpeg")
@@ -131,10 +119,8 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
     );
 
     let srt = write_srt(dir.path());
-    let Ok(burn) = prepare_subtitle_burn(&srt, None, FPS, &BurnStyleOverrides::default()) else {
-        eprintln!("skipping: no font available to burn with");
-        return;
-    };
+    let burn = prepare_subtitle_burn(&srt, None, FPS, &BurnStyleOverrides::default())
+        .expect("a system font to burn with");
 
     // 3 seconds of hold over cues at 0-1s and 2-3s: the picture changes at
     // frames 24, 48 and 72, so four distinct frames are encoded.
@@ -208,23 +194,6 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
     );
 }
 
-fn find_grk_decompress() -> Option<std::path::PathBuf> {
-    if let Ok(home) = std::env::var("HOME") {
-        let path = std::path::PathBuf::from(home).join("bin/grok/bin/grk_decompress");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    // spawning is the one PATH lookup that works the same on every platform,
-    // `which` on Windows answers with a path Command cannot open
-    let on_path = std::path::PathBuf::from("grk_decompress");
-    std::process::Command::new(&on_path)
-        .arg("-h")
-        .output()
-        .ok()
-        .map(|_| on_path)
-}
-
 /// Decode one codestream to a 16-bit-per-channel PPM and return its samples.
 fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16> {
     let output = std::process::Command::new(grk_decompress)
@@ -274,14 +243,8 @@ fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16
 /// every component.
 #[test]
 fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
-    if !have("ffmpeg", "-version") {
-        eprintln!("skipping: ffmpeg not found");
-        return;
-    }
-    let Some(grk_decompress) = find_grk_decompress() else {
-        eprintln!("skipping: grk_decompress not found");
-        return;
-    };
+    let grk_decompress =
+        dcpwizard_core::j2k_transcode::find_grk_decompress().expect("grk_decompress on PATH");
     let dir = tempfile::tempdir().unwrap();
     let card = dir.path().join("card.png");
     let made = std::process::Command::new("ffmpeg")
@@ -315,10 +278,7 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
         effect: Some(postkit::subtitle_raster::BurnEffect::Outline),
         ..Default::default()
     };
-    let Ok(burn) = prepare_subtitle_burn(&srt, None, FPS, &style) else {
-        eprintln!("skipping: no font available to burn with");
-        return;
-    };
+    let burn = prepare_subtitle_burn(&srt, None, FPS, &style).expect("a system font to burn with");
 
     // the first cue runs 0-1s, so every frame of this hold carries it
     let j2k = dir.path().join("j2k");

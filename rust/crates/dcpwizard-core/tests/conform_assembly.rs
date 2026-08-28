@@ -8,14 +8,6 @@ use dcpwizard_core::package_signature::PackageSigner;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// A short 2048x1080 24fps clip via ffmpeg testsrc.
 fn make_clip(path: &Path, frames: u32) {
     let ok = Command::new("ffmpeg")
@@ -59,12 +51,24 @@ fn file_starting_with(dir: &Path, prefix: &str) -> PathBuf {
     hits.pop().unwrap()
 }
 
-fn xmlsec1_available() -> bool {
-    Command::new("xmlsec1")
-        .arg("--version")
+// no vcpkg port ships an xmlsec1 binary for windows
+#[cfg(windows)]
+fn assert_xmlsec1_verifies(_doc: &Path, _trusted_pem: &Path) {}
+
+#[cfg(not(windows))]
+fn assert_xmlsec1_verifies(doc: &Path, trusted_pem: &Path) {
+    let result = Command::new("xmlsec1")
+        .args(["--verify", "--trusted-pem"])
+        .arg(trusted_pem)
+        .arg(doc)
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .expect("run xmlsec1");
+    assert!(
+        result.status.success(),
+        "xmlsec1 must verify {}\n  stderr: {}",
+        doc.display(),
+        String::from_utf8_lossy(&result.stderr).trim(),
+    );
 }
 
 /// The delivered CPL and PKL each carry a ds:Signature that really verifies.
@@ -77,31 +81,13 @@ fn assert_signed(out: &Path, trusted_pem: &Path) {
             "{} carries no ds:Signature",
             doc.display()
         );
-        if !xmlsec1_available() {
-            continue;
-        }
-        let result = Command::new("xmlsec1")
-            .args(["--verify", "--trusted-pem"])
-            .arg(trusted_pem)
-            .arg(&doc)
-            .output()
-            .expect("run xmlsec1");
-        assert!(
-            result.status.success(),
-            "xmlsec1 must verify {}\n  stderr: {}",
-            doc.display(),
-            String::from_utf8_lossy(&result.stderr).trim(),
-        );
+        assert_xmlsec1_verifies(&doc, trusted_pem);
     }
 }
 
 /// One reel is moved straight out, so nothing downstream would add a signature.
 #[test]
 fn a_single_reel_conform_signs_the_dcp_it_moves_out() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not available, skipping single-reel conform signing test");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let media = root.path().join("media");
     std::fs::create_dir_all(&media).unwrap();
@@ -135,10 +121,6 @@ fn a_single_reel_conform_signs_the_dcp_it_moves_out() {
 /// More reels means `assemble` writes the delivered CPL and PKL, not `create`.
 #[test]
 fn a_multi_reel_conform_signs_the_assembled_cpl() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not available, skipping multi-reel conform signing test");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let media = root.path().join("media");
     std::fs::create_dir_all(&media).unwrap();
@@ -177,10 +159,6 @@ fn a_multi_reel_conform_signs_the_assembled_cpl() {
 /// A signer that cannot sign has to stop the run before any reel is encoded.
 #[test]
 fn an_unusable_signer_fails_before_encoding() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not available, skipping unusable signer test");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let media = root.path().join("media");
     std::fs::create_dir_all(&media).unwrap();
@@ -216,10 +194,6 @@ fn an_unusable_signer_fails_before_encoding() {
 
 #[test]
 fn two_reel_edl_conforms_to_a_dcp() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not available, skipping conform assembly test");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let media = root.path().join("media");
     std::fs::create_dir_all(&media).unwrap();

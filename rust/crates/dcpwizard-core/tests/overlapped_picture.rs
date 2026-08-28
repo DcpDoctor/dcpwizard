@@ -15,14 +15,6 @@ const HEIGHT: u32 = 1080;
 const FRAMES: u64 = 4;
 const FPS: u32 = 24;
 
-fn have_ffmpeg() -> bool {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 fn make_clip(path: &Path) {
     let output = std::process::Command::new("ffmpeg")
         .args([
@@ -85,11 +77,6 @@ fn between(haystack: &str, start: &str, end: &str) -> String {
 
 #[test]
 fn a_video_build_wraps_its_picture_during_the_encode() {
-    if !have_ffmpeg() {
-        eprintln!("skipping: ffmpeg not available");
-        return;
-    }
-
     let root = tempfile::tempdir().unwrap();
     let video = root.path().join("clip.mp4");
     make_clip(&video);

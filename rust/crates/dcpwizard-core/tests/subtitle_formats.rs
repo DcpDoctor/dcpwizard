@@ -11,14 +11,6 @@ const W: u32 = 2048;
 const H: u32 = 1080;
 const FPS: u32 = 24;
 
-fn have(bin: &str, arg: &str) -> bool {
-    std::process::Command::new(bin)
-        .arg(arg)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 fn make_frames(dir: &Path, count: usize) {
     std::fs::create_dir_all(dir).unwrap();
     let seed = dir.join("seed.j2c");
@@ -61,10 +53,6 @@ const ASS: &str = "[Script Info]\n[V4+ Styles]\nFormat: Name, Italic, Alignment\
 
 #[test]
 fn ass_dcst_validates_against_st428_7_schema() {
-    if !have("xmllint", "--version") {
-        eprintln!("skipping: xmllint not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let ass = dir.path().join("in.ass");
     std::fs::write(&ass, ASS).unwrap();
@@ -256,17 +244,15 @@ fn a_named_appearance_reaches_the_packaged_timed_text_mxf() {
 /// form, the second namespace, and the CPL Hash on the subtitle asset.
 #[test]
 fn create_dcp_with_no_named_font_clears_the_timed_text_findings() {
-    if postkit::subtitle_raster::find_system_sans_font().is_none() {
-        eprintln!("skipping: this machine carries no system sans font");
-        return;
-    }
+    assert!(
+        postkit::subtitle_raster::find_system_sans_font().is_some(),
+        "this machine carries no system sans font"
+    );
     let dir = tempfile::tempdir().unwrap();
     let j2k = dir.path().join("j2k");
     std::fs::create_dir_all(&j2k).unwrap();
-    if dcpwizard_core::pad::generate_black_frame(W, H, FPS, &j2k.join("probe.j2c")).is_err() {
-        eprintln!("skipping: no J2K encoder on this machine");
-        return;
-    }
+    dcpwizard_core::pad::generate_black_frame(W, H, FPS, &j2k.join("probe.j2c"))
+        .expect("a J2K encoder");
     std::fs::remove_file(j2k.join("probe.j2c")).unwrap();
     make_frames(&j2k, 48);
     let srt = dir.path().join("in.srt");

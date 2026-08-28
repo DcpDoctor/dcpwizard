@@ -50,12 +50,7 @@ fn expected_xyz(rgb16: [u16; 3]) -> [u16; 3] {
 }
 
 fn grk_decompress_bin() -> std::path::PathBuf {
-    std::env::var("GRK_DECOMPRESS_BIN")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            std::path::PathBuf::from(home).join("bin/grok/bin/grk_decompress")
-        })
+    dcpwizard_core::j2k_transcode::find_grk_decompress().expect("grk_decompress on PATH")
 }
 
 /// Read the first sample of a PGX plane written by grk_decompress.
@@ -131,10 +126,6 @@ fn encode_solid(rgb16: [u16; 3], route: XyzRoute, dir: &Path) -> std::path::Path
 
 #[test]
 fn a_p3_source_encodes_to_p3_xyz_code_values() {
-    if !grk_decompress_bin().is_file() {
-        eprintln!("skip: grk_decompress not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let route = xyz_route(ColourSpace::P3).unwrap();
 
@@ -159,10 +150,6 @@ fn a_p3_source_encodes_to_p3_xyz_code_values() {
 
 #[test]
 fn logc_mid_grey_lands_on_the_rec709_mid_grey_codes() {
-    if !grk_decompress_bin().is_file() {
-        eprintln!("skip: grk_decompress not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
 
     let logc_dir = dir.path().join("logc");
@@ -196,10 +183,6 @@ fn logc_mid_grey_lands_on_the_rec709_mid_grey_codes() {
 
 #[test]
 fn p3_red_is_not_the_rec709_red_the_compressor_would_produce() {
-    if !grk_decompress_bin().is_file() {
-        eprintln!("skip: grk_decompress not found");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let red = [65535u16, 0, 0];
 

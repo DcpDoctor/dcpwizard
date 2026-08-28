@@ -14,7 +14,7 @@ const W: u32 = 2048;
 const H: u32 = 1080;
 
 /// Synthesize a 2-second test video (any size; the encoder rescales to 480x640).
-fn make_sign_video(path: &Path) -> bool {
+fn make_sign_video(path: &Path) {
     let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
@@ -29,9 +29,11 @@ fn make_sign_video(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    ok && path.exists()
+        .expect("run ffmpeg");
+    assert!(
+        ok.success() && path.exists(),
+        "ffmpeg wrote no sign language clip"
+    );
 }
 
 /// A short 6-channel 24-bit 48 kHz ramp WAV; build_slvs_sound widens it to 16ch
@@ -131,16 +133,13 @@ fn channel_15_bytes(wav: &Path, take: usize) -> Vec<u8> {
 
 #[test]
 fn sign_language_dcp_labels_channel_15_and_validates() {
-    if !ffmpeg_has_encoder("libvpx-vp9") {
-        eprintln!("skipping: ffmpeg has no libvpx-vp9 encoder");
-        return;
-    }
+    assert!(
+        ffmpeg_has_encoder("libvpx-vp9"),
+        "this ffmpeg has no libvpx-vp9 encoder"
+    );
     let dir = tempfile::tempdir().unwrap();
     let sign = dir.path().join("sign.mp4");
-    if !make_sign_video(&sign) {
-        eprintln!("skipping: could not synthesize a test video");
-        return;
-    }
+    make_sign_video(&sign);
     let main_wav = dir.path().join("main.wav");
     write_6ch_wav(&main_wav, 100);
 

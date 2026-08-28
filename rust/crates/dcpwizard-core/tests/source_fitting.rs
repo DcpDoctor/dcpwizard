@@ -22,9 +22,9 @@ const TWO_K_SCOPE: (u32, u32) = (2048, 858);
 
 /// A letterboxed HD clip: colour bars at the scope aspect with real black above
 /// and below them.
-fn make_letterboxed_clip(path: &Path) -> bool {
+fn make_letterboxed_clip(path: &Path) {
     let duration = format!("{}", FRAMES as f32 / FPS as f32);
-    std::process::Command::new("ffmpeg")
+    let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
             "-loglevel",
@@ -43,9 +43,11 @@ fn make_letterboxed_clip(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(
+        ok.success() && path.exists(),
+        "ffmpeg wrote no letterboxed clip"
+    );
 }
 
 /// A stereo 48 kHz WAV covering the content, so the CPL carries the
@@ -128,10 +130,7 @@ fn area(cpl: &str, block_name: &str) -> (u32, u32) {
 fn a_letterboxed_source_fills_the_scope_container_on_the_two_k_raster() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("letterboxed.mp4");
-    if !make_letterboxed_clip(&clip) {
-        eprintln!("skipping: ffmpeg could not build the letterboxed source");
-        return;
-    }
+    make_letterboxed_clip(&clip);
 
     let resolved = resolve_picture(
         &SourcePictureOptions {

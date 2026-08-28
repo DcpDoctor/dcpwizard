@@ -16,8 +16,8 @@ const TRIM_START: u64 = 3;
 const TRIM_END: u64 = 3;
 const KEPT: u64 = SOURCE_FRAMES - TRIM_START - TRIM_END;
 
-fn make_clip(path: &Path) -> bool {
-    std::process::Command::new("ffmpeg")
+fn make_clip(path: &Path) {
+    let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
             "-loglevel",
@@ -33,9 +33,8 @@ fn make_clip(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no source clip");
 }
 
 fn codestream_name(index: u64) -> String {
@@ -76,10 +75,7 @@ fn encode(
 fn a_trimmed_video_encodes_the_kept_window_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("source.mp4");
-    if !make_clip(&clip) {
-        eprintln!("skipping: ffmpeg could not build the source clip");
-        return;
-    }
+    make_clip(&clip);
 
     // the shared decision both front ends read: a video is windowed, so neither
     // relinks the codestreams afterwards

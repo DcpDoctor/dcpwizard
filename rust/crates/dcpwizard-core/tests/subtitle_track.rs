@@ -8,14 +8,6 @@ use std::path::Path;
 
 const SRT: &str = "1\n00:00:01,000 --> 00:00:04,000\nHello world\n\n2\n00:00:05,500 --> 00:00:08,000\nSecond line\nwith two rows\n";
 
-fn xmllint_available() -> bool {
-    std::process::Command::new("xmllint")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 #[test]
 fn srt_wraps_into_a_registered_timed_text_track() {
     let dir = tempfile::tempdir().unwrap();
@@ -33,18 +25,16 @@ fn srt_wraps_into_a_registered_timed_text_track() {
     );
 
     // 2. Validate against the vendored ST 428-7 schema.
-    if xmllint_available() {
-        let xsd = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/DCDMSubtitle-2010.xsd");
-        let ok = std::process::Command::new("xmllint")
-            .args(["--noout", "--schema"])
-            .arg(&xsd)
-            .arg(&dcst)
-            .output()
-            .expect("run xmllint")
-            .status
-            .success();
-        assert!(ok, "DCST XML must validate against ST 428-7 XSD");
-    }
+    let xsd = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/DCDMSubtitle-2010.xsd");
+    let ok = std::process::Command::new("xmllint")
+        .args(["--noout", "--schema"])
+        .arg(&xsd)
+        .arg(&dcst)
+        .output()
+        .expect("run xmllint")
+        .status
+        .success();
+    assert!(ok, "DCST XML must validate against ST 428-7 XSD");
 
     // 3. Wrap the DCST XML into a timed-text MXF (real asdcplib).
     let mxf = dir.path().join("sub.mxf");

@@ -12,7 +12,7 @@ const FRAMES: usize = 8;
 const CLIP_FRAMES: u32 = 24;
 const SAMPLE_RATE: u32 = 48_000;
 
-fn make_clip(path: &Path, with_sound: bool) -> bool {
+fn make_clip(path: &Path, with_sound: bool) {
     let mut command = std::process::Command::new("ffmpeg");
     command.args([
         "-y",
@@ -33,13 +33,12 @@ fn make_clip(path: &Path, with_sound: bool) -> bool {
             "2",
         ]);
     }
-    command
+    let ok = command
         .args(["-frames:v", &CLIP_FRAMES.to_string(), "-shortest"])
         .arg(path)
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no source clip");
 }
 
 fn make_frames(dir: &Path) -> PathBuf {
@@ -98,10 +97,7 @@ fn sound_mxfs(dir: &Path) -> Vec<PathBuf> {
 fn the_sources_own_audio_is_extracted_when_no_wav_is_named() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("with_sound.mp4");
-    if !make_clip(&clip, true) {
-        eprintln!("skipping: ffmpeg could not build the source clip");
-        return;
-    }
+    make_clip(&clip, true);
 
     let extracted =
         dcpwizard_core::audio_fallback::extract_embedded_audio(&clip, &dir.path().join("work"))
@@ -128,10 +124,7 @@ fn the_sources_own_audio_is_extracted_when_no_wav_is_named() {
 fn a_source_without_audio_extracts_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("mute.mp4");
-    if !make_clip(&clip, false) {
-        eprintln!("skipping: ffmpeg could not build the source clip");
-        return;
-    }
+    make_clip(&clip, false);
 
     let work = dir.path().join("work");
     assert!(

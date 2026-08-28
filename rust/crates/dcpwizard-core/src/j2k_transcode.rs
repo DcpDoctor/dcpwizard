@@ -679,13 +679,13 @@ fn scale_tiff(tif: &Path, w: u32, h: u32) -> bool {
     }
 }
 
-fn find_grk_decompress() -> Option<PathBuf> {
+/// Locate grk_decompress: beside grk_compress in `$HOME/bin/grok/bin`, else PATH.
+pub fn find_grk_decompress() -> Option<PathBuf> {
     let exe = if cfg!(windows) {
         "grk_decompress.exe"
     } else {
         "grk_decompress"
     };
-    // sibling of grk_compress in ~/bin/grok/bin, else PATH
     if let Some(comp) = crate::grok::find_grk_compress()
         && let Some(dir) = comp.parent()
     {

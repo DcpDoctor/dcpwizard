@@ -1755,10 +1755,10 @@ mod tests {
     /// resource the LoadFont urn names.
     #[test]
     fn a_track_with_no_named_font_embeds_a_system_one() {
-        if postkit::subtitle_raster::find_system_sans_font().is_none() {
-            eprintln!("skipping: this machine carries no system sans font");
-            return;
-        }
+        assert!(
+            postkit::subtitle_raster::find_system_sans_font().is_some(),
+            "this machine carries no system sans font"
+        );
         let dir = tempfile::tempdir().unwrap();
         let srt = write(dir.path(), "in.srt", SRT2);
         let out = dir.path().join("out.xml");

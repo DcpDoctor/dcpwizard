@@ -8,14 +8,6 @@ user-facing surface is here.
 
 ## Open
 
-- No test reads a DCP built from a video source back. `picture_readback.rs`
-  builds its source with `pad::generate_solid_frame`, which runs postkit's
-  `colour::rgb_to_xyz_inplace`, while a `create --video` build converts through
-  grok's `apply_xyz_transform`. The two agree on red within the source's
-  precision (DESIGN.md has the numbers), so the same assertion would cover a
-  video build. What stops it is that a video source needs ffmpeg, which the CI
-  runners do not have.
-
 - GUI re-verification owed. None of it has been clicked through in a running
   window: the QC overlays drawn at and across end of file, without freezing and
   without a frame-rate hit (watch the HUD decoder fps), the playlist behaviour
@@ -200,7 +192,7 @@ one side, mirror the other:
   imfwizard, dcpdoctor differing by binary/artifact names + per-app build deps.
   Separate git repos, so no shared reusable-workflow without a central repo. Keep
   aligned by hand. Every job that compiles the rust workspace sets grok up through
-  PostPerfection/setup-grok@v1 at grok-ref v20.3.12, windows on a separate msvc
+  PostPerfection/setup-grok@v1 at grok-ref v20.4.0, windows on a separate msvc
   build of the same tag. All three platforms are required in ci, none are
   continue-on-error.
   imfwizard sets grok up in ci, release and gui-release the same way, and links

@@ -381,24 +381,9 @@ mod tests {
         }
     }
 
-    fn xmllint_available() -> bool {
-        std::process::Command::new("xmllint")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
     #[test]
     fn signed_documents_still_validate_against_their_schemas() {
-        if !xmllint_available() {
-            eprintln!("skipping: xmllint not installed");
-            return;
-        }
-        let Some(schemas) = schema_dir() else {
-            eprintln!("skipping: the dcpdoctor schemas checkout is absent");
-            return;
-        };
+        let schemas = schema_dir().expect("the dcpdoctor schemas submodule");
 
         let dir = tempfile::tempdir().unwrap();
         let signer = chain(dir.path());

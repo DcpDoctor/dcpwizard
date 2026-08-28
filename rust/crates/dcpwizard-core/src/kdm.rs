@@ -575,14 +575,6 @@ mod tests {
         )
     }
 
-    fn xmlsec1_available() -> bool {
-        std::process::Command::new("xmlsec1")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
     // Real end-to-end batch: distinct recipients, bound content KeyId, signed.
     #[test]
     fn batch_generates_one_signed_kdm_per_recipient_bound_to_the_key() {
@@ -660,7 +652,9 @@ mod tests {
             );
             assert!(xml.contains("<ds:Signature"), "KDM must be signed");
 
-            if xmlsec1_available() {
+            // no vcpkg port ships an xmlsec1 binary for windows
+            #[cfg(not(windows))]
+            {
                 let ok = std::process::Command::new("xmlsec1")
                     .arg("--verify")
                     .arg("--trusted-pem")
@@ -819,7 +813,9 @@ mod tests {
         );
         assert!(xml.contains("<ds:Signature"), "interop KDM must be signed");
 
-        if xmlsec1_available() {
+        // no vcpkg port ships an xmlsec1 binary for windows
+        #[cfg(not(windows))]
+        {
             let ok = std::process::Command::new("xmlsec1")
                 .arg("--verify")
                 .arg("--trusted-pem")

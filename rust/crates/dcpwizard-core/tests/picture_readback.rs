@@ -8,6 +8,8 @@ use dcpwizard_core::dcp::{DcpConfig, create_dcp};
 use postkit::colour::{ColourSpace, DcdmTransform};
 use postkit::j2k::J2kProfile;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 const WIDTH: u32 = 2048;
 const HEIGHT: u32 = 1080;
@@ -43,8 +45,56 @@ fn red_frame_dir(dir: &Path) -> PathBuf {
     j2k
 }
 
-/// Package the red frames into a real DCP and return the picture MXF.
-fn red_picture_mxf(dir: &Path) -> PathBuf {
+/// A solid red clip, the source shape a `create --video` build starts from.
+fn red_clip(path: &Path) {
+    let ok = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=c=red:s={WIDTH}x{HEIGHT}:rate={FPS}"),
+            "-frames:v",
+            &FRAMES.to_string(),
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "gbrp12le",
+        ])
+        .arg(path)
+        .status()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no red clip");
+}
+
+/// Encode the red clip through the pipeline a `create --video` build runs, which
+/// reaches X'Y'Z' through grok's transform rather than `pad::generate_solid_frame`.
+fn red_video_frame_dir(dir: &Path) -> PathBuf {
+    let clip = dir.join("red.mkv");
+    red_clip(&clip);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let pause = Arc::new(AtomicBool::new(false));
+    let encoded = postkit::pipeline::run_encode_with_options(
+        &clip,
+        &dir.join("encode"),
+        &postkit::pipeline::EncodeRunOptions {
+            fps: postkit::encode::FrameRate::whole(FPS),
+            ..Default::default()
+        },
+        &cancel,
+        &pause,
+        |_progress| {},
+        |_message| {},
+    )
+    .expect("the red clip encodes");
+    assert_eq!(encoded.frames_encoded, FRAMES as u64);
+    encoded.j2k_dir
+}
+
+/// Package red frames into a real DCP and return the picture MXF.
+fn red_picture_mxf(dir: &Path, j2k_dir: PathBuf) -> PathBuf {
     let out = dir.join("dcp");
     let config = DcpConfig {
         title: "RedReadback".into(),
@@ -54,7 +104,7 @@ fn red_picture_mxf(dir: &Path) -> PathBuf {
         frame_rate_num: FPS,
         frame_rate_den: 1,
         output_dir: out.clone(),
-        j2k_dir: Some(red_frame_dir(dir)),
+        j2k_dir: Some(j2k_dir),
         ..Default::default()
     };
     assert_eq!(create_dcp(&config), 0, "create_dcp must succeed");
@@ -93,11 +143,7 @@ fn decode_centre_pixel(mxf: &Path) -> [i32; DCI_COMPONENTS] {
     ]
 }
 
-#[test]
-fn the_produced_picture_is_a_dci_cinema_xyz_track_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let mxf = red_picture_mxf(dir.path());
-
+fn assert_dci_cinema_xyz_red(mxf: &Path) {
     assert_eq!(
         asdcplib::essence_type(&mxf.to_string_lossy()).expect("essence type"),
         asdcplib::EssenceType::Jpeg2000,
@@ -135,7 +181,7 @@ fn the_produced_picture_is_a_dci_cinema_xyz_track_file() {
         );
     }
 
-    let decoded = decode_centre_pixel(&mxf);
+    let decoded = decode_centre_pixel(mxf);
     let expected = DcdmTransform::to_xyz(ColourSpace::Rec709)
         .expect("rec709 dcdm transform")
         .pixel(SOURCE_RED, DCI_MAX_CODE);
@@ -157,9 +203,24 @@ fn the_produced_picture_is_a_dci_cinema_xyz_track_file() {
 }
 
 #[test]
+fn the_produced_picture_is_a_dci_cinema_xyz_track_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = red_frame_dir(dir.path());
+    assert_dci_cinema_xyz_red(&red_picture_mxf(dir.path(), j2k));
+}
+
+#[test]
+fn a_video_source_produces_the_same_dci_cinema_xyz_track_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = red_video_frame_dir(dir.path());
+    assert_dci_cinema_xyz_red(&red_picture_mxf(dir.path(), j2k));
+}
+
+#[test]
 fn the_preview_turns_the_picture_back_into_red() {
     let dir = tempfile::tempdir().unwrap();
-    let mxf = red_picture_mxf(dir.path());
+    let j2k = red_frame_dir(dir.path());
+    let mxf = red_picture_mxf(dir.path(), j2k);
     let ppm = dir.path().join("frame.ppm");
 
     assert_eq!(

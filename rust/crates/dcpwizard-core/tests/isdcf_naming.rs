@@ -20,14 +20,6 @@ const DATE: IsdcfDate = IsdcfDate {
     day: 16,
 };
 
-fn ffmpeg_available() -> bool {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 /// A short testsrc clip encoded to J2K frames through the real create pipeline's
 /// input shape: a codestream directory.
 fn make_frames(dir: &Path) -> PathBuf {
@@ -43,9 +35,9 @@ fn make_frames(dir: &Path) -> PathBuf {
 
 /// A stereo 24-bit 48 kHz clip as long as the picture, written by ffmpeg so the
 /// sound comes from the same tool the create path demuxes with.
-fn make_stereo_wav(path: &Path) -> bool {
+fn make_stereo_wav(path: &Path) {
     let seconds = FRAMES as f64 / FPS as f64;
-    std::process::Command::new("ffmpeg")
+    let ok = std::process::Command::new("ffmpeg")
         .args([
             "-y",
             "-loglevel",
@@ -61,9 +53,8 @@ fn make_stereo_wav(path: &Path) -> bool {
         ])
         .arg(path)
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-        && path.exists()
+        .expect("run ffmpeg");
+    assert!(ok.success() && path.exists(), "ffmpeg wrote no test sound");
 }
 
 fn read_cpl(dir: &Path) -> String {
@@ -82,16 +73,9 @@ fn read_cpl(dir: &Path) -> String {
 
 #[test]
 fn a_named_dcp_carries_its_isdcf_title_ratings_and_content_version() {
-    if !ffmpeg_available() {
-        eprintln!("skipping: ffmpeg not installed");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("stereo.wav");
-    if !make_stereo_wav(&audio) {
-        eprintln!("skipping: ffmpeg could not synthesize the test sound");
-        return;
-    }
+    make_stereo_wav(&audio);
     let out = dir.path().join("dcp");
 
     let mut config = DcpConfig {
@@ -196,16 +180,9 @@ fn a_named_dcp_carries_its_isdcf_title_ratings_and_content_version() {
 /// time.
 #[test]
 fn a_stereo_source_filled_to_sixteen_channels_is_still_named_20() {
-    if !ffmpeg_available() {
-        eprintln!("skipping: ffmpeg not installed");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("stereo.wav");
-    if !make_stereo_wav(&audio) {
-        eprintln!("skipping: ffmpeg could not synthesize the test sound");
-        return;
-    }
+    make_stereo_wav(&audio);
     let out = dir.path().join("dcp");
 
     let mut config = DcpConfig {
