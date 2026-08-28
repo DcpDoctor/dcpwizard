@@ -13,43 +13,16 @@ const W: u32 = 2048;
 const H: u32 = 1080;
 const FPS: u32 = 24;
 
-/// Synthesize a real APV clip with the local ffmpeg (raw .apv container).
-fn make_apv(path: &Path, frames: u32) {
-    let dur = format!("{}", frames as f32 / FPS as f32);
-    let ok = std::process::Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            &format!("testsrc=duration={dur}:size={W}x{H}:rate={FPS}"),
-            "-c:v",
-            "apv",
-            "-pix_fmt",
-            "yuv422p10le",
-        ])
-        .arg(path)
-        .output()
-        .expect("run ffmpeg");
-    assert!(
-        ok.status.success() && path.exists(),
-        "{}
-  stdout: {}
-  stderr: {}",
-        "ffmpeg wrote no APV clip",
-        String::from_utf8_lossy(&ok.stdout).trim(),
-        String::from_utf8_lossy(&ok.stderr).trim(),
-    );
+/// Six frames of ffmpeg's testsrc as raw APV, see tests/fixtures/apv/README.md.
+fn apv_fixture() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/apv/testsrc_6f_2048x1080.apv")
 }
 
 #[test]
 fn apv_source_becomes_a_valid_dcp() {
     assert!(ffmpeg_has_decoder("apv"), "this ffmpeg has no apv decoder");
     let dir = tempfile::tempdir().unwrap();
-    let apv = dir.path().join("clip.apv");
-    make_apv(&apv, 6);
+    let apv = apv_fixture();
 
     // the decoder gate admits APV
     assert_eq!(source_video_codec(&apv).unwrap(), "apv");
