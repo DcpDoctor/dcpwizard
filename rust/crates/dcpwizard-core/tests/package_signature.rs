@@ -168,8 +168,8 @@ fn signed_package_verifies_and_the_pkl_hash_matches_the_signed_cpl() {
     );
 
     // the whole-document enveloped profile needs no --id-attr hints
-    xmlsec_tool::assert_verifies(&cpl, &certs.join("root.pem"), &[]);
-    xmlsec_tool::assert_verifies(&pkl, &certs.join("root.pem"), &[]);
+    xmlsec_tool::assert_verifies(&cpl, &certs, &[]);
+    xmlsec_tool::assert_verifies(&pkl, &certs, &[]);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn tampering_with_a_signed_cpl_breaks_its_signature() {
 
     let tampered_path = out.join("CPL_tampered.xml");
     std::fs::write(&tampered_path, &tampered).unwrap();
-    let rejected = xmlsec_tool::verify(&tampered_path, &certs.join("root.pem"), &[]);
+    let rejected = xmlsec_tool::verify(&tampered_path, &certs, &[]);
     assert!(
         !rejected.status.success(),
         "xmlsec1 must reject the tampered {}",

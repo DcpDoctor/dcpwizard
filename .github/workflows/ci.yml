@@ -136,7 +136,7 @@ jobs:
 
       - name: Test
         working-directory: rust
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Clippy
         working-directory: rust

@@ -3,7 +3,11 @@
 //! Linux and macOS are on different major versions: 1.3 searches keys strictly,
 //! so a document whose KeyInfo does not name its key fails to verify unless
 //! `--lax-key-search` is passed, and 1.3 stopped printing error detail unless
-//! `--verbose` is. Neither flag exists in 1.2, so both are probed for.
+//! `--verbose` is. Neither flag exists in 1.2, so both are probed for. 1.3 also
+//! does not chain through the sibling X509Data a DCP signature puts the
+//! intermediate in, so the chain directory's intermediate.pem goes in as
+//! `--untrusted-pem`. The msys2 build on Windows defaults to the mscrypto
+//! backend, which cannot load a pem certificate, so it is told to use openssl.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -32,13 +36,21 @@ pub fn compatibility_flags() -> &'static [&'static str] {
         .as_slice()
 }
 
-pub fn verify(doc: &Path, trusted_pem: &Path, extra: &[&str]) -> Output {
-    Command::new("xmlsec1")
-        .arg("--verify")
+/// Verify `doc` against the root.pem in `chain_dir`, as written by
+/// `postkit::certificate::generate_chain`.
+pub fn verify(doc: &Path, chain_dir: &Path, extra: &[&str]) -> Output {
+    let mut command = Command::new("xmlsec1");
+    command.arg("--verify");
+    if cfg!(windows) {
+        command.args(["--crypto", "openssl"]);
+    }
+    command
         .args(compatibility_flags())
         .args(extra)
         .arg("--trusted-pem")
-        .arg(trusted_pem)
+        .arg(chain_dir.join("root.pem"))
+        .arg("--untrusted-pem")
+        .arg(chain_dir.join("intermediate.pem"))
         .arg(doc)
         .output()
         .expect("run xmlsec1")
@@ -55,8 +67,8 @@ pub fn report(doc: &Path, out: &Output) -> String {
     )
 }
 
-pub fn assert_verifies(doc: &Path, trusted_pem: &Path, extra: &[&str]) {
-    let out = verify(doc, trusted_pem, extra);
+pub fn assert_verifies(doc: &Path, chain_dir: &Path, extra: &[&str]) {
+    let out = verify(doc, chain_dir, extra);
     assert!(
         out.status.success(),
         "xmlsec1 must verify {}",

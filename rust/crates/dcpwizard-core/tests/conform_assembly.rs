@@ -54,7 +54,7 @@ fn file_starting_with(dir: &Path, prefix: &str) -> PathBuf {
 }
 
 /// The delivered CPL and PKL each carry a ds:Signature that really verifies.
-fn assert_signed(out: &Path, trusted_pem: &Path) {
+fn assert_signed(out: &Path, chain_dir: &Path) {
     for prefix in ["CPL_", "PKL_"] {
         let doc = file_starting_with(out, prefix);
         let text = std::fs::read_to_string(&doc).unwrap();
@@ -63,7 +63,7 @@ fn assert_signed(out: &Path, trusted_pem: &Path) {
             "{} carries no ds:Signature",
             doc.display()
         );
-        xmlsec_tool::assert_verifies(&doc, trusted_pem, &[]);
+        xmlsec_tool::assert_verifies(&doc, chain_dir, &[]);
     }
 }
 
@@ -94,7 +94,7 @@ fn a_single_reel_conform_signs_the_dcp_it_moves_out() {
         0,
         "signed single-reel conform"
     );
-    assert_signed(&out, &certs.join("root.pem"));
+    assert_signed(&out, &certs);
 
     let result = dcpwizard_core::verify::verify_dcp(&out);
     assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);
@@ -129,7 +129,7 @@ fn a_multi_reel_conform_signs_the_assembled_cpl() {
         0,
         "signed multi-reel conform"
     );
-    assert_signed(&out, &certs.join("root.pem"));
+    assert_signed(&out, &certs);
 
     let cpl = std::fs::read_to_string(file_starting_with(&out, "CPL_")).unwrap();
     assert_eq!(cpl.matches("<Reel>").count(), 2, "two reels in the CPL");

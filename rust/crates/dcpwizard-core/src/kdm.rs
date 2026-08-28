@@ -599,12 +599,21 @@ mod tests {
     }
 
     /// A KDM signs two subtrees by Id, so the verify needs both --id-attr hints.
-    fn assert_kdm_verifies(kdm: &Path, root_pem: &Path, what: &str) {
-        let out = std::process::Command::new("xmlsec1")
-            .arg("--verify")
+    /// The signer's intermediate sits in its own X509Data, which xmlsec 1.3 does
+    /// not chain through on its own, so it goes in as --untrusted-pem.
+    fn assert_kdm_verifies(kdm: &Path, root_pem: &Path, intermediate_pem: &Path, what: &str) {
+        let mut command = std::process::Command::new("xmlsec1");
+        command.arg("--verify");
+        // the msys2 build defaults to mscrypto, which cannot load a pem cert
+        if cfg!(windows) {
+            command.args(["--crypto", "openssl"]);
+        }
+        let out = command
             .args(xmlsec1_compatibility_flags())
             .arg("--trusted-pem")
             .arg(root_pem)
+            .arg("--untrusted-pem")
+            .arg(intermediate_pem)
             .args(["--id-attr:Id", "AuthenticatedPublic"])
             .args(["--id-attr:Id", "AuthenticatedPrivate"])
             .arg(kdm)
@@ -698,7 +707,12 @@ mod tests {
             );
             assert!(xml.contains("<ds:Signature"), "KDM must be signed");
 
-            assert_kdm_verifies(kdm, &dir.path().join("root.pem"), "batch KDM");
+            assert_kdm_verifies(
+                kdm,
+                &dir.path().join("root.pem"),
+                &dir.path().join("intermediate.pem"),
+                "batch KDM",
+            );
         }
     }
 
@@ -844,6 +858,11 @@ mod tests {
         );
         assert!(xml.contains("<ds:Signature"), "interop KDM must be signed");
 
-        assert_kdm_verifies(&out, &dir.path().join("root.pem"), "interop KDM");
+        assert_kdm_verifies(
+            &out,
+            &dir.path().join("root.pem"),
+            &dir.path().join("intermediate.pem"),
+            "interop KDM",
+        );
     }
 }
