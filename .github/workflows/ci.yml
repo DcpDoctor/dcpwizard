@@ -178,7 +178,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb
+          sudo apt-get install -y pkg-config libxml2-dev libssl-dev libxerces-c-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb xdotool
 
       - name: Setup grok
         uses: PostPerfection/setup-grok@v1
@@ -204,9 +204,13 @@ jobs:
           cp target/release/dcpwizard ../gui/src-tauri/dcpwizard-${TRIPLE}
 
       - name: Build the GUI
-        run: cargo build --release --manifest-path gui/src-tauri/Cargo.toml
+        # without custom-protocol tauri builds a dev binary that loads the vite
+        # dev url instead of the embedded frontend, tauri build turns it on
+        run: cargo build --release --manifest-path gui/src-tauri/Cargo.toml --features tauri/custom-protocol
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: GUI tests
-        run: xvfb-run -a uv run --no-project --with pytest pytest tests/test_gui.py -q
+      - name: GUI launch test
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+            uv run --no-project --with pytest --with python-xlib pytest tests/test_gui.py -q
