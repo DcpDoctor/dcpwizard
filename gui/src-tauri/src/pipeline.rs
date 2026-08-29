@@ -95,6 +95,15 @@ pub struct IsdcfNameRequest {
     pub atmos: Option<String>,
     pub facility: Option<String>,
     pub naming: NamingMetadata,
+    pub source_width: Option<u32>,
+    pub source_height: Option<u32>,
+    pub crop_left: Option<u32>,
+    pub crop_right: Option<u32>,
+    pub crop_top: Option<u32>,
+    pub crop_bottom: Option<u32>,
+    pub rotate: Option<String>,
+    #[serde(skip)]
+    pub picture_raster: Option<(u32, u32)>,
 }
 
 const CONTENT_VERSION_SEPARATOR: char = ',';
@@ -112,6 +121,46 @@ fn resolution_of(resolution: &str) -> dcpwizard_core::Resolution {
     } else {
         dcpwizard_core::Resolution::TwoK
     }
+}
+
+fn resolution_of_raster(width: u32, height: u32) -> dcpwizard_core::Resolution {
+    if width > dcpwizard_core::Resolution::TwoK.width()
+        || height > dcpwizard_core::Resolution::TwoK.height()
+    {
+        dcpwizard_core::Resolution::FourK
+    } else {
+        dcpwizard_core::Resolution::TwoK
+    }
+}
+
+fn request_picture_raster(request: &IsdcfNameRequest) -> Result<Option<(u32, u32)>, String> {
+    if request.resolution.as_deref() != Some("auto") {
+        return Ok(None);
+    }
+    let (Some(width), Some(height)) = (request.source_width, request.source_height) else {
+        return Ok(None);
+    };
+    let options = dcpwizard_core::source_picture::SourcePictureOptions {
+        crop: postkit::picture_processing::Crop {
+            left: request.crop_left.unwrap_or(0),
+            right: request.crop_right.unwrap_or(0),
+            top: request.crop_top.unwrap_or(0),
+            bottom: request.crop_bottom.unwrap_or(0),
+        },
+        rotation: postkit::picture_processing::parse_rotation(
+            request.rotate.as_deref().unwrap_or_default(),
+        )?,
+        ..Default::default()
+    };
+    let resolved = dcpwizard_core::source_picture::resolve_picture(
+        &options,
+        Path::new("source"),
+        width,
+        height,
+        &dcpwizard_core::source_picture::EncodeGeometry::default(),
+        false,
+    )?;
+    Ok(Some((resolved.encode_width, resolved.encode_height)))
 }
 
 fn content_type_of(content_kind: &str) -> dcpwizard_core::ContentType {
@@ -163,7 +212,13 @@ fn territory_type_of(
 /// The ISDCF content title for what the panel currently holds.
 fn isdcf_name_for(request: &IsdcfNameRequest) -> Result<String, String> {
     let resolution = request.resolution.as_deref().unwrap_or(DEFAULT_RESOLUTION);
-    let (container_width, container_height) = container_of(resolution);
+    let picture_raster = if resolution == "auto" {
+        request.picture_raster.or(request_picture_raster(request)?)
+    } else {
+        None
+    };
+    let (container_width, container_height) =
+        picture_raster.unwrap_or_else(|| container_of(resolution));
     let (frame_rate_num, frame_rate_den) =
         frame_rate_of(request.framerate.as_deref().unwrap_or(DEFAULT_FRAME_RATE.0));
     let some_path = |value: &Option<String>| {
@@ -176,7 +231,9 @@ fn isdcf_name_for(request: &IsdcfNameRequest) -> Result<String, String> {
     let config = dcpwizard_core::dcp::DcpConfig {
         title: request.title.clone(),
         standard: standard_of(request.standard.as_deref().unwrap_or(DEFAULT_STANDARD)),
-        resolution: resolution_of(resolution),
+        resolution: picture_raster
+            .map(|(width, height)| resolution_of_raster(width, height))
+            .unwrap_or_else(|| resolution_of(resolution)),
         content_type: content_type_of(
             request
                 .content_kind
@@ -356,6 +413,39 @@ pub struct JobConfig {
     tail_items: Vec<dcpwizard_core::library::AttachedItem>,
 }
 
+fn apply_isdcf_name_to_job(
+    job: &mut JobConfig,
+    picture_raster: Option<(u32, u32)>,
+) -> Result<(), String> {
+    if !job.naming.isdcf_naming {
+        return Ok(());
+    }
+    let request = IsdcfNameRequest {
+        title: job.title.clone(),
+        standard: Some(job.standard.clone()),
+        resolution: Some(job.resolution.clone()),
+        framerate: Some(job.framerate.clone()),
+        content_kind: Some(job.content_kind.clone()),
+        audio_path: job.audio_path.clone(),
+        subtitle: job.subtitle.clone(),
+        subtitle_language: Some(job.subtitle_language.clone()),
+        burn_subtitle: job.burn_subtitle.clone(),
+        ccap: job.ccap.clone(),
+        ccap_language: Some(job.ccap_language.clone()),
+        right_eye: job.right_eye.clone(),
+        atmos: job.atmos.clone(),
+        facility: job.facility.clone(),
+        naming: job.naming.clone(),
+        picture_raster,
+        ..Default::default()
+    };
+    let name = isdcf_name_for(&request)?;
+    job.output_dir =
+        renamed_output_dir(job.output_dir.to_string_lossy().as_ref(), &job.title, &name);
+    job.title = name;
+    Ok(())
+}
+
 // ─── Queue state (managed by Tauri) ────────────────────────────────────────
 
 impl postkit::gui_job_queue::GuiJob for JobConfig {
@@ -531,47 +621,6 @@ pub async fn submit_job(
     let framerate = framerate.unwrap_or_else(|| DEFAULT_FRAME_RATE.0.into());
     let naming = naming.unwrap_or_default();
     let facility = facility.filter(|code| !code.is_empty());
-
-    // the ISDCF name replaces the title, and the panel derives the output folder
-    // from the title, so the folder follows the name it was derived from
-    let (title, output_path) = if naming.isdcf_naming {
-        let name = isdcf_name_for(&IsdcfNameRequest {
-            title: title.clone(),
-            standard: standard.clone(),
-            resolution: resolution.clone(),
-            framerate: Some(framerate.clone()),
-            content_kind: content_kind.clone(),
-            audio_path: audio_path.clone(),
-            subtitle: subtitle.clone(),
-            subtitle_language: subtitle_language.clone(),
-            burn_subtitle: burn_subtitle.clone(),
-            ccap: ccap.clone(),
-            ccap_language: ccap_language.clone(),
-            right_eye: right_eye.clone(),
-            atmos: atmos.clone(),
-            facility: facility.clone(),
-            naming: naming.clone(),
-        })?;
-        let output_path = renamed_output_dir(&output_dir, &title, &name);
-        (name, output_path)
-    } else {
-        (title, PathBuf::from(&output_dir))
-    };
-
-    // packages are folders named by title, so a reused title lands in the old
-    // package. refuse now, not after the encode.
-    if holds_dcp(&output_path) {
-        return Err(format!(
-            "Output folder already holds a DCP: {}. Use a new title or output folder, or delete the old package first.",
-            output_path.display()
-        ));
-    }
-    if queue.is_building_into(&output_path) {
-        return Err(format!(
-            "A build is already running into {}. Wait for it to finish or cancel it.",
-            output_path.display()
-        ));
-    }
 
     let audio_input_order = parse_audio_input_order(audio_input_order.as_deref())?;
 
@@ -832,11 +881,11 @@ pub async fn submit_job(
         }
     };
 
-    let job = JobConfig {
+    let mut job = JobConfig {
         id,
         video_path: PathBuf::from(&video_path),
         title: title.clone(),
-        output_dir: output_path,
+        output_dir: PathBuf::from(&output_dir),
         audio_path,
         validate: validate.unwrap_or(false),
         standard: standard.unwrap_or_else(|| DEFAULT_STANDARD.into()),
@@ -892,8 +941,23 @@ pub async fn submit_job(
         tail_items,
     };
 
-    let plan = job_plan(&job);
-    dcpwizard_core::preflight::check_before_encode(&plan)?;
+    let (plan, planned_picture) = checked_job_plan(&job)?;
+    apply_isdcf_name_to_job(&mut job, planned_picture.map(|picture| picture.raster))?;
+
+    // packages are folders named by title, so a reused title lands in the old
+    // package. refuse now, not after the encode.
+    if holds_dcp(&job.output_dir) {
+        return Err(format!(
+            "Output folder already holds a DCP: {}. Use a new title or output folder, or delete the old package first.",
+            job.output_dir.display()
+        ));
+    }
+    if queue.is_building_into(&job.output_dir) {
+        return Err(format!(
+            "A build is already running into {}. Wait for it to finish or cancel it.",
+            job.output_dir.display()
+        ));
+    }
     let hints: Vec<String> = dcpwizard_core::hints::gather_hints(&plan)
         .into_iter()
         .map(|hint| hint.text)
@@ -996,6 +1060,25 @@ fn job_plan(job: &JobConfig) -> dcpwizard_core::preflight::CreatePlan {
         reel_split_frames: job.reel_split_frames.clone(),
         library_items: job.head_items.len() + job.tail_items.len(),
     }
+}
+
+fn checked_job_plan(
+    job: &JobConfig,
+) -> Result<
+    (
+        dcpwizard_core::preflight::CreatePlan,
+        Option<dcpwizard_core::preflight::PlannedPicture>,
+    ),
+    String,
+> {
+    let mut plan = job_plan(job);
+    let planned_picture = dcpwizard_core::preflight::plan_picture(&plan)?;
+    if let Some(picture) = planned_picture {
+        plan.four_k = resolution_of_raster(picture.raster.0, picture.raster.1)
+            == dcpwizard_core::Resolution::FourK;
+    }
+    dcpwizard_core::preflight::check_before_encode(&plan)?;
+    Ok((plan, planned_picture))
 }
 
 // ─── Delivery profiles ─────────────────────────────────────────────────────
@@ -1950,8 +2033,14 @@ fn build_dcp_config(
     reel_split_frames: Vec<u64>,
 ) -> dcpwizard_core::dcp::DcpConfig {
     let standard = standard_of(&job.standard);
-    let resolution = resolution_of(&job.resolution);
     let (container_width, container_height) = container_of(&job.resolution);
+    let resolution = if container_width == 0 && container_height == 0 {
+        dcpwizard_core::cpl::picture_geometry(&j2k_dir, 0, 0)
+            .map(|geometry| resolution_of_raster(geometry.stored_width, geometry.stored_height))
+            .unwrap_or_else(|_| resolution_of(&job.resolution))
+    } else {
+        resolution_of(&job.resolution)
+    };
     let content_type = content_type_of(&job.content_kind);
 
     let (frame_rate_num, frame_rate_den) = frame_rate_of(&job.framerate);
@@ -2684,6 +2773,63 @@ mod tests {
         let name = isdcf_name_for(&request).unwrap();
         assert!(name.starts_with("MyFilm_TST-1_F_EN-XX_MOS_2K_"), "{name}");
         assert!(name.ends_with("_PPF_SMPTE_OV"), "{name}");
+    }
+
+    #[test]
+    fn the_auto_name_preview_uses_the_cropped_source_raster() {
+        let request = IsdcfNameRequest {
+            title: "My Film".into(),
+            resolution: Some("auto".into()),
+            source_width: Some(4096),
+            source_height: Some(2160),
+            crop_top: Some(222),
+            crop_bottom: Some(222),
+            naming: NamingMetadata {
+                isdcf_naming: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let name = isdcf_name_for(&request).unwrap();
+        assert!(name.contains("_S_"), "{name}");
+        assert!(name.contains("_4K_"), "{name}");
+    }
+
+    #[test]
+    fn the_submitted_auto_name_uses_the_planned_raster() {
+        let mut job = JobConfig {
+            title: "My Film".into(),
+            output_dir: PathBuf::from("/out/My Film"),
+            resolution: "auto".into(),
+            naming: NamingMetadata {
+                isdcf_naming: true,
+                ..Default::default()
+            },
+            ..test_job()
+        };
+        apply_isdcf_name_to_job(&mut job, Some((4096, 1716))).unwrap();
+        assert!(job.title.contains("_S_"), "{}", job.title);
+        assert!(job.title.contains("_4K_"), "{}", job.title);
+        assert_eq!(job.output_dir, PathBuf::from("/out").join(&job.title));
+    }
+
+    #[test]
+    fn auto_four_k_uses_the_four_k_frame_rate_limit() {
+        let job = JobConfig {
+            resolution: "auto".into(),
+            framerate: "48".into(),
+            source: Some(postkit::probe::VideoInfo {
+                width: 4096,
+                height: 2160,
+                fps_num: 48,
+                fps_den: 1,
+                has_audio: false,
+                total_frames: 48,
+            }),
+            ..test_job()
+        };
+        let error = checked_job_plan(&job).expect_err("48 fps 4K must fail");
+        assert!(error.contains("4K"), "{error}");
     }
 
     #[test]

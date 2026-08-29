@@ -351,6 +351,8 @@ function importAssetFromPath(path, type) {
     probeVideo(path).then(info => {
       if (!info) return;
       asset.meta = `${info.width}×${info.height} ${info.fps}`;
+      asset.width = info.width;
+      asset.height = info.height;
       if (project.assets.filter(a => a.type === 'video').length === 1) {
         // Pre-fill resolution from first video
         const resEl = document.getElementById("prop-resolution");
@@ -369,6 +371,7 @@ function importAssetFromPath(path, type) {
           }
         }
       }
+      refreshIsdcfPreview();
       renderAssets();
     });
   }
@@ -490,6 +493,7 @@ document.getElementById("prop-auto-crop")?.addEventListener("click", async () =>
       if (field) field.value = crop[side];
     }
     refreshPreviewCrop();
+    refreshIsdcfPreview();
     if (plan) plan.textContent = crop.description;
   } catch (e) {
     if (plan) plan.textContent = "";
@@ -920,6 +924,13 @@ function isdcfNameRequest() {
     atmos: document.getElementById("prop-atmos")?.value || null,
     facility: getPrefs().facility || null,
     naming: namingMetadata(),
+    sourceWidth: reel?.picture?.width || null,
+    sourceHeight: reel?.picture?.height || null,
+    cropLeft: parseInt(document.getElementById("prop-crop-left")?.value) || 0,
+    cropRight: parseInt(document.getElementById("prop-crop-right")?.value) || 0,
+    cropTop: parseInt(document.getElementById("prop-crop-top")?.value) || 0,
+    cropBottom: parseInt(document.getElementById("prop-crop-bottom")?.value) || 0,
+    rotate: document.getElementById("prop-rotate")?.value || "none",
   };
 }
 
@@ -944,6 +955,7 @@ const ISDCF_PREVIEW_CONTROLS = [
   "prop-subtitle-language", "prop-ccap-language", "prop-audio-language", "prop-studio",
   "prop-territory-type", "prop-content-versions", "prop-temp-version", "prop-pre-release",
   "prop-red-band", "prop-two-d-version-of-three-d", "prop-version-file",
+  "prop-crop-left", "prop-crop-right", "prop-crop-top", "prop-crop-bottom", "prop-rotate",
 ];
 for (const id of ISDCF_PREVIEW_CONTROLS) {
   document.getElementById(id)?.addEventListener("input", refreshIsdcfPreview);

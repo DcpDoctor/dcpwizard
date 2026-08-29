@@ -46,12 +46,9 @@ user-facing surface is here.
   length also depends on padding the packager applies. Moving the refusal forward
   needs the padded length to be settled in the plan.
 
-- ISDCF naming, two open ends. The title builder takes free-text studio codes and
-  territories, where it could pull the current ISDCF registry instead of naming
-  from whatever the user typed. And the GUI builds the name at submit time, before
-  any frame is encoded, so a package whose picture resolution is Auto is named from
-  the flat fallback aspect rather than the raster the encoder lands on. The CLI
-  names after the encode and gets it right. CORE isdcf_title.rs, GUI pipeline.rs.
+- ISDCF naming takes free-text studio codes and territories, where it could pull
+  the current ISDCF registry instead of naming from whatever the user typed.
+  CORE isdcf_title.rs, GUI pipeline.rs.
 - Neither the macos nor the windows embedded-preview host has run on real
   hardware. All three hosts are implemented in guikit and CI compiles every
   platform, so what is left is a hand pass on a mac and on a windows box.
