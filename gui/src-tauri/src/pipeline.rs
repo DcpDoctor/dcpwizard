@@ -1483,8 +1483,7 @@ fn format_stage_timing(stage: &str, duration: std::time::Duration) -> String {
 }
 
 /// The `[TIMING]` line naming where the time inside an encode went, or None
-/// when nothing was measured, which is a still or an image sequence handed
-/// straight to grk_compress.
+/// when nothing was measured, which is a still or a J2K sequence.
 fn format_encode_breakdown(progress: &postkit::pipeline::PipelineProgress) -> Option<String> {
     let measured = progress.decode_wait_secs > 0.0
         || progress.prepare_secs > 0.0

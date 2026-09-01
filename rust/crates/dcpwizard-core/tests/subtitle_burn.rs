@@ -195,47 +195,14 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
     );
 }
 
-/// Decode one codestream to a 16-bit-per-channel PPM and return its samples.
-fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16> {
-    let output = std::process::Command::new(grk_decompress)
-        .env("LD_LIBRARY_PATH", postkit::grok::grok_lib_path())
-        .args(["-i", &codestream.to_string_lossy()])
-        .args(["-o", &out.to_string_lossy()])
-        .output()
-        .expect("grk_decompress");
-    assert!(
-        output.status.success(),
-        "grk_decompress failed\n  stdout: {}\n  stderr: {}",
-        String::from_utf8_lossy(&output.stdout).trim(),
-        String::from_utf8_lossy(&output.stderr).trim(),
-    );
-    let bytes = std::fs::read(out).expect("decoded ppm");
-    // P6 header: magic, width, height, maxval, whitespace-separated, then one
-    // whitespace byte before the raster.
-    let mut at = 0usize;
-    let mut fields = 0;
-    while fields < 4 {
-        while bytes[at].is_ascii_whitespace() {
-            at += 1;
-        }
-        if bytes[at] == b'#' {
-            while bytes[at] != b'\n' {
-                at += 1;
-            }
-            continue;
-        }
-        while !bytes[at].is_ascii_whitespace() {
-            at += 1;
-        }
-        fields += 1;
-    }
-    at += 1;
-    bytes[at..]
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|s| u16::from_be_bytes(*s))
-        .collect()
+/// Decode one codestream in memory and return its samples pixel-interleaved
+/// at the codestream's own 12 bits.
+fn decode_frame(codestream: &Path) -> Vec<u16> {
+    let data = std::fs::read(codestream).expect("codestream");
+    postkit::grok_decoder::decode(data, 0)
+        .unwrap_or_else(|e| panic!("cannot decode {}: {e}", codestream.display()))
+        .interleaved_samples()
+        .expect("three components")
 }
 
 /// Yellow outlined text on a grey card, read back out of the encoded frame.
@@ -245,7 +212,6 @@ fn decode_frame(grk_decompress: &Path, codestream: &Path, out: &Path) -> Vec<u16
 /// every component.
 #[test]
 fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
-    let grk_decompress = postkit::grok::find_grk_decompress().expect("grk_decompress on PATH");
     let dir = tempfile::tempdir().unwrap();
     let card = dir.path().join("card.png");
     let made = std::process::Command::new("ffmpeg")
@@ -299,11 +265,7 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
     })
     .expect("burnt still");
 
-    let samples = decode_frame(
-        &grk_decompress,
-        &j2k.join("frame_00000000.j2c"),
-        &dir.path().join("frame.ppm"),
-    );
+    let samples = decode_frame(&j2k.join("frame_00000000.j2c"));
     assert_eq!(samples.len(), (W * H * 3) as usize);
 
     // the top-left corner is card, nowhere near the bottom-anchored cue

@@ -432,8 +432,8 @@ dcpwizard decrypt --input ./enc_dcp --output ./clear_dcp \
     --kdm kdm.xml --recipient-key recipient.key
 dcpwizard decrypt --input ./enc_dcp --output ./clear_dcp --keys ./secret/my_film.keys.json
 
-# Encode images to JPEG 2000
-dcpwizard encode --input ./dpx --output ./j2k --bandwidth 250
+# Encode images to JPEG 2000 codestreams in ./out/j2k
+dcpwizard encode --input ./dpx --output ./out --bandwidth 250 --fps 24
 
 # Transcode video to image sequence (format/bit-depth optional)
 dcpwizard transcode --input movie.mov --output ./sequence --format dpx --bit-depth 16

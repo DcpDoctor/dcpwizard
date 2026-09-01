@@ -1,10 +1,9 @@
 //! Verifies that `create --pad-color` runs the colour through the real DCDM
 //! transform: generate a solid frame, decode the stored codestream with
-//! grk_decompress, and check the X'Y'Z' code values match an independently
+//! the in-memory decoder, and check the X'Y'Z' code values match an independently
 //! computed expectation within tolerance.
 
 use std::path::Path;
-use std::process::Command;
 
 const W: u32 = 48;
 const H: u32 = 48;
@@ -25,41 +24,12 @@ fn expected_xyz(rgb8: [u8; 3]) -> [u16; 3] {
     [code(x), code(y), code(z)]
 }
 
-/// Read the first sample of a PGX plane written by grk_decompress.
-fn first_pgx_sample(path: &Path) -> u16 {
-    let data = std::fs::read(path).unwrap();
-    // PGX header: "PG ML <depth> <w> <h>\n" then raw big-endian samples
-    let nl = data.iter().position(|&b| b == b'\n').unwrap();
-    let body = &data[nl + 1..];
-    // 12-bit samples are stored as 2 bytes each, big-endian
-    u16::from_be_bytes([body[0], body[1]])
-}
-
-fn grk_decompress_bin() -> std::path::PathBuf {
-    postkit::grok::find_grk_decompress().expect("grk_decompress on PATH")
-}
-
-fn decode_first_pixel(j2c: &Path, dir: &Path) -> [u16; 3] {
-    let bin = grk_decompress_bin();
-    let out = dir.join("decoded.pgx");
-    let decode = Command::new(&bin)
-        .arg("-i")
-        .arg(j2c)
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .expect("run grk_decompress");
-    assert!(
-        decode.status.success(),
-        "grk_decompress failed\n  stdout: {}\n  stderr: {}",
-        String::from_utf8_lossy(&decode.stdout).trim(),
-        String::from_utf8_lossy(&decode.stderr).trim(),
-    );
-    // multi-component pgx output names planes decoded_0.pgx ..._2.pgx
+fn decode_first_pixel(j2c: &Path) -> [u16; 3] {
+    let frame = postkit::grok_decoder::decode(std::fs::read(j2c).unwrap(), 0)
+        .unwrap_or_else(|e| panic!("cannot decode {}: {e}", j2c.display()));
     let mut xyz = [0u16; 3];
-    for (i, slot) in xyz.iter_mut().enumerate() {
-        let plane = dir.join(format!("decoded_{i}.pgx"));
-        *slot = first_pgx_sample(&plane);
+    for (slot, component) in xyz.iter_mut().zip(&frame.components) {
+        *slot = component[0] as u16;
     }
     xyz
 }
@@ -80,7 +50,7 @@ fn pad_color_frame_carries_expected_xyz() {
         dcpwizard_core::pad::generate_solid_frame(W, H, FPS, rgb16, &j2c)
             .expect("encode solid frame");
 
-        let got = decode_first_pixel(&j2c, dir.path());
+        let got = decode_first_pixel(&j2c);
         let want = expected_xyz(rgb8);
         eprintln!("rgb {rgb8:?}: got {got:?} want {want:?}");
         for c in 0..3 {

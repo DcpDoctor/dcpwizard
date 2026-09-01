@@ -92,12 +92,8 @@ user-facing surface is here.
   job encodes through postkit and reports per-frame progress. One queue for both
   needs a job type that carries a GUI build, or the GUI build path moved into CORE
   behind the existing IPC. GUI + CORE.
-- An image sequence grk_compress reads straight from file is refused for p3,
-  rec2020 and logc, since it only converts Rec.709. A sequence that a burn, a
-  picture change or jpeg/png frames route through ffmpeg reaches the same
-  per-frame transform a video does. DCP-o-matic also allows fully custom
-  conversions (user chromaticities, white point, gamma), a flexibility we do not
-  have anywhere.
+- DCP-o-matic allows fully custom colour conversions (user chromaticities,
+  white point, gamma), a flexibility we do not have anywhere.
 - Interop KDM (`kdm --format interop`) is legacy and unvalidated: no reference
   library generates Interop (libdcp only reads it) and the suite has no reference
   Interop KDM to diff against. Validate against real legacy gear before production.
@@ -194,7 +190,7 @@ one side, mirror the other:
   continue-on-error.
   imfwizard sets grok up in ci, release and gui-release the same way, and links
   grok-ffi as this workspace does, so a postkit change that needs grok reaches
-  both wizards; it also shells out to grk_compress at runtime for one encode path.
+  both wizards.
   dcpdoctor links no grok and sets it up in none of its workflows.
 - tests/cli_flags_test.sh: NOT the same harness as imfwizard's (this one runs the
   binary and checks clap parse errors, imf parses main.js). Different CLIs, leave

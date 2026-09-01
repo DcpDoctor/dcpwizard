@@ -447,8 +447,23 @@ fn process_job(job: &Job, control: &JobControl) -> i32 {
             }
         }
         JobType::EncodeJ2k => {
-            match serde_json::from_str::<crate::encode::EncodeConfig>(&job.params) {
-                Ok(config) => crate::encode::encode_j2k(&config),
+            match serde_json::from_str::<crate::encode::ImageSequenceEncode>(&job.params) {
+                Ok(encode) => {
+                    let report = |progress: &postkit::pipeline::PipelineProgress| {
+                        crate::dcp::ProgressSink::stage(
+                            control,
+                            progress.percent as u32,
+                            &format!("{}/{} frames", progress.frame, progress.total_frames),
+                        );
+                    };
+                    match crate::encode::encode_image_sequence(&encode, &control.cancel, report) {
+                        Ok(_) => 0,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            -1
+                        }
+                    }
+                }
                 Err(e) => {
                     tracing::error!("Invalid EncodeJ2k params: {e}");
                     -1

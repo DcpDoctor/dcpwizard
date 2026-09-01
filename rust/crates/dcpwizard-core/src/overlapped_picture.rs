@@ -108,11 +108,8 @@ fn source_refusal(source: &PictureSource) -> Option<&'static str> {
              nothing feeds the wrap frame by frame",
         );
     }
-    if source.input_type != postkit::encode::InputType::Video {
-        return Some(
-            "only a video source is decoded frame by frame: a J2K sequence is never encoded, and \
-             an image sequence can go straight to grk_compress",
-        );
+    if source.input_type == postkit::encode::InputType::J2kSequence {
+        return Some("a J2K sequence is never encoded, so nothing feeds the wrap frame by frame");
     }
     None
 }
@@ -201,6 +198,15 @@ mod tests {
     }
 
     #[test]
+    fn an_image_sequence_qualifies_since_postkit_encodes_it_frame_by_frame() {
+        let sequence = PictureSource {
+            input_type: postkit::encode::InputType::ImageSequence,
+            ..plain_video()
+        };
+        assert_eq!(overlap_refusal(&sequence, &plain_package()), None);
+    }
+
+    #[test]
     fn every_source_that_does_not_stream_each_packaged_frame_is_refused() {
         for source in [
             PictureSource {
@@ -209,10 +215,6 @@ mod tests {
             },
             PictureSource {
                 input_type: postkit::encode::InputType::J2kSequence,
-                ..plain_video()
-            },
-            PictureSource {
-                input_type: postkit::encode::InputType::ImageSequence,
                 ..plain_video()
             },
         ] {

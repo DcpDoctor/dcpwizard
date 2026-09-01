@@ -1022,17 +1022,20 @@ enum Commands {
         #[command(flatten)]
         signer_opts: SignerOpts,
     },
-    /// Encode images to JPEG 2000
+    /// Encode an image sequence to JPEG 2000 codestreams in <OUTPUT>/j2k
     Encode {
         /// Input image directory
         #[arg(short, long)]
         input: String,
-        /// Output J2K directory
+        /// Output directory, the codestreams land in its j2k subdirectory
         #[arg(short, long)]
         output: String,
         /// Target bitrate (Mbps)
         #[arg(long, default_value = "250")]
         bandwidth: u32,
+        /// Frame rate the bitrate is budgeted at
+        #[arg(long, default_value = "24")]
+        fps: u32,
     },
     /// Full pipeline: video → J2K → DCP (streaming, no intermediate files)
     Pipeline {
@@ -2209,6 +2212,18 @@ enum BatchAction {
 /// Where the time inside an encode went, as one line. postkit renders the four
 /// phase clocks off `PipelineProgress`, and `create` encodes through the grok
 /// pipeline, which reports the same clocks on `EncodeProgress`.
+fn print_encode_progress(progress: &postkit::pipeline::PipelineProgress) {
+    let percent = if progress.total_frames > 0 {
+        (progress.frame as f64 / progress.total_frames as f64) * 100.0
+    } else {
+        0.0
+    };
+    eprint!(
+        "\r[encode] {}/{} frames ({:.0}%) {:.1} fps   ",
+        progress.frame, progress.total_frames, percent, progress.fps
+    );
+}
+
 fn encode_phase_breakdown(progress: &postkit::grok_encoder::EncodeProgress) -> String {
     postkit::pipeline::PipelineProgress {
         stage: "encode".to_string(),
@@ -4958,14 +4973,42 @@ fn run() {
             input,
             output,
             bandwidth,
+            fps,
         } => {
-            let config = dcpwizard_core::encode::EncodeConfig {
+            use std::sync::Arc;
+            use std::sync::atomic::AtomicBool;
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel_clone = cancel.clone();
+            let _ = ctrlc::set_handler(move || {
+                cancel_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            let encode = dcpwizard_core::encode::ImageSequenceEncode {
                 input_dir: PathBuf::from(input),
                 output_dir: PathBuf::from(output),
                 bandwidth_mbps: bandwidth,
-                ..Default::default()
+                fps,
             };
-            dcpwizard_core::encode::encode_j2k(&config)
+            let result = dcpwizard_core::encode::encode_image_sequence(
+                &encode,
+                &cancel,
+                print_encode_progress,
+            );
+            eprintln!();
+            match result {
+                Ok(result) => {
+                    tracing::info!(
+                        "Encoded {} frames to {}",
+                        result.frames_encoded,
+                        result.j2k_dir.display()
+                    );
+                    0
+                }
+                Err(e) => {
+                    tracing::error!("{e}");
+                    1
+                }
+            }
         }
 
         Commands::Pipeline {
@@ -4978,7 +5021,7 @@ fn run() {
             input_range,
             split_chapters,
         } => {
-            use postkit::pipeline::{EncodeRunOptions, PipelineProgress, run_encode_with_options};
+            use postkit::pipeline::{EncodeRunOptions, run_encode_with_options};
             use std::sync::Arc;
             use std::sync::atomic::AtomicBool;
 
@@ -5054,17 +5097,7 @@ fn run() {
                 &encode_options,
                 &cancel,
                 &pause,
-                |p: &PipelineProgress| {
-                    let percent = if p.total_frames > 0 {
-                        (p.frame as f64 / p.total_frames as f64) * 100.0
-                    } else {
-                        0.0
-                    };
-                    eprint!(
-                        "\r[encode] {}/{} frames ({:.0}%) {:.1} fps   ",
-                        p.frame, p.total_frames, percent, p.fps
-                    );
-                },
+                print_encode_progress,
                 |message: &str| tracing::debug!("{message}"),
             );
             eprintln!();

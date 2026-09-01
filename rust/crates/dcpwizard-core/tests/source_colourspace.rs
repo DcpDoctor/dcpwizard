@@ -1,12 +1,11 @@
 //! Verifies that `create --source-colourspace p3` reaches the codestream as real
 //! P3 X'Y'Z': encode a solid frame through the route the create handler builds,
-//! decode the stored codestream with grk_decompress, and check the X'Y'Z' code
+//! decode the stored codestream with the in-memory decoder, and check the X'Y'Z' code
 //! values against an independently computed expectation. `logc` is checked
 //! against the Rec.709 frame carrying the same scene linear instead, since both
 //! are D65 neutral at that luminance and must land on one X'Y'Z'.
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -49,36 +48,12 @@ fn expected_xyz(rgb16: [u16; 3]) -> [u16; 3] {
     out
 }
 
-fn grk_decompress_bin() -> std::path::PathBuf {
-    postkit::grok::find_grk_decompress().expect("grk_decompress on PATH")
-}
-
-/// Read the first sample of a PGX plane written by grk_decompress.
-fn first_pgx_sample(path: &Path) -> u16 {
-    let data = std::fs::read(path).unwrap();
-    let nl = data.iter().position(|&b| b == b'\n').unwrap();
-    let body = &data[nl + 1..];
-    u16::from_be_bytes([body[0], body[1]])
-}
-
-fn decode_first_pixel(j2c: &Path, dir: &Path) -> [u16; 3] {
-    let out = dir.join("decoded.pgx");
-    let decode = Command::new(grk_decompress_bin())
-        .arg("-i")
-        .arg(j2c)
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .expect("run grk_decompress");
-    assert!(
-        decode.status.success(),
-        "grk_decompress failed\n  stdout: {}\n  stderr: {}",
-        String::from_utf8_lossy(&decode.stdout).trim(),
-        String::from_utf8_lossy(&decode.stderr).trim(),
-    );
+fn decode_first_pixel(j2c: &Path) -> [u16; 3] {
+    let frame = postkit::grok_decoder::decode(std::fs::read(j2c).unwrap(), 0)
+        .unwrap_or_else(|e| panic!("cannot decode {}: {e}", j2c.display()));
     let mut xyz = [0u16; 3];
-    for (i, slot) in xyz.iter_mut().enumerate() {
-        *slot = first_pgx_sample(&dir.join(format!("decoded_{i}.pgx")));
+    for (slot, component) in xyz.iter_mut().zip(&frame.components) {
+        *slot = component[0] as u16;
     }
     xyz
 }
@@ -140,7 +115,7 @@ fn a_p3_source_encodes_to_p3_xyz_code_values() {
     {
         let work = dir.path().join(format!("p3_{index}"));
         let j2c = encode_solid(rgb16, route, &work);
-        let got = decode_first_pixel(&j2c, &work);
+        let got = decode_first_pixel(&j2c);
         let want = expected_xyz(rgb16);
         eprintln!("p3 {rgb16:?}: got {got:?} want {want:?}");
         for c in 0..3 {
@@ -158,23 +133,17 @@ fn logc_mid_grey_lands_on_the_rec709_mid_grey_codes() {
     let dir = tempfile::tempdir().unwrap();
 
     let logc_dir = dir.path().join("logc");
-    let logc = decode_first_pixel(
-        &encode_solid(
-            [code16(LOGC3_GREY_CODE); 3],
-            xyz_route(ColourSpace::LogC).unwrap(),
-            &logc_dir,
-        ),
+    let logc = decode_first_pixel(&encode_solid(
+        [code16(LOGC3_GREY_CODE); 3],
+        xyz_route(ColourSpace::LogC).unwrap(),
         &logc_dir,
-    );
+    ));
     let rec709_dir = dir.path().join("rec709");
-    let rec709 = decode_first_pixel(
-        &encode_solid(
-            [code16(REC709_GREY_CODE); 3],
-            xyz_route(ColourSpace::Rec709).unwrap(),
-            &rec709_dir,
-        ),
+    let rec709 = decode_first_pixel(&encode_solid(
+        [code16(REC709_GREY_CODE); 3],
+        xyz_route(ColourSpace::Rec709).unwrap(),
         &rec709_dir,
-    );
+    ));
 
     eprintln!("logc grey {logc:?} rec709 grey {rec709:?}");
     for c in 0..3 {
@@ -192,15 +161,17 @@ fn p3_red_is_not_the_rec709_red_the_compressor_would_produce() {
     let red = [65535u16, 0, 0];
 
     let p3_dir = dir.path().join("p3");
-    let p3 = decode_first_pixel(
-        &encode_solid(red, xyz_route(ColourSpace::P3).unwrap(), &p3_dir),
+    let p3 = decode_first_pixel(&encode_solid(
+        red,
+        xyz_route(ColourSpace::P3).unwrap(),
         &p3_dir,
-    );
+    ));
     let rec709_dir = dir.path().join("rec709");
-    let rec709 = decode_first_pixel(
-        &encode_solid(red, xyz_route(ColourSpace::Rec709).unwrap(), &rec709_dir),
+    let rec709 = decode_first_pixel(&encode_solid(
+        red,
+        xyz_route(ColourSpace::Rec709).unwrap(),
         &rec709_dir,
-    );
+    ));
 
     assert!(
         p3[0] > rec709[0] + 40,

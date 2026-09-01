@@ -292,6 +292,59 @@ fn write_test_video(path: &std::path::Path, width: u32, height: u32) {
     assert!(status.success(), "ffmpeg failed to write the test source");
 }
 
+/// Three frames of colour bars as 8-bit PNG stills, a format postkit hands to
+/// ffmpeg rather than reading itself.
+fn write_test_stills(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-y", "-f", "lavfi", "-i"])
+        .arg("testsrc=size=2048x1080:rate=24:duration=0.125")
+        .arg(dir.join("frame_%03d.png"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("ffmpeg must be installed to build the test stills");
+    assert!(status.success(), "ffmpeg failed to write the test stills");
+}
+
+#[test]
+fn encode_compresses_a_still_sequence_into_a_j2k_directory() {
+    let dir = TempDir::new().unwrap();
+    let stills = dir.path().join("stills");
+    write_test_stills(&stills);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "encode",
+            "--input",
+            stills.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--bandwidth",
+            "250",
+        ])
+        .assert()
+        .success();
+
+    let mut codestreams: Vec<_> = std::fs::read_dir(out.join("j2k"))
+        .expect("the codestreams land in <output>/j2k")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "j2c"))
+        .collect();
+    codestreams.sort();
+    assert_eq!(codestreams.len(), 3, "one codestream per still");
+    let decoded = postkit::grok_decoder::decode(std::fs::read(&codestreams[0]).unwrap(), 0)
+        .expect("the first codestream decodes");
+    assert_eq!((decoded.width, decoded.height), (2048, 1080));
+    assert_eq!(
+        decoded.precision, 12,
+        "a DCI codestream carries 12-bit samples"
+    );
+    assert_eq!(decoded.components.len(), 3);
+}
+
 #[test]
 fn create_fits_a_source_that_is_not_the_forced_raster_onto_it() {
     let dir = TempDir::new().unwrap();

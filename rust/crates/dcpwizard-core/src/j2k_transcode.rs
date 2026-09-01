@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use asdcplib::jp2k::MxfReader;
-use postkit::grok_encoder::{self, CompressParams, RawFrame};
+use postkit::grok_encoder::RawFrame;
 
 /// 16 MB covers a single 4K J2K frame.
 const MAX_FRAME_BUF: usize = 16 * 1024 * 1024;
@@ -21,8 +21,7 @@ pub struct DcpTranscodeConfig {
     pub target_width: u32,
     pub target_height: u32,
     /// KDM XML for an encrypted source (with `recipient_key`). Each source frame
-    /// is decrypted in memory before grk_decompress; the re-encoded output is
-    /// cleartext. The J2K temp frames written during transcode are plaintext.
+    /// is decrypted and decoded in memory; the re-encoded output is cleartext.
     pub kdm: Option<PathBuf>,
     /// Recipient RSA private key (PEM) matching `kdm`.
     pub recipient_key: Option<PathBuf>,
@@ -105,21 +104,10 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         crate::Standard::Smpte
     };
 
-    let grk_decompress = match postkit::grok::find_grk_decompress() {
-        Some(p) => p,
-        None => {
-            tracing::error!("grk_decompress not found (expected ~/bin/grok/bin or PATH)");
-            return -1;
-        }
-    };
-    let lib_path = crate::grok::grok_lib_path();
-
     if let Err(e) = std::fs::create_dir_all(&config.output_dir) {
         tracing::error!("Failed to create output directory: {e}");
         return -1;
     }
-
-    grok_encoder::initialize(0);
 
     let mut cpl_reels: Vec<crate::cpl::CplReel> = Vec::new();
     let mut shipped: Vec<ShippedAsset> = Vec::new();
@@ -132,13 +120,7 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             tracing::error!("reel {} picture MXF not found", entry.reel_number);
             return -1;
         }
-        let Some(pic) = transcode_picture(
-            &src_pic,
-            config,
-            key_source.as_ref(),
-            &grk_decompress,
-            &lib_path,
-        ) else {
+        let Some(pic) = transcode_picture(&src_pic, config, key_source.as_ref()) else {
             return -1;
         };
 
@@ -345,14 +327,12 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
 }
 
 /// Re-encode one picture MXF at the target bandwidth. Extracts each J2K frame,
-/// decodes it to a TIFF via grk_decompress, re-encodes the sequence with grok at
-/// the target ratio, wraps a new picture MXF, and returns its identity.
+/// decodes it in memory, re-encodes the sequence with grok at the target ratio,
+/// wraps a new picture MXF, and returns its identity.
 fn transcode_picture(
     src_mxf: &Path,
     config: &DcpTranscodeConfig,
     key_source: Option<&crate::decrypt::KeySource>,
-    grk_decompress: &Path,
-    lib_path: &str,
 ) -> Option<NewPicture> {
     let mut reader = MxfReader::new();
     if let Err(e) = reader.open_read(&src_mxf.to_string_lossy()) {
@@ -375,18 +355,20 @@ fn transcode_picture(
             return None;
         }
     };
-    let mut crypto = if info.encrypted_essence {
-        let ks = key_source?;
-        match ks.contexts(&info, "picture") {
-            Ok(c) => Some(c),
-            Err(e) => {
-                tracing::error!("{e}");
-                return None;
-            }
+    let key_source = key_source.filter(|_| info.encrypted_essence);
+    if info.encrypted_essence {
+        let Some(ks) = key_source else {
+            tracing::error!(
+                "picture MXF {} is encrypted and no key source was given",
+                src_mxf.display()
+            );
+            return None;
+        };
+        if let Err(e) = ks.contexts(&info, "picture") {
+            tracing::error!("{e}");
+            return None;
         }
-    } else {
-        None
-    };
+    }
     let frame_count = desc.container_duration;
     if frame_count == 0 {
         tracing::error!("picture MXF {} has no frames", src_mxf.display());
@@ -410,47 +392,55 @@ fn transcode_picture(
     let work = config
         .output_dir
         .join(format!(".transcode_{}", uuid::Uuid::new_v4()));
-    let tiff_dir = work.join("tiff");
     let j2k_dir = work.join("j2k");
-    if std::fs::create_dir_all(&tiff_dir).is_err() || std::fs::create_dir_all(&j2k_dir).is_err() {
+    if std::fs::create_dir_all(&j2k_dir).is_err() {
         tracing::error!("Failed to create transcode work dir");
         return None;
     }
 
-    // decode every frame to a TIFF (grk_decompress emits raw XYZ components)
-    let mut buf = vec![0u8; MAX_FRAME_BUF];
-    for i in 0..frame_count {
-        let (dec, hmac) = match crypto.as_mut() {
-            Some((d, h)) => (Some(d), Some(h)),
-            None => (None, None),
+    let resize_to = resize.then_some((out_w, out_h));
+    let work_dir = work.as_path();
+    let writer_info = &info;
+    let open_loader = || -> Result<postkit::encode::FrameLoader<'_>, String> {
+        let mut reader = MxfReader::new();
+        reader
+            .open_read(&src_mxf.to_string_lossy())
+            .map_err(|e| format!("Failed to open picture MXF {}: {e}", src_mxf.display()))?;
+        let mut crypto = match key_source {
+            Some(ks) => Some(ks.contexts(writer_info, "picture")?),
+            None => None,
         };
-        let n = match reader.read_frame(i, &mut buf, dec, hmac) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!("Failed to read frame {i} (wrong key or MIC mismatch): {e}");
-                let _ = std::fs::remove_dir_all(&work);
-                return None;
-            }
-        };
-        let j2c = work.join(format!("frame_{i:07}.j2c"));
-        let tif = tiff_dir.join(format!("frame_{i:07}.tif"));
-        if std::fs::write(&j2c, &buf[..n]).is_err() {
-            tracing::error!("Failed to write extracted frame {i}");
-            let _ = std::fs::remove_dir_all(&work);
-            return None;
-        }
-        if !decompress_frame(grk_decompress, lib_path, &j2c, &tif) {
-            let _ = std::fs::remove_dir_all(&work);
-            return None;
-        }
-        let _ = std::fs::remove_file(&j2c);
-        if resize && !scale_tiff(&tif, out_w, out_h) {
-            let _ = std::fs::remove_dir_all(&work);
-            return None;
-        }
-    }
-
-    if !encode_tiffs(&tiff_dir, &j2k_dir, ratio, fps) {
+        let mut buf = vec![0u8; MAX_FRAME_BUF];
+        Ok(Box::new(move |frame_index: u64| {
+            decode_source_frame(
+                &mut reader,
+                crypto.as_mut(),
+                frame_index as u32,
+                &mut buf,
+                resize_to,
+                work_dir,
+            )
+        }))
+    };
+    // AlreadyPq is the source colour that compresses untransformed
+    let options = postkit::encode::StreamEncodeOptions {
+        output_dir: j2k_dir.clone(),
+        compression_ratio: ratio,
+        fps: postkit::encode::FrameRate::whole(fps),
+        source_colour: postkit::encode::SourceColour::AlreadyPq,
+        ..Default::default()
+    };
+    let result = postkit::encode::encode_loaded_frames(
+        u64::from(frame_count),
+        open_loader,
+        &options,
+        &Arc::new(AtomicBool::new(false)),
+        &Arc::new(AtomicBool::new(false)),
+        None,
+        |_| {},
+    );
+    if !result.success {
+        tracing::error!("re-encode failed: {}", result.error);
         let _ = std::fs::remove_dir_all(&work);
         return None;
     }
@@ -487,52 +477,6 @@ fn transcode_picture(
         edit_rate_num: edit_num,
         edit_rate_den: edit_den,
     })
-}
-
-/// Encode a directory of TIFFs to J2K with grok at the given ratio. XYZ transform
-/// is off: the decoded components are already XYZ, so re-encoding preserves them.
-fn encode_tiffs(tiff_dir: &Path, out_dir: &Path, ratio: f64, fps: u32) -> bool {
-    let frames = sorted_files(tiff_dir);
-    if frames.is_empty() {
-        tracing::error!("no decoded frames to re-encode");
-        return false;
-    }
-    let total = frames.len() as u64;
-    let params = CompressParams {
-        compression_ratio: ratio,
-        edit_rate: postkit::encode::FrameRate::whole(fps),
-        ..CompressParams::default()
-    };
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut iter = frames.into_iter().enumerate();
-    let result = grok_encoder::encode_pipeline(
-        out_dir,
-        &params,
-        total,
-        &cancel,
-        &Arc::new(grok_encoder::PhaseClocks::default()),
-        || {
-            let (idx, path) = iter.next()?;
-            match crate::grok::load_tiff(&path) {
-                Ok(tf) => Some(RawFrame::Planar {
-                    components: tf.components,
-                    width: tf.width,
-                    height: tf.height,
-                    precision: tf.precision,
-                    index: idx as u64,
-                }),
-                Err(e) => {
-                    tracing::error!("Failed to load {}: {e}", path.display());
-                    None
-                }
-            }
-        },
-        |_p| {},
-    );
-    if !result.success {
-        tracing::error!("re-encode failed: {}", result.error);
-    }
-    result.success
 }
 
 /// Copy an essence MXF into the output DCP unchanged, keeping its asset id.
@@ -626,30 +570,72 @@ fn from_decrypt(s: crate::decrypt::ShippedAsset) -> ShippedAsset {
     }
 }
 
-/// Decode a single J2K codestream to a TIFF with grk_decompress.
-fn decompress_frame(grk: &Path, lib_path: &str, input: &Path, output: &Path) -> bool {
-    let out = std::process::Command::new(grk)
-        .env("LD_LIBRARY_PATH", lib_path)
-        .arg("-i")
-        .arg(input)
-        .arg("-o")
-        .arg(output)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => true,
-        Ok(o) => {
-            tracing::error!(
-                "grk_decompress failed for {}: {}",
-                input.display(),
-                String::from_utf8_lossy(&o.stderr)
-            );
-            false
-        }
-        Err(e) => {
-            tracing::error!("Failed to run grk_decompress: {e}");
-            false
-        }
+/// Read one source frame, decrypting it when the essence is encrypted, decode
+/// it in memory, and hand it to the encoder as planar components. A resize goes
+/// through ffmpeg, which reads and writes a TIFF in `work`.
+fn decode_source_frame(
+    reader: &mut MxfReader,
+    crypto: Option<&mut (
+        asdcplib::crypto::AesDecContext,
+        asdcplib::crypto::HmacContext,
+    )>,
+    index: u32,
+    buf: &mut [u8],
+    resize_to: Option<(u32, u32)>,
+    work: &Path,
+) -> Result<RawFrame, String> {
+    let (dec, hmac) = match crypto {
+        Some((d, h)) => (Some(d), Some(h)),
+        None => (None, None),
+    };
+    let n = reader
+        .read_frame(index, buf, dec, hmac)
+        .map_err(|e| format!("Failed to read frame {index} (wrong key or MIC mismatch): {e}"))?;
+    let decoded = postkit::grok_decoder::decode(buf[..n].to_vec(), 0)
+        .map_err(|e| format!("cannot decode frame {index}: {e}"))?;
+    let precision = decoded.precision;
+    let (width, height) = (decoded.width, decoded.height);
+    let components: [Vec<i32>; 3] = decoded
+        .components
+        .try_into()
+        .map_err(|_| format!("frame {index} does not carry three components"))?;
+
+    let Some((out_w, out_h)) = resize_to else {
+        return Ok(RawFrame::Planar {
+            components,
+            width,
+            height,
+            precision,
+            index: u64::from(index),
+        });
+    };
+    let tif = work.join(format!("frame_{index:07}.tif"));
+    let decoded_frame = postkit::grok_decoder::DecodedFrame {
+        width,
+        height,
+        precision,
+        components: components.to_vec(),
+    };
+    postkit::grok::write_tiff_rgb(
+        &tif,
+        width,
+        height,
+        precision,
+        &decoded_frame.interleaved_samples()?,
+    )?;
+    if !scale_tiff(&tif, out_w, out_h) {
+        return Err(format!("cannot scale frame {index} to {out_w}x{out_h}"));
     }
+    let scaled = crate::grok::load_tiff(&tif);
+    let _ = std::fs::remove_file(&tif);
+    let scaled = scaled?;
+    Ok(RawFrame::Planar {
+        components: scaled.components,
+        width: scaled.width,
+        height: scaled.height,
+        precision: scaled.precision,
+        index: u64::from(index),
+    })
 }
 
 /// Scale a TIFF in place to the target dimensions using ffmpeg.

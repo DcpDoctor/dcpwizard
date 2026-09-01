@@ -125,8 +125,6 @@ jobs:
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
           xmllint --version
-          grk_compress -h > /dev/null
-          grk_decompress -h > /dev/null
           xmlsec1 --version
           if [ "$RUNNER_OS" = "Linux" ]; then mkfs.ext2 -V; fi
 
