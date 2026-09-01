@@ -13,6 +13,8 @@ use std::sync::atomic::AtomicBool;
 
 const WIDTH: u32 = 2048;
 const HEIGHT: u32 = 1080;
+const WIDTH_4K: u32 = 4096;
+const HEIGHT_4K: u32 = 2160;
 const FPS: u32 = 24;
 const FRAMES: usize = 4;
 
@@ -32,11 +34,11 @@ const XYZ_COMPONENT_FLOOR: i32 = 500;
 const PREVIEW_RED_FLOOR: u8 = 200;
 const PREVIEW_OTHER_CEILING: u8 = 80;
 
-fn red_frame_dir(dir: &Path) -> PathBuf {
+fn red_frame_dir(dir: &Path, width: u32, height: u32) -> PathBuf {
     let j2k = dir.join("j2k");
     std::fs::create_dir_all(&j2k).unwrap();
     let seed = dir.join("seed.j2c");
-    dcpwizard_core::pad::generate_solid_frame(WIDTH, HEIGHT, FPS, SOURCE_RED, &seed)
+    dcpwizard_core::pad::generate_solid_frame(width, height, FPS, SOURCE_RED, &seed)
         .expect("encode red frame");
     for i in 0..FRAMES {
         std::fs::copy(&seed, j2k.join(format!("frame_{i:05}.j2c"))).unwrap();
@@ -103,11 +105,20 @@ fn red_video_frame_dir(dir: &Path) -> PathBuf {
 
 /// Package red frames into a real DCP and return the picture MXF.
 fn red_picture_mxf(dir: &Path, j2k_dir: PathBuf) -> PathBuf {
+    red_package(dir, j2k_dir, dcpwizard_core::Resolution::TwoK).1
+}
+
+/// Package red frames into a real DCP and return the package and its picture MXF.
+fn red_package(
+    dir: &Path,
+    j2k_dir: PathBuf,
+    resolution: dcpwizard_core::Resolution,
+) -> (PathBuf, PathBuf) {
     let out = dir.join("dcp");
     let config = DcpConfig {
         title: "RedReadback".into(),
         standard: dcpwizard_core::Standard::Smpte,
-        resolution: dcpwizard_core::Resolution::TwoK,
+        resolution,
         content_type: dcpwizard_core::ContentType::Test,
         frame_rate_num: FPS,
         frame_rate_den: 1,
@@ -117,7 +128,7 @@ fn red_picture_mxf(dir: &Path, j2k_dir: PathBuf) -> PathBuf {
     };
     assert_eq!(create_dcp(&config), 0, "create_dcp must succeed");
 
-    std::fs::read_dir(&out)
+    let mxf = std::fs::read_dir(&out)
         .unwrap()
         .flatten()
         .map(|e| e.path())
@@ -126,7 +137,8 @@ fn red_picture_mxf(dir: &Path, j2k_dir: PathBuf) -> PathBuf {
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with("picture") && n.ends_with(".mxf"))
         })
-        .expect("picture MXF")
+        .expect("picture MXF");
+    (out, mxf)
 }
 
 fn decode_centre_pixel(mxf: &Path) -> [i32; DCI_COMPONENTS] {
@@ -152,6 +164,10 @@ fn decode_centre_pixel(mxf: &Path) -> [i32; DCI_COMPONENTS] {
 }
 
 fn assert_dci_cinema_xyz_red(mxf: &Path) {
+    assert_cinema_xyz_red(mxf, WIDTH, HEIGHT, J2kProfile::Cinema2k);
+}
+
+fn assert_cinema_xyz_red(mxf: &Path, width: u32, height: u32, expected_profile: J2kProfile) {
     assert_eq!(
         asdcplib::essence_type(&mxf.to_string_lossy()).expect("essence type"),
         asdcplib::EssenceType::Jpeg2000,
@@ -168,13 +184,13 @@ fn assert_dci_cinema_xyz_red(mxf: &Path) {
         .codestream;
 
     let profile = J2kProfile::from(codestream.rsize);
-    assert!(
-        profile.is_dci_cinema(),
-        "RSIZ {:#06x} reads as {profile:?}, so the wrapped codestream is not a \
-         DCI cinema profile and its samples are not X'Y'Z'",
+    assert_eq!(
+        profile, expected_profile,
+        "RSIZ {:#06x} reads as {profile:?}: a {width}x{height} DCP picture declares \
+         {expected_profile:?}, and anything but a DCI cinema profile carries no X'Y'Z'",
         codestream.rsize
     );
-    assert_eq!((codestream.xsize, codestream.ysize), (WIDTH, HEIGHT));
+    assert_eq!((codestream.xsize, codestream.ysize), (width, height));
     assert_eq!(codestream.components.len(), DCI_COMPONENTS);
     for (i, component) in codestream.components.iter().enumerate() {
         assert_eq!(
@@ -213,7 +229,7 @@ fn assert_dci_cinema_xyz_red(mxf: &Path) {
 #[test]
 fn the_produced_picture_is_a_dci_cinema_xyz_track_file() {
     let dir = tempfile::tempdir().unwrap();
-    let j2k = red_frame_dir(dir.path());
+    let j2k = red_frame_dir(dir.path(), WIDTH, HEIGHT);
     assert_dci_cinema_xyz_red(&red_picture_mxf(dir.path(), j2k));
 }
 
@@ -225,9 +241,23 @@ fn a_video_source_produces_the_same_dci_cinema_xyz_track_file() {
 }
 
 #[test]
+fn a_4k_picture_is_a_cinema_4k_track_file_dcpdoctor_accepts() {
+    let dir = tempfile::tempdir().unwrap();
+    let j2k = red_frame_dir(dir.path(), WIDTH_4K, HEIGHT_4K);
+    let (package, mxf) = red_package(dir.path(), j2k, dcpwizard_core::Resolution::FourK);
+    assert_cinema_xyz_red(&mxf, WIDTH_4K, HEIGHT_4K, J2kProfile::Cinema4k);
+    let verified = dcpwizard_core::verify::verify_dcp(&package);
+    assert!(
+        verified.valid,
+        "dcpdoctor must accept the 4K package: {:?}",
+        verified.errors
+    );
+}
+
+#[test]
 fn the_preview_turns_the_picture_back_into_red() {
     let dir = tempfile::tempdir().unwrap();
-    let j2k = red_frame_dir(dir.path());
+    let j2k = red_frame_dir(dir.path(), WIDTH, HEIGHT);
     let mxf = red_picture_mxf(dir.path(), j2k);
     let ppm = dir.path().join("frame.ppm");
 
