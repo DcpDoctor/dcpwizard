@@ -285,7 +285,7 @@ fn isdcf_name_for(request: &IsdcfNameRequest) -> Result<String, String> {
     // the panel has no accessibility channel fields, so the summary is the
     // selected WAV's channel count and nothing else
     let channel_count = match some_path(&request.audio_path) {
-        Some(path) => dcpwizard_core::audio_map::probe_channel_count(&path)?,
+        Some(path) => postkit::wav_io::channel_count(&path)?,
         None => 0,
     };
     let sound = dcpwizard_core::isdcf_title::soundtrack_summary(channel_count, None, None);
@@ -1207,9 +1207,7 @@ pub struct AudioMapPanel {
 #[tauri::command]
 pub async fn probe_audio_map(audio_path: String) -> Result<AudioMapPanel, String> {
     Ok(AudioMapPanel {
-        channels: dcpwizard_core::audio_map::probe_channel_count(std::path::Path::new(
-            &audio_path,
-        ))?,
+        channels: postkit::wav_io::channel_count(std::path::Path::new(&audio_path))?,
         lanes: dcpwizard_core::audio_map::DCP_LANE_NAMES
             .iter()
             .map(|lane| lane.to_string())

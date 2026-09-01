@@ -279,7 +279,7 @@ fn check_audio_map(plan: &CreatePlan) -> Result<(), String> {
     let (Some(spec), Some(wav)) = (&plan.audio_map, plan.packaged_wav()) else {
         return Ok(());
     };
-    crate::audio_map::parse_audio_map(spec, crate::audio_map::probe_channel_count(wav)?).map(|_| ())
+    crate::audio_map::parse_audio_map(spec, postkit::wav_io::channel_count(wav)?).map(|_| ())
 }
 
 /// How many channels the content fills once the map or the upmix has placed

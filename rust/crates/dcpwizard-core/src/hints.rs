@@ -3,20 +3,20 @@
 //! A hint is not a refusal: everything here builds and packages. It says the
 //! result is likely to be wrong on a cinema screen, so the front ends print it
 //! and let the build go on.
+//!
+//! The rules that hold whatever the package is are postkit's. What is left here
+//! is what a DCP has of its own.
 
 use std::path::Path;
+
+use postkit::hints::{
+    AudioLevel, CueRule, Hint, HintCue, MOST_CUE_LINES, SubtitleCues, audio_language_hint,
+    audio_level_hint, first_offence, subtitle_hints,
+};
 
 use crate::preflight::{CreatePlan, PictureKind};
 use crate::{ContentType, Standard};
 
-/// One advisory finding, ready to print.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Hint {
-    pub text: String,
-}
-
-/// Sound peaking above this clips on some playback chains.
-const LOUD_TRUE_PEAK_DBTP: f64 = -3.0;
 /// A sound track packaged with fewer channels than this can trouble a projector.
 const FEWEST_PACKAGED_CHANNELS: u32 = 6;
 /// The channel counts a distributor expects a DCP sound track to carry.
@@ -38,6 +38,9 @@ const HIGH_VIDEO_BIT_RATE_MBPS: u32 = 245;
 /// between the DCP's frame rate and the source's.
 const LARGEST_SOUND_SPEED_CHANGE: f64 = 25.5 / 24.0;
 
+/// A caption line is held to the narrower limit a caption reader draws.
+const MOST_CAPTION_LINE_CHARACTERS: usize = 32;
+
 /// Rates not every projector plays, each with the rate to fall back to. None is
 /// a rate with no safer neighbour to name.
 const AWKWARD_FRAME_RATES: [(u32, Option<u32>); 5] = [
@@ -47,24 +50,6 @@ const AWKWARD_FRAME_RATES: [(u32, Option<u32>); 5] = [
     (50, Some(25)),
     (60, Some(30)),
 ];
-
-/// A first subtitle earlier than this is easy to miss.
-const FIRST_CUE_SECONDS: f64 = 4.0;
-/// A cue shorter than this is hard to read.
-const SHORTEST_CUE_FRAMES: f64 = 15.0;
-/// Two cues closer than this read as one flicker.
-const SMALLEST_CUE_GAP_FRAMES: f64 = 2.0;
-const MOST_CUE_LINES: usize = 3;
-/// Line lengths, in characters: the length to aim for, and the one past which
-/// the text will not fit at all.
-const ADVISED_LINE_CHARACTERS: usize = 52;
-const MOST_LINE_CHARACTERS: usize = 79;
-/// A caption line is held to the narrower limit a caption reader draws.
-const MOST_CAPTION_LINE_CHARACTERS: usize = 32;
-
-const MILLISECONDS_PER_SECOND: f64 = 1000.0;
-const SECONDS_PER_MINUTE: u64 = 60;
-const MINUTES_PER_HOUR: u64 = 60;
 
 /// What the hints are decided from. Kept apart from the probing so the rules can
 /// be driven directly.
@@ -101,29 +86,10 @@ pub struct HintFacts {
     pub captions: Vec<SubtitleCues>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct AudioLevel {
-    pub file: String,
-    pub true_peak_dbtp: f64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerPlacement {
     pub label: String,
     pub frame: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubtitleCues {
-    pub file: String,
-    pub cues: Vec<HintCue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct HintCue {
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub lines: Vec<String>,
 }
 
 /// Every hint the job raises, probing the source for the numbers it needs.
@@ -142,10 +108,13 @@ fn hints_from(facts: &HintFacts) -> Vec<Hint> {
     hints.extend(four_k_stereo_hint(facts));
     hints.extend(source_rate_hint(facts));
     hints.extend(pull_up_hint(facts));
-    hints.extend(audio_level_hint(facts));
-    hints.extend(audio_language_hint(facts));
+    hints.extend(audio_level_hint(&facts.audio));
+    hints.extend(audio_language_hint(
+        facts.has_audio,
+        facts.audio_language.as_deref(),
+    ));
     hints.extend(marker_hints(facts));
-    hints.extend(subtitle_hints(facts));
+    hints.extend(subtitle_hints(&facts.subtitles, f64::from(facts.fps)));
     hints.extend(caption_hints(facts));
     hints
 }
@@ -290,30 +259,6 @@ fn pull_up_hint(facts: &HintFacts) -> Option<Hint> {
     })
 }
 
-fn audio_level_hint(facts: &HintFacts) -> Option<Hint> {
-    let loud = facts
-        .audio
-        .iter()
-        .find(|level| level.true_peak_dbtp > LOUD_TRUE_PEAK_DBTP)?;
-    Some(Hint {
-        text: format!(
-            "The audio level is very high ({:.1} dBTP in {}). Reduce the gain.",
-            loud.true_peak_dbtp, loud.file
-        ),
-    })
-}
-
-fn audio_language_hint(facts: &HintFacts) -> Option<Hint> {
-    let named = facts
-        .audio_language
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|language| !language.is_empty());
-    (facts.has_audio && !named).then(|| Hint {
-        text: "The sound has no language set. Set one unless it has no spoken parts.".to_string(),
-    })
-}
-
 fn marker_hints(facts: &HintFacts) -> Vec<Hint> {
     let mut hints = Vec::new();
     let placed = |label: &str| facts.markers.iter().any(|marker| marker.label == label);
@@ -345,73 +290,7 @@ fn marker_hints(facts: &HintFacts) -> Vec<Hint> {
     hints
 }
 
-/// A cue with what the rules need around it.
-struct CueInContext<'a> {
-    cue: &'a HintCue,
-    previous_end_ms: Option<u64>,
-    is_first: bool,
-    fps: u32,
-    interop: bool,
-}
-
-/// How a rule words itself, given the file it found the fault in and the time of
-/// the first cue that showed it.
-type SayHint = fn(&str, &str) -> String;
-
-/// One advisory rule over a cue: what counts as an offence, and what to say
-/// about the first cue that offends.
-struct CueRule {
-    offends: fn(&CueInContext) -> bool,
-    say: SayHint,
-}
-
-const SUBTITLE_RULES: [CueRule; 4] = [
-    CueRule {
-        offends: |context| {
-            context.is_first && context.cue.start_ms < seconds_to_milliseconds(FIRST_CUE_SECONDS)
-        },
-        say: |file, at| {
-            format!(
-                "The first subtitle in {file} starts at {at}. Put it at least {FIRST_CUE_SECONDS:.0} seconds in, or it is easy to miss."
-            )
-        },
-    },
-    CueRule {
-        offends: |context| {
-            context.cue.end_ms.saturating_sub(context.cue.start_ms)
-                < frames_to_milliseconds(SHORTEST_CUE_FRAMES, context.fps)
-        },
-        say: |file, at| {
-            format!(
-                "A subtitle in {file} at {at} lasts less than {SHORTEST_CUE_FRAMES:.0} frames. Make every subtitle at least that long."
-            )
-        },
-    },
-    CueRule {
-        offends: |context| match context.previous_end_ms {
-            Some(previous_end_ms) => {
-                context.cue.start_ms
-                    < previous_end_ms + frames_to_milliseconds(SMALLEST_CUE_GAP_FRAMES, context.fps)
-            }
-            None => false,
-        },
-        say: |file, at| {
-            format!(
-                "A subtitle in {file} at {at} starts less than {SMALLEST_CUE_GAP_FRAMES:.0} frames after the one before it ends. Leave at least that gap."
-            )
-        },
-    },
-    CueRule {
-        offends: |context| context.cue.lines.len() > MOST_CUE_LINES,
-        say: |file, at| {
-            format!(
-                "A subtitle in {file} at {at} has more than {MOST_CUE_LINES} lines. Use no more than {MOST_CUE_LINES}."
-            )
-        },
-    },
-];
-
-const CAPTION_RULES: [CueRule; 3] = [
+const CAPTION_RULES: [CueRule; 2] = [
     CueRule {
         offends: |context| {
             context
@@ -434,89 +313,30 @@ const CAPTION_RULES: [CueRule; 3] = [
             )
         },
     },
-    CueRule {
-        offends: |context| match context.previous_end_ms {
-            Some(previous_end_ms) => context.interop && context.cue.start_ms < previous_end_ms,
-            None => false,
-        },
-        say: |file, at| {
-            format!(
-                "Captions in {file} overlap at {at}, which an Interop DCP does not allow. Use the SMPTE standard."
-            )
-        },
-    },
 ];
 
-fn subtitle_hints(facts: &HintFacts) -> Vec<Hint> {
-    let mut hints: Vec<Hint> = SUBTITLE_RULES
-        .iter()
-        .filter_map(|rule| first_offence(facts, &facts.subtitles, rule))
-        .collect();
-    hints.extend(line_length_hint(facts));
-    hints
-}
+/// SMPTE draws overlapping captions and Interop does not, so this rule is read
+/// only when the package is Interop.
+const OVERLAPPING_CAPTIONS: CueRule = CueRule {
+    offends: |context| {
+        context
+            .previous_end_ms
+            .is_some_and(|previous_end_ms| context.cue.start_ms < previous_end_ms)
+    },
+    say: |file, at| {
+        format!(
+            "Captions in {file} overlap at {at}, which an Interop DCP does not allow. Use the SMPTE standard."
+        )
+    },
+};
 
 fn caption_hints(facts: &HintFacts) -> Vec<Hint> {
+    let interop = (facts.standard == Standard::Interop).then_some(&OVERLAPPING_CAPTIONS);
     CAPTION_RULES
         .iter()
-        .filter_map(|rule| first_offence(facts, &facts.captions, rule))
+        .chain(interop)
+        .filter_map(|rule| first_offence(&facts.captions, f64::from(facts.fps), rule))
         .collect()
-}
-
-/// The first cue in reading order that breaks a rule, said once for the whole
-/// job rather than once per cue.
-fn first_offence(facts: &HintFacts, files: &[SubtitleCues], rule: &CueRule) -> Option<Hint> {
-    for subtitle in files {
-        let mut previous_end_ms = None;
-        for (index, cue) in subtitle.cues.iter().enumerate() {
-            let context = CueInContext {
-                cue,
-                previous_end_ms,
-                is_first: index == 0,
-                fps: facts.fps,
-                interop: facts.standard == Standard::Interop,
-            };
-            if (rule.offends)(&context) {
-                return Some(Hint {
-                    text: (rule.say)(&subtitle.file, &format_cue_time(cue.start_ms)),
-                });
-            }
-            previous_end_ms = Some(cue.end_ms);
-        }
-    }
-    None
-}
-
-/// A line past the hard limit is the same fault as one past the advised length,
-/// said more strongly, so only the stronger hint is raised.
-fn line_length_hint(facts: &HintFacts) -> Option<Hint> {
-    let limits: [(usize, SayHint); 2] = [
-        (MOST_LINE_CHARACTERS, |file, at| {
-            format!(
-                "A subtitle line in {file} at {at} is longer than {MOST_LINE_CHARACTERS} characters. Cut it to {MOST_LINE_CHARACTERS} at most."
-            )
-        }),
-        (ADVISED_LINE_CHARACTERS, |file, at| {
-            format!(
-                "A subtitle line in {file} at {at} is longer than {ADVISED_LINE_CHARACTERS} characters. Keep lines to {ADVISED_LINE_CHARACTERS} where you can."
-            )
-        }),
-    ];
-    for (characters, say) in limits {
-        for subtitle in &facts.subtitles {
-            let offender = subtitle.cues.iter().find(|cue| {
-                cue.lines
-                    .iter()
-                    .any(|line| line.chars().count() > characters)
-            });
-            if let Some(cue) = offender {
-                return Some(Hint {
-                    text: say(&subtitle.file, &format_cue_time(cue.start_ms)),
-                });
-            }
-        }
-    }
-    None
 }
 
 /// The ratio nearest `aspect` among the shapes content is described by.
@@ -534,26 +354,6 @@ fn is_ratio(aspect: f64, ratio: f64) -> bool {
 fn aspect_of((width, height): (u32, u32)) -> f64 {
     f64::from(width) / f64::from(height.max(1))
 }
-
-const fn seconds_to_milliseconds(seconds: f64) -> u64 {
-    (seconds * MILLISECONDS_PER_SECOND) as u64
-}
-
-fn frames_to_milliseconds(frames: f64, fps: u32) -> u64 {
-    (frames / f64::from(fps.max(1)) * MILLISECONDS_PER_SECOND).round() as u64
-}
-
-fn format_cue_time(milliseconds: u64) -> String {
-    let total_seconds = milliseconds / MILLISECONDS_PER_SECOND as u64;
-    let hours = total_seconds / (SECONDS_PER_MINUTE * MINUTES_PER_HOUR);
-    let minutes = total_seconds / SECONDS_PER_MINUTE % MINUTES_PER_HOUR;
-    let seconds = total_seconds % SECONDS_PER_MINUTE;
-    format!(
-        "{hours:02}:{minutes:02}:{seconds:02}.{:03}",
-        milliseconds % MILLISECONDS_PER_SECOND as u64
-    )
-}
-
 fn probe_hint_facts(plan: &CreatePlan) -> HintFacts {
     let planned = crate::preflight::plan_picture(plan).ok().flatten();
     let source = plan.source.as_ref();
@@ -692,16 +492,6 @@ mod tests {
             fps: FPS,
             content_type: ContentType::Short,
             ..Default::default()
-        }
-    }
-
-    fn with_cues(cues: Vec<HintCue>) -> HintFacts {
-        HintFacts {
-            subtitles: vec![SubtitleCues {
-                file: "subs.srt".to_string(),
-                cues,
-            }],
-            ..facts()
         }
     }
 
@@ -928,56 +718,6 @@ mod tests {
     }
 
     #[test]
-    fn a_loud_track_is_named_with_its_peak_and_a_quiet_one_is_not() {
-        let loud = HintFacts {
-            audio: vec![AudioLevel {
-                file: "sound.wav".to_string(),
-                true_peak_dbtp: -0.4,
-            }],
-            has_audio: true,
-            audio_language: Some("en".to_string()),
-            ..facts()
-        };
-        assert!(
-            mentions(&loud, "-0.4 dBTP in sound.wav"),
-            "{:?}",
-            texts(&loud)
-        );
-
-        let quiet = HintFacts {
-            audio: vec![AudioLevel {
-                file: "sound.wav".to_string(),
-                true_peak_dbtp: LOUD_TRUE_PEAK_DBTP,
-            }],
-            ..loud.clone()
-        };
-        assert!(!mentions(&quiet, "audio level"), "{:?}", texts(&quiet));
-    }
-
-    #[test]
-    fn sound_without_a_language_is_hinted_and_sound_with_one_is_not() {
-        let unset = HintFacts {
-            has_audio: true,
-            ..facts()
-        };
-        assert!(mentions(&unset, "no language set"));
-
-        let blank = HintFacts {
-            audio_language: Some("  ".to_string()),
-            ..unset.clone()
-        };
-        assert!(mentions(&blank, "no language set"));
-
-        let set = HintFacts {
-            audio_language: Some("de-DE".to_string()),
-            ..unset.clone()
-        };
-        assert!(!mentions(&set, "no language set"));
-
-        assert!(!mentions(&facts(), "no language set"));
-    }
-
-    #[test]
     fn a_smpte_feature_without_the_credit_markers_is_hinted() {
         let unmarked = HintFacts {
             content_type: ContentType::Feature,
@@ -1037,120 +777,6 @@ mod tests {
             ..past.clone()
         };
         assert!(!mentions(&inside, "at or past"));
-    }
-
-    #[test]
-    fn a_first_cue_before_four_seconds_is_hinted_and_one_at_four_is_not() {
-        let early = with_cues(vec![cue(3_999, 10_000, &["hello"])]);
-        assert!(
-            mentions(&early, "starts at 00:00:03.999"),
-            "{:?}",
-            texts(&early)
-        );
-
-        let late = with_cues(vec![cue(4_000, 10_000, &["hello"])]);
-        assert!(!mentions(&late, "at least 4 seconds"), "{:?}", texts(&late));
-    }
-
-    /// 15 frames at 24 fps is 625 ms.
-    #[test]
-    fn a_cue_shorter_than_fifteen_frames_is_hinted_and_one_exactly_that_long_is_not() {
-        let short = with_cues(vec![cue(10_000, 10_624, &["hello"])]);
-        assert!(
-            mentions(&short, "less than 15 frames"),
-            "{:?}",
-            texts(&short)
-        );
-
-        let long_enough = with_cues(vec![cue(10_000, 10_625, &["hello"])]);
-        assert!(!mentions(&long_enough, "less than 15 frames"));
-    }
-
-    /// 2 frames at 24 fps is 83 ms.
-    #[test]
-    fn cues_closer_than_two_frames_are_hinted_and_an_overlap_counts() {
-        let tight = with_cues(vec![
-            cue(10_000, 12_000, &["first"]),
-            cue(12_082, 14_000, &["second"]),
-        ]);
-        assert!(
-            mentions(&tight, "less than 2 frames after"),
-            "{:?}",
-            texts(&tight)
-        );
-
-        let overlapping = with_cues(vec![
-            cue(10_000, 12_000, &["first"]),
-            cue(11_000, 14_000, &["second"]),
-        ]);
-        assert!(mentions(&overlapping, "less than 2 frames after"));
-
-        let spaced = with_cues(vec![
-            cue(10_000, 12_000, &["first"]),
-            cue(12_083, 14_000, &["second"]),
-        ]);
-        assert!(
-            !mentions(&spaced, "less than 2 frames after"),
-            "{:?}",
-            texts(&spaced)
-        );
-    }
-
-    #[test]
-    fn more_than_three_subtitle_lines_is_hinted_and_three_is_not() {
-        let four = with_cues(vec![cue(10_000, 12_000, &["a", "b", "c", "d"])]);
-        assert!(mentions(&four, "more than 3 lines"), "{:?}", texts(&four));
-
-        let three = with_cues(vec![cue(10_000, 12_000, &["a", "b", "c"])]);
-        assert!(!mentions(&three, "more than 3 lines"));
-    }
-
-    #[test]
-    fn a_long_line_is_hinted_and_the_hard_limit_replaces_the_advised_one() {
-        let advised = with_cues(vec![cue(10_000, 12_000, &["x".repeat(53).as_str()])]);
-        assert!(
-            mentions(&advised, "longer than 52 characters"),
-            "{:?}",
-            texts(&advised)
-        );
-        assert!(!mentions(&advised, "longer than 79 characters"));
-
-        let at_the_limit = with_cues(vec![cue(10_000, 12_000, &["x".repeat(52).as_str()])]);
-        assert!(!mentions(&at_the_limit, "characters"));
-
-        let hard = with_cues(vec![cue(10_000, 12_000, &["x".repeat(80).as_str()])]);
-        assert!(
-            mentions(&hard, "longer than 79 characters"),
-            "{:?}",
-            texts(&hard)
-        );
-        assert!(
-            !mentions(&hard, "longer than 52 characters"),
-            "the 79 hint replaces the 52 one: {:?}",
-            texts(&hard)
-        );
-    }
-
-    /// Characters, not bytes: a line of accented letters is as long as it looks.
-    #[test]
-    fn line_length_counts_characters_not_bytes() {
-        let accented = with_cues(vec![cue(10_000, 12_000, &["é".repeat(52).as_str()])]);
-        assert!(!mentions(&accented, "characters"), "{:?}", texts(&accented));
-    }
-
-    /// Each rule speaks once for the whole job, however many cues break it.
-    #[test]
-    fn a_rule_is_said_once_however_many_cues_break_it() {
-        let job = with_cues(vec![
-            cue(10_000, 10_100, &["first"]),
-            cue(20_000, 20_100, &["second"]),
-            cue(30_000, 30_100, &["third"]),
-        ]);
-        let said = texts(&job)
-            .iter()
-            .filter(|text| text.contains("less than 15 frames"))
-            .count();
-        assert_eq!(said, 1);
     }
 
     fn with_captions(cues: Vec<HintCue>) -> HintFacts {

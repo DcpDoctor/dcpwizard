@@ -2242,19 +2242,10 @@ fn encode_phase_breakdown(progress: &postkit::grok_encoder::EncodeProgress) -> S
 }
 
 fn parse_colour_space(s: &str) -> postkit::colour::ColourSpace {
-    match s.to_lowercase().as_str() {
-        "rec709" | "bt709" => postkit::colour::ColourSpace::Rec709,
-        "p3" | "dcip3" | "dci-p3" => postkit::colour::ColourSpace::P3,
-        "xyz" | "ciexyz" => postkit::colour::ColourSpace::Xyz,
-        "rec2020" | "bt2020" => postkit::colour::ColourSpace::Rec2020,
-        "aces" => postkit::colour::ColourSpace::Aces,
-        "acescg" => postkit::colour::ColourSpace::AcesCg,
-        "logc" | "arrilogc" => postkit::colour::ColourSpace::LogC,
-        _ => {
-            tracing::warn!("Unknown colour space '{s}', defaulting to Rec709");
-            postkit::colour::ColourSpace::Rec709
-        }
-    }
+    postkit::colour::parse_colour_space(s).unwrap_or_else(|| {
+        tracing::warn!("Unknown colour space '{s}', defaulting to Rec709");
+        postkit::colour::ColourSpace::Rec709
+    })
 }
 
 /// Map a `colour --target` string to a dcdm-module target (X'Y'Z' DCDM or P3-D65

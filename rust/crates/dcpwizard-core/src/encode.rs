@@ -108,19 +108,12 @@ pub fn video_codestream_byte_cap(fps: u32, mbps: u32, stereoscopic: bool) -> u64
 ///
 /// [`ColourSpace`]: postkit::colour::ColourSpace
 pub fn parse_source_colourspace(spec: &str) -> Result<postkit::colour::ColourSpace, String> {
-    use postkit::colour::ColourSpace;
-    match spec.trim().to_lowercase().as_str() {
-        "rec709" | "bt709" => Ok(ColourSpace::Rec709),
-        "p3" => Ok(ColourSpace::P3),
-        "xyz" => Ok(ColourSpace::Xyz),
-        "rec2020" | "bt2020" => Ok(ColourSpace::Rec2020),
-        "aces" => Ok(ColourSpace::Aces),
-        "acescg" => Ok(ColourSpace::AcesCg),
-        "logc" => Ok(ColourSpace::LogC),
-        other => Err(format!(
-            "unknown source colour space '{other}' (use rec709, p3, xyz, rec2020, aces, acescg or logc)"
-        )),
-    }
+    postkit::colour::parse_colour_space(spec).ok_or_else(|| {
+        format!(
+            "unknown source colour space '{}' (use rec709, p3, xyz, rec2020, aces, acescg or logc)",
+            spec.trim().to_lowercase()
+        )
+    })
 }
 
 /// How a source carrying `space` reaches DCI X'Y'Z' inside the encode.

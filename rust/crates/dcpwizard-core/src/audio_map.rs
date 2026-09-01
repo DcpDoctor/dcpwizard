@@ -87,19 +87,12 @@ fn dcp_sound_channel_count(highest_lane: usize) -> usize {
 
 /// Mix `input` through the map into `output`.
 pub fn apply_audio_map(spec: &str, input: &Path, output: &Path) -> Result<AppliedAudioMap, String> {
-    let matrix = parse_audio_map(spec, probe_channel_count(input)?)?;
+    let matrix = parse_audio_map(spec, postkit::wav_io::channel_count(input)?)?;
     let report = mix_wav_files(&matrix, std::slice::from_ref(&input.to_path_buf()), output)?;
     Ok(AppliedAudioMap {
         pure_routing: matrix.is_pure_routing(),
         report,
     })
-}
-
-/// How many channels a WAV carries, without reading its samples.
-pub fn probe_channel_count(input: &Path) -> Result<usize, String> {
-    let reader = hound::WavReader::open(input)
-        .map_err(|error| format!("cannot read {}: {error}", input.display()))?;
-    Ok(reader.spec().channels as usize)
 }
 
 /// The 1-based output channel an entry lands on: a channel number, or a DCP lane
