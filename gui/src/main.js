@@ -126,7 +126,7 @@ const DEFAULT_FRAMERATE = 24;
 const PREF_DEFAULTS = {
   standard: "SMPTE", resolution: "2K", framerate: DEFAULT_FRAMERATE,
   encrypt: false, stereo3d: false, validate: true,
-  creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: -1,
+  creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: false,
   signingCert: "", signingKey: "", outputDir: "", isdcfNaming: false,
   channels: "5.1", showHintsBeforeBuild: true,
 };
@@ -138,11 +138,15 @@ function getPrefs() {
       const migrated = { ...PREF_DEFAULTS, ...stored, _version: PREFS_VERSION };
       // a saved 250 encodes at the DCI ceiling and fails validation
       migrated.bandwidth = Math.min(migrated.bandwidth, DEFAULT_BANDWIDTH_MBPS);
+      // older installs stored a device number here
+      migrated.gpu = migrated.gpu === true;
       delete migrated.naming;
       savePrefs(migrated);
       return migrated;
     }
-    return { ...PREF_DEFAULTS, ...stored };
+    const prefs = { ...PREF_DEFAULTS, ...stored };
+    prefs.gpu = prefs.gpu === true;
+    return prefs;
   } catch { return { ...PREF_DEFAULTS, _version: PREFS_VERSION }; }
 }
 
@@ -173,6 +177,20 @@ function loadSettings() {
   if (naming) naming.checked = prefs.isdcfNaming;
   const showHints = document.getElementById("set-show-hints");
   if (showHints) showHints.checked = prefs.showHintsBeforeBuild;
+  const gpu = document.getElementById("set-gpu");
+  if (gpu) gpu.checked = prefs.gpu;
+}
+
+// grok routes every compress and decompress in the process
+async function applyGpuSetting(enabled) {
+  try {
+    await invoke("set_gpu", { enabled });
+  } catch (error) {
+    setStatus(`GPU encoding unavailable: ${error}`);
+    const gpu = document.getElementById("set-gpu");
+    if (gpu) gpu.checked = false;
+    savePrefs({ ...getPrefs(), gpu: false });
+  }
 }
 
 // Advisory findings the pre-build check made. Returns true to build anyway.
@@ -221,10 +239,12 @@ document.getElementById("settings-form")?.addEventListener("submit", (e) => {
     outputDir: document.getElementById("set-output-dir")?.value,
     isdcfNaming: document.getElementById("set-isdcf-naming")?.checked || false,
     showHintsBeforeBuild: !!document.getElementById("set-show-hints")?.checked,
+    gpu: !!document.getElementById("set-gpu")?.checked,
   };
   savePrefs(prefs);
   refreshIsdcfPreview();
   setStatus("Settings saved");
+  applyGpuSetting(prefs.gpu);
 });
 
 document.getElementById("set-reset")?.addEventListener("click", () => {
@@ -233,6 +253,7 @@ document.getElementById("set-reset")?.addEventListener("click", () => {
 });
 
 loadSettings();
+applyGpuSetting(getPrefs().gpu);
 
 // === Project State ===
 const project = {

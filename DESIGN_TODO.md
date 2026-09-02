@@ -114,14 +114,8 @@ user-facing surface is here.
 
 From en.easydcp.com easyDCP Plus and IMF Studio (both now EUR 3567.62 permanent or
 EUR 164.22/month, so the README's "EUR 2,998" line is stale). Most of what those
-pages advertise is already here. These three are not.
+pages advertise is already here. These two are not.
 
-- GPU J2K encoding. Both easyDCP products sell GPU/CUDA acceleration, and
-  DCP-o-matic reaches it through `config grok-licence`. The grok library has no
-  GPU encode path of its own: it is a separately licensed accelerator plugin
-  (`grk_plugin_load` and `grk_plugin_init` with a device id and a licence key).
-  postkit's DESIGN_TODO has the scoping. One postkit change plus a device and
-  licence setting here and in imfwizard.
 - HD-SDI monitoring output. easyDCP Player+ and IMF Player both drive Blackmagic
   hardware. This is a port rather than new work: imfwizard already has `sdi-preview`,
   which runs a GStreamer decklink pipeline and probes for the plugin first

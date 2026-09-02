@@ -715,6 +715,10 @@ struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Encode and decode on grok's accelerator plugin
+    #[arg(long, global = true)]
+    gpu: bool,
 }
 
 #[derive(Subcommand)]
@@ -3492,6 +3496,13 @@ fn run() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     postkit::grok_encoder::initialize(0);
+
+    if cli.gpu
+        && let Err(e) = postkit::grok_encoder::use_gpu()
+    {
+        tracing::error!("{e}");
+        std::process::exit(1);
+    }
 
     let code = match cli.command {
         Commands::Create {
@@ -6866,6 +6877,13 @@ fn run() {
             code
         }
     };
+
+    if cli.gpu {
+        tracing::info!(
+            "grok's accelerator plugin ran {} frames on the device",
+            postkit::grok_encoder::accelerated_frames()
+        );
+    }
 
     std::process::exit(code);
 }
