@@ -827,9 +827,14 @@ pub async fn submit_job(
         }
         // parse the cue file and build the burn now, so a bad file or a missing
         // font fails here instead of part way through the encode
+        let timed_text_paths: Vec<&Path> = [subtitle.as_deref(), ccap.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(Path::new)
+            .collect();
         dcpwizard_core::subtitle::check_burn_supported(
             Path::new(path),
-            subtitle.as_deref().map(Path::new),
+            &timed_text_paths,
             matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
                 || hdr_already_pq.unwrap_or(false)
                 || hdr_to_dci_lut.is_some(),

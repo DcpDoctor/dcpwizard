@@ -162,9 +162,13 @@ fn check_burn(plan: &CreatePlan) -> Result<(), String> {
     let Some(burn) = &plan.burn_subtitle else {
         return Ok(());
     };
+    let timed_text: Vec<&Path> = [plan.subtitle.as_deref(), plan.ccap.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
     crate::subtitle::check_burn_supported(
         burn,
-        plan.subtitle.as_deref(),
+        &timed_text,
         plan.frames_already_xyz,
         plan.is_codestreams(),
     )?;
@@ -651,5 +655,25 @@ mod tests {
             error.contains("not supported with reel splitting"),
             "{error}"
         );
+    }
+
+    /// A caption track is timed text the package carries, so burning that same
+    /// file in is the conflict a packaged subtitle is refused for.
+    #[test]
+    fn a_burn_file_that_is_also_the_caption_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let cues = dir.path().join("cues.srt");
+        std::fs::write(&cues, "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n").unwrap();
+
+        let mut plan = plan_with_picture(dir.path().join("movie.mov"));
+        plan.picture_kind = PictureKind::Video;
+        plan.burn_subtitle = Some(cues.clone());
+        plan.ccap = Some(cues);
+
+        let error = check_burn(&plan).unwrap_err();
+        assert!(error.contains("pick one"), "{error}");
+
+        plan.ccap = Some(dir.path().join("captions.srt"));
+        assert_eq!(check_burn(&plan), Ok(()));
     }
 }

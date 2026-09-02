@@ -34,30 +34,35 @@ fn a_burn_is_refused_wherever_it_would_be_drawn_in_the_wrong_place() {
     let dir = tempfile::tempdir().unwrap();
     let srt = write_srt(dir.path());
 
-    check_burn_supported(&srt, None, false, false).expect("a plain display-RGB burn is fine");
-    check_burn_supported(&srt, Some(&dir.path().join("other.srt")), false, false)
-        .expect("a different timed-text file is fine");
+    check_burn_supported(&srt, &[], false, false).expect("a plain display-RGB burn is fine");
+    check_burn_supported(
+        &srt,
+        &[dir.path().join("other.srt").as_path()],
+        false,
+        false,
+    )
+    .expect("a different timed-text file is fine");
 
     let missing = dir.path().join("nope.srt");
     for (label, result, needle) in [
         (
             "missing file",
-            check_burn_supported(&missing, None, false, false),
+            check_burn_supported(&missing, &[], false, false),
             "not found",
         ),
         (
             "same file as --subtitle",
-            check_burn_supported(&srt, Some(&srt), false, false),
+            check_burn_supported(&srt, &[srt.as_path()], false, false),
             "pick one",
         ),
         (
             "J2K input",
-            check_burn_supported(&srt, None, false, true),
+            check_burn_supported(&srt, &[], false, true),
             "already compressed",
         ),
         (
             "frames already X'Y'Z'",
-            check_burn_supported(&srt, None, true, false),
+            check_burn_supported(&srt, &[], true, false),
             "X'Y'Z' already",
         ),
     ] {

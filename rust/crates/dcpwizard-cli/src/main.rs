@@ -3885,10 +3885,16 @@ fn run() {
             // a burn draws display-RGB text onto decoded frames, so refuse
             // every route that hands the encoder X'Y'Z' or nothing to draw on,
             // before anything is encoded
+            let packaged_timed_text: Vec<&Path> =
+                [subtitle.as_deref(), subtitle_qol.ccap.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .map(Path::new)
+                    .collect();
             if let Some(ref burn) = subtitle_qol.burn_subtitle
                 && let Err(e) = dcpwizard_core::subtitle::check_burn_supported(
                     Path::new(burn),
-                    subtitle.as_deref().map(Path::new),
+                    &packaged_timed_text,
                     matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
                         || hdr_already_pq
                         || hdr_to_dci_lut.is_some(),

@@ -410,11 +410,11 @@ const XYZ_ROUTES: &str = "--source-colourspace xyz, --hdr-already-pq, or the HDR
 /// `--hdr-already-pq`.
 pub fn check_burn_supported(
     burn_path: &Path,
-    timed_text_path: Option<&Path>,
+    timed_text_paths: &[&Path],
     frames_already_xyz: bool,
     input_is_codestreams: bool,
 ) -> Result<(), String> {
-    let timed_text: Vec<PathBuf> = timed_text_path.map(Path::to_path_buf).into_iter().collect();
+    let timed_text: Vec<PathBuf> = timed_text_paths.iter().map(|p| p.to_path_buf()).collect();
     postkit::preflight::check_burn_supported(
         burn_path,
         &postkit::preflight::BurnTarget {

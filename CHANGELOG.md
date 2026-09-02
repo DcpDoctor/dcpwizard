@@ -9,6 +9,7 @@
 - **`transcode-dcp` decodes on loader threads**: each source frame was decrypted and decoded on the encoder's producer thread, one at a time, while the encoder threads waited. The decode now runs on postkit's loader pool through `encode_loaded_frames`, each loader holding its own reader, decrypt context and frame buffer, ahead of the encoder threads.
 
 ### Fixed
+- **A burn file that is also the caption file was accepted**: the pre-encode burn check compared `--burn-subtitle` against `--subtitle` only, so passing the same file to `--burn-subtitle` and `--ccap` drew the cues into the picture and packaged them as a caption track as well, the double subtitle a `--subtitle` clash is refused for. The check now covers both timed-text tracks and refuses the caption clash with the same message.
 - **A 4K DCP could not be built**: every encode asked grok for the Cinema 2K profile whatever the raster, and grok refuses a frame past 2048x1080 under it, so `--fourk` died at "Failed to initialize Grok compressor" on the first frame and no 4K package was ever produced. postkit now writes a frame over 2048x1080 under the Cinema 4K profile with the six decomposition levels DCI 4K carries, and `picture_readback.rs` builds a 4096x2160 package through the real create path, asserts the codestream declares Cinema 4K, and runs dcpdoctor over it, the first 4K package any test here has made.
 
 ### Added
