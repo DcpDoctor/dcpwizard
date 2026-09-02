@@ -6,7 +6,9 @@
 
 use std::path::Path;
 
-use postkit::audio_mix_matrix::{MixMatrix, MixReport, mix_wav_files};
+use postkit::audio_mix_matrix::{
+    LaneVocabulary, MixMatrix, MixReport, mix_wav_files, parse_named_audio_map,
+};
 
 /// The DCP lanes a map may name, in the order [`crate::audio_route::channel_index`]
 /// puts them. HI and VI sit at lanes 14 and 15, so naming one widens the output
@@ -19,11 +21,6 @@ pub const DCP_LANE_NAMES: [&str; 12] = [
 /// so a map that reaches the centre lane leaves the surrounds silent instead of
 /// writing a track asdcplib refuses.
 const DCP_SOUND_LAYOUTS: [usize; 4] = [2, 6, 8, 16];
-
-const SPEC_ENTRY_SEPARATOR: char = ',';
-const SPEC_CHANNEL_SEPARATOR: char = ':';
-const SPEC_GAIN_SEPARATOR: char = '@';
-const FIRST_CHANNEL_NUMBER: usize = 1;
 
 /// What an applied map did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,39 +38,20 @@ pub struct AppliedAudioMap {
 /// an entry lands on, widened to the smallest sound layout a DCP is wrapped at,
 /// with the lanes nothing routed to silent.
 pub fn parse_audio_map(spec: &str, input_channels: usize) -> Result<MixMatrix, String> {
-    if spec.trim().is_empty() {
-        return Err("audio map is empty".to_string());
+    parse_named_audio_map(spec, input_channels, &lane_vocabulary())
+}
+
+fn lane_vocabulary() -> LaneVocabulary {
+    let lane_count = *DCP_SOUND_LAYOUTS.last().expect("the layouts are fixed");
+    let mut lane_names = vec![Vec::new(); lane_count];
+    for name in DCP_LANE_NAMES {
+        let lane = crate::audio_route::channel_index(name).expect("every listed lane has an index");
+        lane_names[lane].push(name.to_string());
     }
-    let mut numeric_entries = Vec::new();
-    let mut output_channels = 0;
-    for entry in spec.split(SPEC_ENTRY_SEPARATOR) {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            return Err("audio map has an empty entry".to_string());
-        }
-        let (channels, gain) = match entry.split_once(SPEC_GAIN_SEPARATOR) {
-            Some((channels, gain)) => (channels, Some(gain)),
-            None => (entry, None),
-        };
-        let (input_text, output_text) = channels
-            .split_once(SPEC_CHANNEL_SEPARATOR)
-            .ok_or_else(|| format!("audio map entry \"{entry}\" is not IN:OUT or IN:OUT@GAIN"))?;
-        let output_number = destination_channel_number(output_text, entry)?;
-        output_channels = output_channels.max(output_number);
-        let pair = format!(
-            "{}{SPEC_CHANNEL_SEPARATOR}{output_number}",
-            input_text.trim()
-        );
-        numeric_entries.push(match gain {
-            Some(gain) => format!("{pair}{SPEC_GAIN_SEPARATOR}{}", gain.trim()),
-            None => pair,
-        });
+    LaneVocabulary {
+        lane_names,
+        output_channel_count: dcp_sound_channel_count,
     }
-    MixMatrix::parse(
-        &numeric_entries.join(&SPEC_ENTRY_SEPARATOR.to_string()),
-        input_channels,
-        dcp_sound_channel_count(output_channels),
-    )
 }
 
 /// The sound layout that holds `highest_lane`. A lane past every layout is left
@@ -93,30 +71,6 @@ pub fn apply_audio_map(spec: &str, input: &Path, output: &Path) -> Result<Applie
         pure_routing: matrix.is_pure_routing(),
         report,
     })
-}
-
-/// The 1-based output channel an entry lands on: a channel number, or a DCP lane
-/// name resolved through the canonical channel order.
-fn destination_channel_number(text: &str, entry: &str) -> Result<usize, String> {
-    let text = text.trim();
-    if let Ok(number) = text.parse::<usize>() {
-        if number < FIRST_CHANNEL_NUMBER {
-            return Err(format!(
-                "audio map entry \"{entry}\" names output channel {number}, and channels count \
-                 from {FIRST_CHANNEL_NUMBER}"
-            ));
-        }
-        return Ok(number);
-    }
-    crate::audio_route::channel_index(text)
-        .map(|index| index + FIRST_CHANNEL_NUMBER)
-        .ok_or_else(|| {
-            format!(
-                "audio map entry \"{entry}\" names output \"{text}\", which is neither a channel \
-                 number nor one of {}",
-                DCP_LANE_NAMES.join(", ")
-            )
-        })
 }
 
 #[cfg(test)]
