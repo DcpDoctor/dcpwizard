@@ -1470,16 +1470,6 @@ fn log_to(log_file: &Arc<Mutex<std::fs::File>>, msg: &str) {
     let _ = writeln!(log_file.lock().unwrap(), "{msg}");
 }
 
-fn accelerator_summary() -> String {
-    let status = guikit::gpu::accelerator_status();
-    match (status.requested, status.active, status.error) {
-        (false, _, _) => "off".to_string(),
-        (true, true, _) => "requested, active".to_string(),
-        (true, false, Some(error)) => format!("requested, inactive: {error}"),
-        (true, false, None) => "requested, inactive".to_string(),
-    }
-}
-
 const SECONDS_PER_MINUTE: u64 = 60;
 
 /// One `[TIMING]` line for the job log, sitting alongside the `[ENCODE]` and
@@ -2139,7 +2129,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     log_to(&log_file, &format!("Output: {}", output.display()));
     log_to(
         &log_file,
-        &format!("Accelerator: {}", accelerator_summary()),
+        &format!("Accelerator: {}", guikit::gpu::accelerator_status()),
     );
     log_to(
         &log_file,

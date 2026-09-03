@@ -209,6 +209,18 @@ jobs:
           TRIPLE=$(rustc -vV | grep host | awk '{print $2}')
           cp target/release/dcpwizard ../gui/src-tauri/dcpwizard-${TRIPLE}
 
+      - name: Test Tauri backend
+        working-directory: gui/src-tauri
+        run: cargo test
+
+      - name: Clippy Tauri backend
+        working-directory: gui/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Format check Tauri backend
+        working-directory: gui/src-tauri
+        run: cargo fmt -- --check
+
       - name: Build the GUI
         # without custom-protocol tauri builds a dev binary that loads the vite
         # dev url instead of the embedded frontend, tauri build turns it on
