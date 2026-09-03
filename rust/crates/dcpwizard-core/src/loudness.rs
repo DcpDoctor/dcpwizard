@@ -1,8 +1,4 @@
-//! EBU R128 loudness measurement and target-normalization wiring.
-//!
-//! Delegates to [`postkit::loudness`], which meters a WAV or a PCM MXF in
-//! process, no ffmpeg, and does the sample-domain gain for target
-//! normalization (dom#1382).
+//! Delegates to [`postkit::loudness`], which meters a WAV or a PCM MXF.
 
 pub use postkit::loudness::{
     AdjustError, DEFAULT_TRUE_PEAK_CEILING_DBTP, GainPlan, LoudnessResult, LoudnessTarget,

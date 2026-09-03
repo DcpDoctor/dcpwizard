@@ -326,9 +326,7 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
     0
 }
 
-/// Re-encode one picture MXF at the target bandwidth. Extracts each J2K frame,
-/// decodes it in memory, re-encodes the sequence at the bandwidth's bytes a frame,
-/// wraps a new picture MXF, and returns its identity.
+/// Decode one picture MXF in memory and re-encode it at the bandwidth's bytes a frame.
 fn transcode_picture(
     src_mxf: &Path,
     config: &DcpTranscodeConfig,

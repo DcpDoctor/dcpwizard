@@ -14,8 +14,7 @@ pub struct ImageSequenceEncode {
     pub fps: u32,
 }
 
-/// Compress a still sequence through postkit's pipeline into `<output_dir>/j2k`,
-/// aimed at the bandwidth's bytes a frame and held under the DCI codestream cap.
+/// Compress a still sequence into `<output_dir>/j2k` at the bandwidth's bytes a frame.
 pub fn encode_image_sequence(
     encode: &ImageSequenceEncode,
     cancel: &Arc<AtomicBool>,
@@ -66,9 +65,7 @@ pub const MINIMUM_QUALITY_PSNR_DB: f64 = 20.0;
 /// without changing the picture.
 pub const MAXIMUM_QUALITY_PSNR_DB: f64 = 80.0;
 
-/// The bytes one frame may take at `mbps` and `fps`: what the allocation aims
-/// at, and the ceiling the encoder holds to under a PSNR target. Both eyes of a
-/// 3D encode share the track's bit rate, so each gets half.
+/// The bytes one frame may take at `mbps` and `fps`, halved per eye in 3D.
 pub fn video_codestream_byte_cap(fps: u32, mbps: u32, stereoscopic: bool) -> u64 {
     let fps = fps.max(1) as f64;
     let eyes = if stereoscopic { STEREOSCOPIC_EYES } else { 1.0 };

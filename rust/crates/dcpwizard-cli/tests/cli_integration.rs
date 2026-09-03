@@ -432,6 +432,94 @@ fn create_writes_the_picture_mxf_while_it_encodes() {
         ));
 }
 
+/// A bandwidth this far over DCI's 250 Mbit/s asks for more bytes a frame than
+/// a DCP may carry.
+const BANDWIDTH_OVER_THE_DCI_CAP_MBPS: u32 = 300;
+/// The bytes a frame that bandwidth asks for at 24 fps.
+const TARGET_OVER_THE_DCI_CAP: u64 = 1_562_500;
+/// DCI DCSS 4.3.1 at 24 fps.
+const DCI_CODESTREAM_BYTE_CAP: u64 = 1_302_083;
+const NOISE_FRAMES: u32 = 3;
+
+/// Noise from a fixed seed, which no wavelet compresses, so every codestream
+/// runs to whatever budget the encoder is given.
+fn write_noise_video(path: &std::path::Path, width: u32, height: u32, frames: u32) {
+    let raw = path.with_extension("raw");
+    let mut samples = Vec::with_capacity((width * height * 3 * frames) as usize);
+    let mut state: u32 = 0x1234_5678;
+    for _ in 0..width * height * 3 * frames {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        samples.push(state as u8);
+    }
+    std::fs::write(&raw, &samples).unwrap();
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-f", "rawvideo"])
+        .args(["-pixel_format", "rgb24", "-video_size"])
+        .arg(format!("{width}x{height}"))
+        .args(["-framerate", "24", "-i"])
+        .arg(&raw)
+        .args(["-c:v", "ffv1"])
+        .arg(path)
+        .status()
+        .expect("ffmpeg must be installed to build the test source");
+    assert!(status.success(), "ffmpeg failed to write the noise source");
+    std::fs::remove_file(&raw).unwrap();
+}
+
+#[test]
+fn create_holds_the_dci_cap_when_the_bandwidth_asks_for_more() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("noise.mkv");
+    write_noise_video(&video, 2048, 1080, NOISE_FRAMES);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--twok",
+            "--video-bit-rate",
+            &BANDWIDTH_OVER_THE_DCI_CAP_MBPS.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Target: {TARGET_OVER_THE_DCI_CAP} bytes a frame \
+             ({BANDWIDTH_OVER_THE_DCI_CAP_MBPS} Mbit/s), cap {DCI_CODESTREAM_BYTE_CAP} bytes"
+        )));
+
+    let picture = std::fs::read_dir(&out)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("picture_"))
+        })
+        .expect("the package carries a picture MXF");
+    let mut reader = asdcplib::jp2k::MxfReader::new();
+    reader
+        .open_read(&picture.to_string_lossy())
+        .expect("open the picture MXF");
+    let mut buf = vec![0u8; 16 * 1024 * 1024];
+    for frame in 0..NOISE_FRAMES {
+        let bytes = reader
+            .read_frame(frame, &mut buf, None, None)
+            .unwrap_or_else(|e| panic!("read frame {frame}: {e}")) as u64;
+        assert!(
+            bytes <= DCI_CODESTREAM_BYTE_CAP,
+            "frame {frame} is {bytes} bytes, over the {DCI_CODESTREAM_BYTE_CAP} byte DCI cap"
+        );
+    }
+}
+
 // ── create picture processing and audio map flags ───────────────────────────
 
 /// A `create` that fails before any encoding, so only the refusal is exercised.

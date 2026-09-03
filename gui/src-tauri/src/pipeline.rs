@@ -2158,9 +2158,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         );
     }
 
-    // the bandwidth is only honoured for video input, an image or J2K sequence
-    // falls back to the encoder default. Both eyes of a 3D job encode with these
-    // params, so the halving is part of the target.
+    // only video input carries a bandwidth, an image or J2K sequence has none
     let target_codestream_bytes = job.source.as_ref().map(|_| {
         dcpwizard_core::encode::video_codestream_byte_cap(
             fps_num,

@@ -751,6 +751,7 @@ dependencies = [
 name = "dcpwizard-cli"
 version = "1.2.0"
 dependencies = [
+ "asdcplib",
  "assert_cmd",
  "clap",
  "ctrlc",

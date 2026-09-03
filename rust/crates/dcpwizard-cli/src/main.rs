@@ -803,10 +803,7 @@ enum Commands {
         /// J2K bandwidth in Mbit/s (default: 250 for 2K, 500 for 4K)
         #[arg(long)]
         video_bit_rate: Option<u32>,
-        /// PSNR target in dB for the J2K encode, at least 20 and at most 80.
-        /// The encoder allocates to this quality instead of to the bandwidth's
-        /// byte target, and the bandwidth becomes a per-frame byte cap no frame
-        /// may exceed.
+        /// PSNR target in dB (20 to 80) the encoder allocates to instead of the bandwidth's byte target, which becomes a per-frame ceiling
         #[arg(long)]
         quality_psnr: Option<f64>,
         /// Split into reels of at most N minutes each (default: single reel)
@@ -4301,8 +4298,7 @@ fn run() {
                     );
                 }
 
-                // both eyes of a 3D encode use these params, so the 3D budget is
-                // split here
+                // both eyes of a 3D encode use these params
                 let target_codestream_bytes = video_bit_rate.map(|mbps| {
                     dcpwizard_core::encode::video_codestream_byte_cap(
                         fps,
@@ -4311,37 +4307,27 @@ fn run() {
                     )
                 });
 
+                let dci_codestream_byte_cap = if hdr_dci {
+                    dcpwizard_core::hdr::hdr_codestream_byte_cap(fps)
+                } else {
+                    postkit::j2k::dci_codestream_byte_cap(fps)
+                };
                 // under a PSNR target the bandwidth is a ceiling per frame
-                // rather than what the allocation aims at
-                let codestream_byte_cap = quality_psnr.map(|_| {
-                    let dci_cap = if hdr_dci {
-                        dcpwizard_core::hdr::hdr_codestream_byte_cap(fps)
-                    } else {
-                        postkit::j2k::dci_codestream_byte_cap(fps)
-                    };
-                    match video_bit_rate {
-                        Some(mbps) => {
-                            dci_cap.min(dcpwizard_core::encode::video_codestream_byte_cap(
-                                fps,
-                                mbps,
-                                right_eye.is_some(),
-                            ))
-                        }
-                        None => dci_cap,
+                let codestream_byte_cap = match (quality_psnr, target_codestream_bytes) {
+                    (Some(_), Some(target)) => dci_codestream_byte_cap.min(target),
+                    _ => dci_codestream_byte_cap,
+                };
+                match (quality_psnr, video_bit_rate, target_codestream_bytes) {
+                    (Some(db), Some(mbps), _) => tracing::info!(
+                        "PSNR {db} dB (bandwidth {mbps} Mbit/s, at most {codestream_byte_cap} bytes a frame)"
+                    ),
+                    (Some(db), None, _) => {
+                        tracing::info!("PSNR {db} dB (at most {codestream_byte_cap} bytes a frame)")
                     }
-                });
-                if let (Some(db), Some(cap)) = (quality_psnr, codestream_byte_cap) {
-                    match video_bit_rate {
-                        Some(mbps) => tracing::info!(
-                            "PSNR {db} dB (bandwidth {mbps} Mbit/s, at most {cap} bytes a frame)"
-                        ),
-                        None => tracing::info!("PSNR {db} dB (at most {cap} bytes a frame)"),
-                    }
-                }
-                if let (None, Some(target), Some(mbps)) =
-                    (quality_psnr, target_codestream_bytes, video_bit_rate)
-                {
-                    tracing::info!("Target: {target} bytes a frame ({mbps} Mbit/s)");
+                    (None, Some(mbps), Some(target)) => tracing::info!(
+                        "Target: {target} bytes a frame ({mbps} Mbit/s), cap {codestream_byte_cap} bytes"
+                    ),
+                    (None, _, _) => {}
                 }
 
                 let _num_threads = threads.unwrap_or(0); // reserved for future use
@@ -4350,7 +4336,7 @@ fn run() {
                     compression_ratio: dcpwizard_core::encode::DEFAULT_COMPRESSION_RATIO,
                     target_codestream_bytes,
                     quality_psnr,
-                    codestream_byte_cap,
+                    codestream_byte_cap: Some(codestream_byte_cap),
                     edit_rate: postkit::encode::FrameRate::whole(fps),
                     // grok converts only what nothing else has converted
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
