@@ -1465,10 +1465,18 @@ async fn run_queue_worker(app: AppHandle) {
 
 // ─── Job execution ─────────────────────────────────────────────────────────
 
-fn log_to(log_file: &Arc<Mutex<Option<std::fs::File>>>, msg: &str) {
+fn log_to(log_file: &Arc<Mutex<std::fs::File>>, msg: &str) {
     eprintln!("[pipeline] {msg}");
-    if let Some(f) = log_file.lock().unwrap().as_mut() {
-        let _ = writeln!(f, "{msg}");
+    let _ = writeln!(log_file.lock().unwrap(), "{msg}");
+}
+
+fn accelerator_summary() -> String {
+    let status = guikit::gpu::accelerator_status();
+    match (status.requested, status.active, status.error) {
+        (false, _, _) => "off".to_string(),
+        (true, true, _) => "requested, active".to_string(),
+        (true, false, Some(error)) => format!("requested, inactive: {error}"),
+        (true, false, None) => "requested, inactive".to_string(),
     }
 }
 
@@ -2117,15 +2125,22 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let pause = queue.pause_flag();
 
     let output = &job.output_dir;
+    std::fs::create_dir_all(output)
+        .map_err(|e| format!("Cannot create the output folder {}: {e}", output.display()))?;
     let log_path = output.join("dcpwizard.log");
-    let log_file: Arc<Mutex<Option<std::fs::File>>> =
-        Arc::new(Mutex::new(std::fs::File::create(&log_path).ok()));
+    let log_file = Arc::new(Mutex::new(std::fs::File::create(&log_path).map_err(
+        |e| format!("Cannot create the job log {}: {e}", log_path.display()),
+    )?));
 
     log_to(&log_file, "=== DCP Wizard Pipeline ===");
     log_to(&log_file, &format!("Job ID: {}", job.id));
     log_to(&log_file, &format!("Title: {}", job.title));
     log_to(&log_file, &format!("Input: {}", job.video_path.display()));
     log_to(&log_file, &format!("Output: {}", output.display()));
+    log_to(
+        &log_file,
+        &format!("Accelerator: {}", accelerator_summary()),
+    );
     log_to(
         &log_file,
         &format!(
@@ -2285,6 +2300,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
     let encode_breakdown: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let encode_breakdown_ref = encode_breakdown.clone();
     let encode_started = Instant::now();
+    let device_frames_before = postkit::grok_encoder::accelerated_frames();
     let mut picture_mxf = None;
     let encode_result = if job.still_length_frames > 0 {
         encode_still(job, output, encode_fps, &resolved_picture, |msg| {
@@ -2343,6 +2359,25 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
             )?,
         }
     };
+    // a still is one encode linked for every frame of the hold
+    if job.still_length_frames == 0 {
+        let device_frames =
+            postkit::grok_encoder::accelerated_frames().saturating_sub(device_frames_before);
+        log_to(
+            &log_file,
+            &format!(
+                "[ENCODE] Frames on the device: {device_frames} of {}",
+                encode_result.frames_encoded
+            ),
+        );
+        if device_frames == 0 && guikit::gpu::accelerator_status().requested {
+            log_to(
+                &log_file,
+                "[ENCODE] WARNING: the GPU was requested and no frame ran on the device",
+            );
+        }
+    }
+
     for finding in encode_result.picture_findings.describe(encode_fps.as_f64()) {
         log_to(&log_file, &format!("[ENCODE] {finding}"));
     }
@@ -2639,6 +2674,20 @@ mod tests {
         assert_eq!(format_encode_breakdown(&unmeasured), None);
     }
 
+    fn test_source() -> postkit::probe::VideoInfo {
+        postkit::probe::VideoInfo {
+            width: 1920,
+            height: 1080,
+            fps_num: 24,
+            fps_den: 1,
+            has_audio: true,
+            total_frames: 48,
+            pix_fmt: "yuv422p10le".into(),
+            color_space: "bt709".into(),
+            color_range: "tv".into(),
+        }
+    }
+
     fn test_job() -> JobConfig {
         JobConfig {
             id: 1,
@@ -2836,9 +2885,8 @@ mod tests {
                 width: 4096,
                 height: 2160,
                 fps_num: 48,
-                fps_den: 1,
                 has_audio: false,
-                total_frames: 48,
+                ..test_source()
             }),
             ..test_job()
         };
@@ -3155,14 +3203,7 @@ mod tests {
         let mut job = test_job();
         job.trim_start_frames = 12;
         job.trim_end_frames = 12;
-        job.source = Some(postkit::probe::VideoInfo {
-            width: 1920,
-            height: 1080,
-            fps_num: 24,
-            fps_den: 1,
-            has_audio: true,
-            total_frames: 48,
-        });
+        job.source = Some(test_source());
 
         let window = job_encode_window(&job, std::path::Path::new("/in/movie.mov"))
             .unwrap()
@@ -3530,12 +3571,8 @@ mod tests {
         });
         queued.burn_style.effect = Some(postkit::subtitle_raster::BurnEffect::Outline);
         queued.source = Some(postkit::probe::VideoInfo {
-            width: 1920,
-            height: 1080,
-            fps_num: 24,
-            fps_den: 1,
-            has_audio: true,
             total_frames: 100,
+            ..test_source()
         });
 
         record(&path, StoredJobState::Queued, "", &queued);
