@@ -1809,10 +1809,11 @@ fn prepare_audio(
     // no sound named: the picture source's own track is the sound, and enters
     // here so everything below applies to it as it would to a named WAV
     if audio_path.is_none() && job.audio_channel_dir.is_none() {
+        log("[AUDIO] No sound file named: extracting the source's own audio");
         if let Some(extracted) =
             dcpwizard_core::audio_fallback::extract_embedded_audio(&job.video_path, &work_dir)?
         {
-            log("[AUDIO] No sound file named: using the source's own audio");
+            log("[AUDIO] Using the source's own audio");
             audio_path = Some(extracted);
         }
     }
@@ -2383,6 +2384,17 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         log_to(&log_file, breakdown);
     }
 
+    emit_progress(
+        app,
+        job.id,
+        "audio",
+        "Preparing the sound track...",
+        0,
+        0,
+        0.0,
+        0.0,
+        99.0,
+    );
     let audio_started = Instant::now();
     let audio_path = prepare_audio(job, conform, output, |msg| log_to(&log_file, msg))?;
     log_to(
