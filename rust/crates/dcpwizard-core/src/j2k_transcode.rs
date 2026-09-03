@@ -327,7 +327,7 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
 }
 
 /// Re-encode one picture MXF at the target bandwidth. Extracts each J2K frame,
-/// decodes it in memory, re-encodes the sequence with grok at the target ratio,
+/// decodes it in memory, re-encodes the sequence at the bandwidth's bytes a frame,
 /// wraps a new picture MXF, and returns its identity.
 fn transcode_picture(
     src_mxf: &Path,
@@ -387,7 +387,8 @@ fn transcode_picture(
         (src_w, src_h)
     };
 
-    let ratio = crate::encode::bandwidth_to_ratio(out_w, out_h, fps, config.target_bitrate_mbps);
+    let target_codestream_bytes =
+        crate::encode::video_codestream_byte_cap(fps, config.target_bitrate_mbps, false);
 
     let work = config
         .output_dir
@@ -425,7 +426,8 @@ fn transcode_picture(
     // AlreadyPq is the source colour that compresses untransformed
     let options = postkit::encode::StreamEncodeOptions {
         output_dir: j2k_dir.clone(),
-        compression_ratio: ratio,
+        compression_ratio: crate::encode::DEFAULT_COMPRESSION_RATIO,
+        target_codestream_bytes: Some(target_codestream_bytes),
         fps: postkit::encode::FrameRate::whole(fps),
         source_colour: postkit::encode::SourceColour::AlreadyPq,
         ..Default::default()

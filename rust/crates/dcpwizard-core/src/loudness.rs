@@ -1,8 +1,8 @@
 //! EBU R128 loudness measurement and target-normalization wiring.
 //!
-//! Delegates to [`postkit::loudness`]. postkit parses ffmpeg's `loudnorm` JSON
-//! output (integrated, LRA, true peak) rather than the older `ebur128` summary,
-//! and does the sample-domain gain for target normalization (dom#1382).
+//! Delegates to [`postkit::loudness`], which meters a WAV or a PCM MXF in
+//! process, no ffmpeg, and does the sample-domain gain for target
+//! normalization (dom#1382).
 
 pub use postkit::loudness::{
     AdjustError, DEFAULT_TRUE_PEAK_CEILING_DBTP, GainPlan, LoudnessResult, LoudnessTarget,

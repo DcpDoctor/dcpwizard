@@ -2158,22 +2158,16 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         );
     }
 
-    // Map the target bandwidth (Mbps) to a J2K compression ratio. Only honoured
-    // for video input; image/J2K sequences fall back to the encoder default. A 3D
-    // job encodes both eyes with this ratio, so the halving is part of it.
-    let compression_ratio = job
-        .source
-        .as_ref()
-        .map(|info| {
-            dcpwizard_core::encode::video_compression_ratio(
-                info.width,
-                info.height,
-                fps_num,
-                Some(job.bandwidth),
-                job.right_eye.is_some(),
-            )
-        })
-        .unwrap_or(dcpwizard_core::encode::DEFAULT_COMPRESSION_RATIO);
+    // the bandwidth is only honoured for video input, an image or J2K sequence
+    // falls back to the encoder default. Both eyes of a 3D job encode with these
+    // params, so the halving is part of the target.
+    let target_codestream_bytes = job.source.as_ref().map(|_| {
+        dcpwizard_core::encode::video_codestream_byte_cap(
+            fps_num,
+            job.bandwidth,
+            job.right_eye.is_some(),
+        )
+    });
 
     // HDR source handling before the encode: the LUT and already-PQ paths reach
     // the encoder untransformed, everything else needs the tone map opt-in.
@@ -2229,18 +2223,27 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         )),
         None => dci_codestream_byte_cap,
     };
-    if let Some(db) = job.quality_psnr {
-        log_to(
+    match (job.quality_psnr, target_codestream_bytes) {
+        (Some(db), _) => log_to(
             &log_file,
             &format!(
                 "[ENCODE] PSNR {db} dB (bandwidth {} Mbit/s, at most {codestream_byte_cap} bytes a frame)",
                 job.bandwidth
             ),
-        );
+        ),
+        (None, Some(target)) => log_to(
+            &log_file,
+            &format!(
+                "[ENCODE] Target: {target} bytes a frame ({} Mbit/s), cap {codestream_byte_cap} bytes",
+                job.bandwidth
+            ),
+        ),
+        (None, None) => {}
     }
 
     let encode_options = postkit::pipeline::EncodeRunOptions {
-        compression_ratio,
+        compression_ratio: dcpwizard_core::encode::DEFAULT_COMPRESSION_RATIO,
+        target_codestream_bytes,
         quality_psnr: job.quality_psnr,
         fps: encode_fps,
         read_source_at: conform.read_source_at,

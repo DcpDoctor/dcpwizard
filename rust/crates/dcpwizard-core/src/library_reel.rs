@@ -296,13 +296,9 @@ fn encode_item_picture(
             format!("fps={}", rate.ffmpeg_filter_value()),
         );
         let params = CompressParams {
-            compression_ratio: crate::encode::video_compression_ratio(
-                width,
-                height,
-                format.fps,
-                (bitrate_mbps > 0).then_some(bitrate_mbps),
-                false,
-            ),
+            compression_ratio: crate::encode::DEFAULT_COMPRESSION_RATIO,
+            target_codestream_bytes: (bitrate_mbps > 0)
+                .then(|| crate::encode::video_codestream_byte_cap(format.fps, bitrate_mbps, false)),
             edit_rate: rate,
             apply_xyz_transform: ITEM_COLOUR_ROUTE.compressor_transform(),
             ..CompressParams::default()

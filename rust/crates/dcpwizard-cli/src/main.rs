@@ -804,9 +804,9 @@ enum Commands {
         #[arg(long)]
         video_bit_rate: Option<u32>,
         /// PSNR target in dB for the J2K encode, at least 20 and at most 80.
-        /// The encoder allocates to this quality instead of a compression
-        /// ratio, and the bandwidth becomes a per-frame byte cap no frame may
-        /// exceed.
+        /// The encoder allocates to this quality instead of to the bandwidth's
+        /// byte target, and the bandwidth becomes a per-frame byte cap no frame
+        /// may exceed.
         #[arg(long)]
         quality_psnr: Option<f64>,
         /// Split into reels of at most N minutes each (default: single reel)
@@ -1287,7 +1287,7 @@ enum Commands {
     },
     /// Measure audio loudness
     Loudness {
-        /// Audio file
+        /// Audio file: a WAV or a PCM MXF
         audio_file: String,
     },
     /// Equal-power crossfade join of two WAVs (dom#374)
@@ -4301,15 +4301,15 @@ fn run() {
                     );
                 }
 
-                // Compute compression ratio from bitrate if specified. Both eyes
-                // of a 3D encode use these params, so the 3D budget is split here.
-                let compression_ratio = dcpwizard_core::encode::video_compression_ratio(
-                    width,
-                    height,
-                    fps,
-                    video_bit_rate,
-                    right_eye.is_some(),
-                );
+                // both eyes of a 3D encode use these params, so the 3D budget is
+                // split here
+                let target_codestream_bytes = video_bit_rate.map(|mbps| {
+                    dcpwizard_core::encode::video_codestream_byte_cap(
+                        fps,
+                        mbps,
+                        right_eye.is_some(),
+                    )
+                });
 
                 // under a PSNR target the bandwidth is a ceiling per frame
                 // rather than what the allocation aims at
@@ -4338,11 +4338,17 @@ fn run() {
                         None => tracing::info!("PSNR {db} dB (at most {cap} bytes a frame)"),
                     }
                 }
+                if let (None, Some(target), Some(mbps)) =
+                    (quality_psnr, target_codestream_bytes, video_bit_rate)
+                {
+                    tracing::info!("Target: {target} bytes a frame ({mbps} Mbit/s)");
+                }
 
                 let _num_threads = threads.unwrap_or(0); // reserved for future use
 
                 let params = CompressParams {
-                    compression_ratio,
+                    compression_ratio: dcpwizard_core::encode::DEFAULT_COMPRESSION_RATIO,
+                    target_codestream_bytes,
                     quality_psnr,
                     codestream_byte_cap,
                     edit_rate: postkit::encode::FrameRate::whole(fps),

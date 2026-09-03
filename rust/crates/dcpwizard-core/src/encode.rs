@@ -15,30 +15,16 @@ pub struct ImageSequenceEncode {
 }
 
 /// Compress a still sequence through postkit's pipeline into `<output_dir>/j2k`,
-/// budgeted at the frames' own raster and held under the DCI codestream cap.
+/// aimed at the bandwidth's bytes a frame and held under the DCI codestream cap.
 pub fn encode_image_sequence(
     encode: &ImageSequenceEncode,
     cancel: &Arc<AtomicBool>,
     on_progress: impl Fn(&postkit::pipeline::PipelineProgress),
 ) -> Result<postkit::pipeline::EncodeResult, String> {
-    let (width, height) = postkit::encode::source_raster(&encode.input_dir)?;
-    let fps = encode.fps;
-    let bandwidth = (encode.bandwidth_mbps > 0).then_some(encode.bandwidth_mbps);
-    let dci_cap = postkit::j2k::dci_codestream_byte_cap(fps);
-    let codestream_byte_cap = match bandwidth {
-        Some(mbps) => dci_cap.min(video_codestream_byte_cap(fps, mbps, false)),
-        None => dci_cap,
-    };
-    let options = postkit::pipeline::EncodeRunOptions {
-        compression_ratio: video_compression_ratio(width, height, fps, bandwidth, false),
-        fps: postkit::encode::FrameRate::whole(fps),
-        codestream_byte_cap: Some(codestream_byte_cap),
-        ..Default::default()
-    };
     postkit::pipeline::run_encode_with_options(
         &encode.input_dir,
         &encode.output_dir,
-        &options,
+        &image_sequence_encode_options(encode),
         cancel,
         &Arc::new(AtomicBool::new(false)),
         on_progress,
@@ -46,15 +32,22 @@ pub fn encode_image_sequence(
     )
 }
 
-/// Convert a target J2K bandwidth (Mbit/s) to a grok compression ratio for the
-/// given picture size and frame rate. Raw DCI codestream is width*height*36
-/// bits/frame (12-bit XYZ, 3 components); ratio = raw_bits / target_bits.
-pub fn bandwidth_to_ratio(width: u32, height: u32, fps: u32, mbps: u32) -> f64 {
-    let fps = fps.max(1) as f64;
-    let mbps = (mbps as f64).max(1.0);
-    let raw_bits = width as f64 * height as f64 * 36.0;
-    let target_bits = (mbps * 1_000_000.0) / fps;
-    (raw_bits / target_bits).max(1.0)
+fn image_sequence_encode_options(
+    encode: &ImageSequenceEncode,
+) -> postkit::pipeline::EncodeRunOptions {
+    let fps = encode.fps;
+    let dci_cap = postkit::j2k::dci_codestream_byte_cap(fps);
+    let target_codestream_bytes = (encode.bandwidth_mbps > 0)
+        .then(|| video_codestream_byte_cap(fps, encode.bandwidth_mbps, false));
+    postkit::pipeline::EncodeRunOptions {
+        compression_ratio: DEFAULT_COMPRESSION_RATIO,
+        target_codestream_bytes,
+        fps: postkit::encode::FrameRate::whole(fps),
+        codestream_byte_cap: Some(
+            target_codestream_bytes.map_or(dci_cap, |target| dci_cap.min(target)),
+        ),
+        ..Default::default()
+    }
 }
 
 /// Compression ratio used when no target bandwidth is given: 10:1 is the
@@ -66,28 +59,6 @@ pub const DEFAULT_COMPRESSION_RATIO: f64 = 10.0;
 /// gets half the budget (libdcp halves max_cs_size the same way).
 const STEREOSCOPIC_EYES: f64 = 2.0;
 
-/// Compression ratio for a video encode at `width`x`height`/`fps`. A higher
-/// ratio is a smaller codestream, so halving a 3D encode's per-eye budget means
-/// doubling its ratio: both eyes are encoded with these parameters and the cap
-/// covers their sum.
-pub fn video_compression_ratio(
-    width: u32,
-    height: u32,
-    fps: u32,
-    mbps: Option<u32>,
-    stereoscopic: bool,
-) -> f64 {
-    let ratio = match mbps {
-        Some(mbps) => bandwidth_to_ratio(width, height, fps, mbps),
-        None => DEFAULT_COMPRESSION_RATIO,
-    };
-    if stereoscopic {
-        ratio * STEREOSCOPIC_EYES
-    } else {
-        ratio
-    }
-}
-
 /// Below this a PSNR target asks for less than the 10:1 default ratio already
 /// gives, so grok's quality allocation has nothing to do.
 pub const MINIMUM_QUALITY_PSNR_DB: f64 = 20.0;
@@ -95,9 +66,9 @@ pub const MINIMUM_QUALITY_PSNR_DB: f64 = 20.0;
 /// without changing the picture.
 pub const MAXIMUM_QUALITY_PSNR_DB: f64 = 80.0;
 
-/// The bytes one frame may take at `mbps` and `fps`. Under a PSNR target this is
-/// the ceiling the encoder holds to instead of a ratio, and a 3D encode splits
-/// it between the eyes exactly as [`video_compression_ratio`] splits the ratio.
+/// The bytes one frame may take at `mbps` and `fps`: what the allocation aims
+/// at, and the ceiling the encoder holds to under a PSNR target. Both eyes of a
+/// 3D encode share the track's bit rate, so each gets half.
 pub fn video_codestream_byte_cap(fps: u32, mbps: u32, stereoscopic: bool) -> u64 {
     let fps = fps.max(1) as f64;
     let eyes = if stereoscopic { STEREOSCOPIC_EYES } else { 1.0 };
@@ -194,64 +165,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ratio_scales_inversely_with_bandwidth() {
-        // 2K 24fps: raw = 2048*1080*36 = ~79.6 Mbit/frame -> ~1911 Mbit/s raw.
-        // At 250 Mbps target the ratio is ~7.6:1; halving the bandwidth doubles it.
-        let r250 = bandwidth_to_ratio(2048, 1080, 24, 250);
-        let r125 = bandwidth_to_ratio(2048, 1080, 24, 125);
-        assert!((r250 - 7.64).abs() < 0.1, "got {r250}");
-        assert!((r125 / r250 - 2.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn ratio_never_below_one() {
-        // absurdly high bandwidth would give sub-1 ratio; clamp keeps it lossless-ish
-        assert_eq!(bandwidth_to_ratio(2048, 1080, 24, 100_000), 1.0);
-    }
-
-    #[test]
-    fn ratio_accounts_for_resolution_and_fps() {
-        // 4K has 4x the pixels, so at the same bandwidth the ratio is 4x higher
-        let two_k = bandwidth_to_ratio(2048, 1080, 24, 250);
-        let four_k = bandwidth_to_ratio(4096, 2160, 24, 250);
-        assert!((four_k / two_k - 4.0).abs() < 0.01);
-        // doubling fps halves per-frame budget, doubling the ratio
-        let hfr = bandwidth_to_ratio(2048, 1080, 48, 250);
-        assert!((hfr / two_k - 2.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn stereoscopic_splits_the_bit_rate_between_the_eyes() {
-        // both eyes are encoded with these parameters, so a 3D encode at the
-        // requested 250 Mbps must give each eye a 125 Mbps budget: the ratio is
-        // exactly the one a 2D encode at half the bandwidth would get.
-        let flat = video_compression_ratio(2048, 1080, 24, Some(250), false);
-        let per_eye = video_compression_ratio(2048, 1080, 24, Some(250), true);
-        assert!(
-            (per_eye / flat - 2.0).abs() < 1e-9,
-            "3D must halve the per-eye budget: flat {flat}, per eye {per_eye}"
-        );
-        assert!((per_eye - bandwidth_to_ratio(2048, 1080, 24, 125)).abs() < 1e-9);
-    }
-
-    #[test]
     fn a_bandwidth_becomes_the_bytes_one_frame_may_take() {
         assert_eq!(video_codestream_byte_cap(24, 250, false), 1_302_083);
         assert_eq!(video_codestream_byte_cap(48, 250, false), 651_041);
         assert_eq!(video_codestream_byte_cap(24, 5, false), 26_041);
+        assert_eq!(video_codestream_byte_cap(24, 230, false), 1_197_916);
         // both eyes share the track's bit rate, so each gets half the bytes
         assert_eq!(video_codestream_byte_cap(24, 250, true), 651_041);
     }
 
+    fn image_sequence(bandwidth_mbps: u32) -> ImageSequenceEncode {
+        ImageSequenceEncode {
+            input_dir: PathBuf::from("stills"),
+            output_dir: PathBuf::from("out"),
+            bandwidth_mbps,
+            fps: 24,
+        }
+    }
+
     #[test]
-    fn stereoscopic_halves_the_default_ratio_budget_too() {
+    fn a_bandwidth_is_what_the_still_sequence_allocation_aims_at() {
+        let options = image_sequence_encode_options(&image_sequence(230));
+        assert_eq!(options.target_codestream_bytes, Some(1_197_916));
+        assert_eq!(options.compression_ratio, DEFAULT_COMPRESSION_RATIO);
+        assert_eq!(options.codestream_byte_cap, Some(1_197_916));
+    }
+
+    #[test]
+    fn no_bandwidth_encodes_at_the_default_ratio_under_the_dci_cap() {
+        let options = image_sequence_encode_options(&image_sequence(0));
+        assert_eq!(options.target_codestream_bytes, None);
+        assert_eq!(options.compression_ratio, DEFAULT_COMPRESSION_RATIO);
         assert_eq!(
-            video_compression_ratio(2048, 1080, 24, None, false),
-            DEFAULT_COMPRESSION_RATIO
-        );
-        assert_eq!(
-            video_compression_ratio(2048, 1080, 24, None, true),
-            DEFAULT_COMPRESSION_RATIO * 2.0
+            options.codestream_byte_cap,
+            Some(postkit::j2k::dci_codestream_byte_cap(24))
         );
     }
 
