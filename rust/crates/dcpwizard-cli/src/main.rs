@@ -4410,9 +4410,51 @@ fn run() {
                 let picture_filter = join_decode_filters(&resolved_picture.plan.filters, None);
                 let video_filter =
                     join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref());
+                // the picture MXF is written as the frames finish where the run
+                // allows it, so packaging never reads the J2K directory back
+                let overlap_refusal = dcpwizard_core::overlapped_picture::overlap_refusal(
+                    &dcpwizard_core::overlapped_picture::PictureSource {
+                        input_type: postkit::encode::InputType::Video,
+                        still_hold: false,
+                    },
+                    &dcpwizard_core::overlapped_picture::PackageShape {
+                        stereoscopic: right_eye.is_some(),
+                        pads: pad_head.is_some() || pad_tail.is_some(),
+                        splits_reels: reel_length.unwrap_or(0) > 0
+                            || split_at.is_some()
+                            || split_chapters,
+                        multiple_versions: versions_specs.is_some(),
+                        encrypts: encrypt,
+                    },
+                )
+                .or(resume.then_some(
+                    "a resumed encode reuses frames already on disk, which never pass through \
+                     the wrap",
+                ))
+                .or((trim.is_active() && encode_window.is_none())
+                    .then_some("the trim relinks the codestreams after the encode"));
+                let picture_wrap = match overlap_refusal {
+                    Some(reason) => {
+                        tracing::info!("Wrapping the picture MXF after the encode: {reason}");
+                        None
+                    }
+                    None => match dcpwizard_core::overlapped_picture::PictureWrapInProgress::start(
+                        dcpwizard_core::overlapped_picture::PictureWrapTarget {
+                            dcp_dir: output_dir.clone(),
+                            fps,
+                            hdr_dci,
+                        },
+                    ) {
+                        Ok(wrap) => Some(wrap),
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    },
+                };
                 let encode_start = std::time::Instant::now();
                 let mut last_encode_progress: Option<EncodeProgress> = None;
-                let result = grok_encoder::encode_video_pipeline_resumable(
+                let result = grok_encoder::encode_video_pipeline_resumable_with_mxf_feed(
                     &encode_video_path,
                     &j2k_dir,
                     &params,
@@ -4423,6 +4465,7 @@ fn run() {
                     resume,
                     video_filter.as_deref(),
                     encode_window,
+                    picture_wrap.as_ref().map(|wrap| wrap.sender()),
                     |p: EncodeProgress| {
                         let percent = if p.total_frames > 0 {
                             (p.frames_encoded as f64 / p.total_frames as f64) * 100.0
@@ -4454,10 +4497,28 @@ fn run() {
                 eprintln!();
 
                 if !result.success {
-                    tracing::error!("Encode failed: {}", result.error);
+                    let wrap_error = picture_wrap.and_then(|wrap| wrap.abandon());
+                    tracing::error!("Encode failed: {}", wrap_error.unwrap_or(result.error));
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
+                let picture_mxf = match picture_wrap {
+                    Some(wrap) => match wrap.finish(result.frames_encoded) {
+                        Ok(wrapped) => {
+                            tracing::info!(
+                                "Picture MXF written during the encode: {} ({} frames)",
+                                wrapped.mxf_name(),
+                                wrapped.duration
+                            );
+                            Some(wrapped)
+                        }
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    },
+                    None => None,
+                };
                 // a window restamps its kept frames from zero ahead of the
                 // detection branch, so a trim needs no offset here
                 for finding in result.picture_findings.describe(fps as f64) {
@@ -4663,8 +4724,7 @@ fn run() {
                     container_height,
                     max_bitrate_mbps: video_bit_rate.unwrap_or(0),
                     j2k_dir: Some(packaged_j2k_dir.clone()),
-                    // create encodes through the resumable encoder, which has no wrap feed
-                    picture_mxf: None,
+                    picture_mxf,
                     audio_path: audio_path.clone(),
                     audio_input_order,
                     audio_channels,

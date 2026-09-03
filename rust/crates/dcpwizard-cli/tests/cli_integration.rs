@@ -407,6 +407,31 @@ fn create_encodes_a_source_that_already_is_the_forced_container_raster() {
     );
 }
 
+#[test]
+fn create_writes_the_picture_mxf_while_it_encodes() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("full.mp4");
+    write_test_video(&video, 2048, 1080);
+    let out = dir.path().join("out");
+
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--twok",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "6 frames, written during the encode",
+        ));
+}
+
 // ── create picture processing and audio map flags ───────────────────────────
 
 /// A `create` that fails before any encoding, so only the refusal is exercised.

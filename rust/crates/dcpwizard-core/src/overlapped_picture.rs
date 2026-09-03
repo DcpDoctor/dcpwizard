@@ -141,22 +141,12 @@ pub fn encode_and_wrap_picture(
     on_progress: impl Fn(&postkit::pipeline::PipelineProgress),
     on_log: impl Fn(&str),
 ) -> Result<(postkit::pipeline::EncodeResult, PreWrappedPicture), String> {
-    std::fs::create_dir_all(&target.dcp_dir)
-        .map_err(|e| format!("cannot create {}: {e}", target.dcp_dir.display()))?;
-    let asset_uuid = uuid::Uuid::new_v4();
+    let asset_uuid = new_picture_asset(&target)?;
     let (encode, track) = postkit::pipeline::run_encode_and_wrap_picture(
         video,
         encode_dir,
         options,
-        postkit::mxf_wrap::IncrementalWrapOptions {
-            output: target.dcp_dir.join(picture_mxf_name(&asset_uuid)),
-            standard: postkit::mxf_wrap::MxfStandard::AsDcp,
-            fps_num: target.fps,
-            fps_den: 1,
-            encryption: None,
-            hdr: target.hdr_dci.then(crate::mxf_wrap::dci_hdr_metadata),
-            asset_uuid: Some(*asset_uuid.as_bytes()),
-        },
+        wrap_options(&target, &asset_uuid),
         cancel,
         pause,
         on_progress,
@@ -169,6 +159,66 @@ pub fn encode_and_wrap_picture(
             duration: track.duration,
         },
     ))
+}
+
+/// The DCP directory made and a fresh asset id for the picture MXF in it.
+fn new_picture_asset(target: &PictureWrapTarget) -> Result<uuid::Uuid, String> {
+    std::fs::create_dir_all(&target.dcp_dir)
+        .map_err(|e| format!("cannot create {}: {e}", target.dcp_dir.display()))?;
+    Ok(uuid::Uuid::new_v4())
+}
+
+/// The wrap every overlapped picture is written with, named and stamped the way
+/// `create_dcp` will declare it.
+fn wrap_options(
+    target: &PictureWrapTarget,
+    asset_uuid: &uuid::Uuid,
+) -> postkit::mxf_wrap::IncrementalWrapOptions {
+    postkit::mxf_wrap::IncrementalWrapOptions {
+        output: target.dcp_dir.join(picture_mxf_name(asset_uuid)),
+        standard: postkit::mxf_wrap::MxfStandard::AsDcp,
+        fps_num: target.fps,
+        fps_den: 1,
+        encryption: None,
+        hdr: target.hdr_dci.then(crate::mxf_wrap::dci_hdr_metadata),
+        asset_uuid: Some(*asset_uuid.as_bytes()),
+    }
+}
+
+/// A picture wrap running beside an encode the caller drives itself, for the
+/// encoders that take a frame feed rather than running postkit's whole pipeline.
+/// The caller hands [`Self::sender`] to the encode, then [`Self::finish`]es with
+/// the frame count the encode reports, or [`Self::abandon`]s when it failed.
+pub struct PictureWrapInProgress {
+    wrap: postkit::mxf_wrap::OverlappedJ2kWrap,
+    asset_uuid: uuid::Uuid,
+}
+
+impl PictureWrapInProgress {
+    pub fn start(target: PictureWrapTarget) -> Result<Self, String> {
+        let asset_uuid = new_picture_asset(&target)?;
+        let wrap = postkit::mxf_wrap::OverlappedJ2kWrap::start(wrap_options(&target, &asset_uuid))?;
+        Ok(Self { wrap, asset_uuid })
+    }
+
+    pub fn sender(&self) -> postkit::mxf_wrap::J2kFrameSender {
+        self.wrap.sender()
+    }
+
+    /// Delete the part written MXF and hand back the wrap's own error, which is
+    /// the one worth reporting when the encode only saw the feed stop.
+    pub fn abandon(mut self) -> Option<String> {
+        self.wrap.abandon()
+    }
+
+    /// Write the footer and hash the MXF once the encode is over.
+    pub fn finish(self, frames_encoded: u64) -> Result<PreWrappedPicture, String> {
+        let track = self.wrap.finish(frames_encoded)?;
+        Ok(PreWrappedPicture {
+            asset_uuid: *self.asset_uuid.as_bytes(),
+            duration: track.duration,
+        })
+    }
 }
 
 #[cfg(test)]
