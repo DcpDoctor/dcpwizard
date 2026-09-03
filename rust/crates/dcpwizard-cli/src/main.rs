@@ -4509,7 +4509,6 @@ fn run() {
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
-                print_hints(hints_pass);
                 let picture_mxf = match picture_wrap {
                     Some(wrap) => match wrap.finish(result.frames_encoded) {
                         Ok(wrapped) => {
@@ -4527,6 +4526,8 @@ fn run() {
                     },
                     None => None,
                 };
+                // the wrap's hash ran while the hints finished, so this waits less
+                print_hints(hints_pass);
                 // a window restamps its kept frames from zero ahead of the
                 // detection branch, so a trim needs no offset here
                 for finding in result.picture_findings.describe(fps as f64) {
