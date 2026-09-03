@@ -361,12 +361,13 @@ fn probe_hint_facts(plan: &CreatePlan) -> HintFacts {
         .packaged_wav()
         .into_iter()
         .filter_map(|path| {
-            // a WAV the loudness pass cannot read is the encode's problem to report
-            let measured = crate::loudness::measure_loudness(path);
-            measured.success.then(|| AudioLevel {
-                file: short_name(path),
-                true_peak_dbtp: measured.true_peak_dbtp,
-            })
+            // a WAV the true peak pass cannot read is the encode's problem to report
+            crate::loudness::measure_true_peak_dbtp(path)
+                .ok()
+                .map(|true_peak_dbtp| AudioLevel {
+                    file: short_name(path),
+                    true_peak_dbtp,
+                })
         })
         .collect();
 

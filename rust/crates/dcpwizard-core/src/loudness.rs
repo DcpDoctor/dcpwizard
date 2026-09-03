@@ -6,7 +6,7 @@
 
 pub use postkit::loudness::{
     AdjustError, DEFAULT_TRUE_PEAK_CEILING_DBTP, GainPlan, LoudnessResult, LoudnessTarget,
-    adjust_loudness, measure_loudness,
+    adjust_loudness, measure_loudness, measure_true_peak_dbtp,
 };
 
 /// Parse a `--loudness-target` spec into a [`LoudnessTarget`].
