@@ -4094,14 +4094,21 @@ fn run() {
                 tracing::error!("{e}");
                 std::process::exit(1);
             }
-            let hints = dcpwizard_core::hints::gather_hints(&plan);
-            for hint in &hints {
-                tracing::warn!("hint: {}", hint.text);
-            }
+            // the audio level hint measures the whole WAV, minutes on a feature,
+            // so the hints run beside the encode and print before packaging
+            let hints_pass = std::thread::spawn(move || dcpwizard_core::hints::gather_hints(&plan));
+            let print_hints =
+                |hints_pass: std::thread::JoinHandle<Vec<postkit::hints::Hint>>| -> usize {
+                    let hints = hints_pass.join().expect("the hint pass does not panic");
+                    for hint in &hints {
+                        tracing::warn!("hint: {}", hint.text);
+                    }
+                    hints.len()
+                };
             if check {
                 println!(
                     "Pre-build check passed with {} hint(s); nothing was encoded or written",
-                    hints.len()
+                    print_hints(hints_pass)
                 );
                 return;
             }
@@ -4502,6 +4509,7 @@ fn run() {
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
+                print_hints(hints_pass);
                 let picture_mxf = match picture_wrap {
                     Some(wrap) => match wrap.finish(result.frames_encoded) {
                         Ok(wrapped) => {
@@ -4785,6 +4793,7 @@ fn run() {
                 code
             } else {
                 // Input is a J2K directory or image sequence
+                print_hints(hints_pass);
                 let resolution = if fourk {
                     dcpwizard_core::Resolution::FourK
                 } else {

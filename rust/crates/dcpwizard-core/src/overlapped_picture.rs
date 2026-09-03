@@ -22,6 +22,27 @@ pub struct PreWrappedPicture {
     pub asset_uuid: [u8; 16],
     /// Frames the MXF holds.
     pub duration: u64,
+    /// The wrap's SHA-1 as the CPL and PKL declare it, so the package never
+    /// reads the file back to hash it.
+    pub hash_base64: String,
+    pub size: u64,
+}
+
+impl PreWrappedPicture {
+    fn from_track(
+        asset_uuid: &uuid::Uuid,
+        track: &postkit::mxf_wrap::MxfTrackFile,
+    ) -> Result<Self, String> {
+        let hash_base64 = track
+            .hash_base64()
+            .ok_or_else(|| format!("the wrap of {} recorded no hash", track.path.display()))?;
+        Ok(Self {
+            asset_uuid: *asset_uuid.as_bytes(),
+            duration: track.duration,
+            hash_base64,
+            size: track.size,
+        })
+    }
 }
 
 impl PreWrappedPicture {
@@ -152,13 +173,7 @@ pub fn encode_and_wrap_picture(
         on_progress,
         on_log,
     )?;
-    Ok((
-        encode,
-        PreWrappedPicture {
-            asset_uuid: *asset_uuid.as_bytes(),
-            duration: track.duration,
-        },
-    ))
+    Ok((encode, PreWrappedPicture::from_track(&asset_uuid, &track)?))
 }
 
 /// The DCP directory made and a fresh asset id for the picture MXF in it.
@@ -214,10 +229,7 @@ impl PictureWrapInProgress {
     /// Write the footer and hash the MXF once the encode is over.
     pub fn finish(self, frames_encoded: u64) -> Result<PreWrappedPicture, String> {
         let track = self.wrap.finish(frames_encoded)?;
-        Ok(PreWrappedPicture {
-            asset_uuid: *self.asset_uuid.as_bytes(),
-            duration: track.duration,
-        })
+        PreWrappedPicture::from_track(&self.asset_uuid, &track)
     }
 }
 

@@ -1113,7 +1113,10 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // hashed here rather than with the rest of the PKL entries because the CPL
     // carries the same values and is written first
-    let pic_hash = crate::hash::hash_file(&picture_mxf_path).unwrap_or_default();
+    let pic_hash = match config.picture_mxf.as_ref() {
+        Some(wrapped) => wrapped.hash_base64.clone(),
+        None => crate::hash::hash_file(&picture_mxf_path).unwrap_or_default(),
+    };
     let snd_hash = has_sound
         .then(|| crate::hash::hash_file(&sound_mxf_path).unwrap_or_default())
         .filter(|h| !h.is_empty());
@@ -1250,9 +1253,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         size: cpl_size,
     }];
 
-    let pic_size = std::fs::metadata(&picture_mxf_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let pic_size = match config.picture_mxf.as_ref() {
+        Some(wrapped) => wrapped.size,
+        None => std::fs::metadata(&picture_mxf_path)
+            .map(|m| m.len())
+            .unwrap_or(0),
+    };
     pkl_entries.push(crate::pkl::PklEntry {
         id: picture_uuid.to_string(),
         asset_type: "application/mxf".into(),

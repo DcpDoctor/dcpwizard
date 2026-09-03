@@ -200,6 +200,8 @@ fn a_package_that_reshapes_the_picture_refuses_an_overlapped_wrap() {
         picture_mxf: Some(dcpwizard_core::overlapped_picture::PreWrappedPicture {
             asset_uuid: [7u8; 16],
             duration: 1,
+            hash_base64: String::new(),
+            size: 0,
         }),
         ..Default::default()
     };
