@@ -149,6 +149,7 @@ pub fn generate_solid_frame(
                 height,
                 precision: 16,
                 index: 0,
+                order: grok_encoder::SampleOrder::Big,
             })
         },
         |_p| {},

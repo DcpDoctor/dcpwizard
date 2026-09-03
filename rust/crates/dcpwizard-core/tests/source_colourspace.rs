@@ -96,6 +96,7 @@ fn encode_solid(rgb16: [u16; 3], route: XyzRoute, dir: &Path) -> std::path::Path
                 height: H,
                 precision: 16,
                 index: 0,
+                order: grok_encoder::SampleOrder::Big,
             })
         },
         |_p| {},
