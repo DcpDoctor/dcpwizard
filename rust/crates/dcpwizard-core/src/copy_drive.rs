@@ -1,7 +1,9 @@
 use sha1::Digest;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+const COPY_BUFFER_BYTES: usize = 1 << 20;
 
 /// Evict a file's pages from the page cache so a following read hits the device.
 /// Without this the read-back below just returns the bytes we cached on write and
@@ -67,42 +69,26 @@ pub fn copy_to_drive(dcp_dir: &Path, target_dir: &Path) -> i32 {
             return -1;
         }
 
-        // Read source and compute hash
-        let src_data = match std::fs::read(src_path) {
-            Ok(d) => d,
+        let src_hash = match copy_hashing(src_path, &dst_path) {
+            Ok(hash) => hash,
             Err(e) => {
-                tracing::error!("Failed to read {}: {e}", src_path.display());
+                tracing::error!(
+                    "Failed to copy {} to {}: {e}",
+                    src_path.display(),
+                    dst_path.display()
+                );
                 return -1;
             }
         };
 
-        let src_hash = sha1_hex(&src_data);
-
-        // Write to destination, flush to the device, then evict from the page
-        // cache so the read-back reads the drive rather than our own write cache.
-        match File::create(&dst_path).and_then(|mut f| {
-            f.write_all(&src_data)?;
-            f.sync_all()?;
-            drop_page_cache(&f);
-            Ok(())
-        }) {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::error!("Failed to write {}: {e}", dst_path.display());
-                return -1;
-            }
-        }
-
-        // Verify by reading back from the drive and comparing hash
-        let dst_data = match std::fs::read(&dst_path) {
-            Ok(d) => d,
+        let dst_hash = match postkit::hash::hash_file(&dst_path, postkit::hash::HashAlgorithm::Sha1)
+        {
+            Ok(result) => result.hex,
             Err(e) => {
                 tracing::error!("Failed to read back {}: {e}", dst_path.display());
                 return -1;
             }
         };
-
-        let dst_hash = sha1_hex(&dst_data);
 
         if src_hash != dst_hash {
             tracing::error!(
@@ -150,11 +136,23 @@ fn collect_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn sha1_hex(data: &[u8]) -> String {
+// a feature's picture MXF is tens of GB
+fn copy_hashing(src_path: &Path, dst_path: &Path) -> std::io::Result<String> {
+    let mut source = File::open(src_path)?;
+    let mut sink = File::create(dst_path)?;
     let mut hasher = sha1::Sha1::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    hex_encode(&result)
+    let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        sink.write_all(&buffer[..read])?;
+    }
+    sink.sync_all()?;
+    drop_page_cache(&sink);
+    Ok(hex_encode(&hasher.finalize()))
 }
 
 fn hex_encode(data: &[u8]) -> String {

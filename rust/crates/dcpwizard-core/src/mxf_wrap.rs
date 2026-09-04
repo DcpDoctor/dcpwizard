@@ -161,6 +161,9 @@ pub fn check_source_fits_packaged_channels(
     ))
 }
 
+const WAV_HEADER_BYTES: usize = 44;
+const WAV_IO_BUFFER_BYTES: usize = 1 << 20;
+
 /// Lay a WAV out the way the packaged sound track carries it: a six-channel
 /// source is reordered to canonical DCP 5.1, then silent channels fill the track
 /// up to `packaged_channels`. None keeps the wrap's own rule, where 5.1 is
@@ -172,23 +175,42 @@ pub fn prepare_packaged_channels(
     input_order: AudioInputOrder,
     packaged_channels: Option<u32>,
 ) -> Result<bool, String> {
-    let data = std::fs::read(input).map_err(|e| format!("cannot read {}: {e}", input.display()))?;
-    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+    use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+
+    let cannot_read = |e: std::io::Error| format!("cannot read {}: {e}", input.display());
+    let mut source = BufReader::with_capacity(
+        WAV_IO_BUFFER_BYTES,
+        std::fs::File::open(input).map_err(cannot_read)?,
+    );
+    let source_len = source.get_ref().metadata().map_err(cannot_read)?.len();
+    let mut riff = [0u8; 12];
+    if source_len < riff.len() as u64 {
+        return Err(format!("{} is not a RIFF/WAVE file", input.display()));
+    }
+    source.read_exact(&mut riff).map_err(cannot_read)?;
+    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
         return Err(format!("{} is not a RIFF/WAVE file", input.display()));
     }
 
-    let mut pos = 12usize;
-    let mut fmt = None;
-    let mut payload = None;
-    while pos + 8 <= data.len() {
-        let size = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+    let mut pos = riff.len() as u64;
+    let mut fmt: Option<Vec<u8>> = None;
+    let mut payload: Option<(u64, u64)> = None;
+    while pos + 8 <= source_len {
+        source.seek(SeekFrom::Start(pos)).map_err(cannot_read)?;
+        let mut chunk = [0u8; 8];
+        source.read_exact(&mut chunk).map_err(cannot_read)?;
+        let size = u64::from(u32::from_le_bytes(chunk[4..8].try_into().unwrap()));
         let body = pos + 8;
-        if body + size > data.len() {
+        if body + size > source_len {
             return Err(format!("{} has a truncated WAV chunk", input.display()));
         }
-        match &data[pos..pos + 4] {
-            b"fmt " if size >= 16 => fmt = Some(&data[body..body + size]),
-            b"data" => payload = Some(&data[body..body + size]),
+        match &chunk[0..4] {
+            b"fmt " if size >= 16 => {
+                let mut bytes = vec![0u8; size as usize];
+                source.read_exact(&mut bytes).map_err(cannot_read)?;
+                fmt = Some(bytes);
+            }
+            b"data" => payload = Some((body, size)),
             _ => {}
         }
         pos = body + size + (size & 1);
@@ -196,7 +218,7 @@ pub fn prepare_packaged_channels(
     let Some(fmt) = fmt else {
         return Err(format!("no fmt chunk found in {}", input.display()));
     };
-    let Some(payload) = payload else {
+    let Some((payload_offset, payload_len)) = payload else {
         return Err(format!("no data chunk found in {}", input.display()));
     };
     let format = u16::from_le_bytes(fmt[0..2].try_into().unwrap());
@@ -226,9 +248,10 @@ pub fn prepare_packaged_channels(
     }
     let sample_bytes = (bits / 8) as usize;
     let source_frame_bytes = sample_bytes * channels as usize;
-    if payload.len() % source_frame_bytes != 0 {
+    if payload_len % source_frame_bytes as u64 != 0 {
         return Err(format!("{} has incomplete audio frames", input.display()));
     }
+    let frame_count = payload_len / source_frame_bytes as u64;
 
     let order: Vec<usize> = if channels == CANONICAL_51_CHANNELS {
         match input_order {
@@ -239,32 +262,52 @@ pub fn prepare_packaged_channels(
         (0..channels as usize).collect()
     };
     let output_frame_bytes = sample_bytes * target_channels as usize;
-    let silent_bytes = output_frame_bytes - source_frame_bytes;
-    let mut wav = Vec::with_capacity(44 + payload.len() / source_frame_bytes * output_frame_bytes);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&0u32.to_le_bytes());
-    wav.extend_from_slice(b"WAVEfmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&(target_channels as u16).to_le_bytes());
-    wav.extend_from_slice(&sample_rate.to_le_bytes());
-    wav.extend_from_slice(&(sample_rate * output_frame_bytes as u32).to_le_bytes());
-    wav.extend_from_slice(&(output_frame_bytes as u16).to_le_bytes());
-    wav.extend_from_slice(&bits.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&0u32.to_le_bytes());
-    for frame in payload.chunks_exact(source_frame_bytes) {
-        for channel in &order {
-            let start = channel * sample_bytes;
-            wav.extend_from_slice(&frame[start..start + sample_bytes]);
-        }
-        wav.extend(std::iter::repeat_n(0, silent_bytes));
+    let data_size = frame_count * output_frame_bytes as u64;
+    let riff_size = WAV_HEADER_BYTES as u64 - 8 + data_size;
+    if riff_size > u64::from(u32::MAX) {
+        return Err(format!(
+            "{} widened to {target_channels} channels exceeds the 4 GiB a RIFF/WAVE file can hold",
+            input.display()
+        ));
     }
-    let data_size = (wav.len() - 44) as u32;
-    let riff_size = wav.len() as u32 - 8;
-    wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
-    wav[40..44].copy_from_slice(&data_size.to_le_bytes());
-    std::fs::write(output, wav).map_err(|e| format!("cannot write {}: {e}", output.display()))?;
+
+    let cannot_write = |e: std::io::Error| format!("cannot write {}: {e}", output.display());
+    let mut sink = BufWriter::with_capacity(
+        WAV_IO_BUFFER_BYTES,
+        std::fs::File::create(output).map_err(cannot_write)?,
+    );
+    let mut header = Vec::with_capacity(WAV_HEADER_BYTES);
+    header.extend_from_slice(b"RIFF");
+    header.extend_from_slice(&(riff_size as u32).to_le_bytes());
+    header.extend_from_slice(b"WAVEfmt ");
+    header.extend_from_slice(&16u32.to_le_bytes());
+    header.extend_from_slice(&1u16.to_le_bytes());
+    header.extend_from_slice(&(target_channels as u16).to_le_bytes());
+    header.extend_from_slice(&sample_rate.to_le_bytes());
+    header.extend_from_slice(&(sample_rate * output_frame_bytes as u32).to_le_bytes());
+    header.extend_from_slice(&(output_frame_bytes as u16).to_le_bytes());
+    header.extend_from_slice(&bits.to_le_bytes());
+    header.extend_from_slice(b"data");
+    header.extend_from_slice(&(data_size as u32).to_le_bytes());
+    sink.write_all(&header).map_err(cannot_write)?;
+
+    source
+        .seek(SeekFrom::Start(payload_offset))
+        .map_err(cannot_read)?;
+    let mut source_frame = vec![0u8; source_frame_bytes];
+    // bytes past the source channels stay zero, the silent fill
+    let mut output_frame = vec![0u8; output_frame_bytes];
+    for _ in 0..frame_count {
+        source.read_exact(&mut source_frame).map_err(cannot_read)?;
+        for (slot, channel) in order.iter().enumerate() {
+            let from = channel * sample_bytes;
+            let to = slot * sample_bytes;
+            output_frame[to..to + sample_bytes]
+                .copy_from_slice(&source_frame[from..from + sample_bytes]);
+        }
+        sink.write_all(&output_frame).map_err(cannot_write)?;
+    }
+    sink.flush().map_err(cannot_write)?;
     Ok(true)
 }
 
@@ -479,11 +522,6 @@ pub fn wrap_mxf(config: &MxfWrapConfig) -> i32 {
     }
 }
 
-/// Wrap a DCI HDR Addendum picture MXF from an ordered J2K frame list, setting
-/// the Generic Picture Essence Descriptor's TransferCharacteristic = ST 2084 (PQ)
-/// and ColorPrimaries = P3-D65 through asdcplib's `open_write_hdr`. postkit's
-/// `mxf_wrap` has no HDR setter, so this replicates its AS-DCP JP2K wrap and adds
-/// the HDR ULs directly. Returns the track file or None on failure (logged).
 /// The DCI HDR Addendum picture metadata: ST 2084 (PQ) transfer with P3-D65
 /// primaries, written onto the picture essence descriptor.
 pub fn dci_hdr_metadata() -> asdcplib::jp2k::HdrMetadata {
@@ -505,121 +543,50 @@ pub fn wrap_j2k_hdr_files(
         tracing::error!("no essence files to wrap into {}", output_mxf.display());
         return None;
     }
-
-    let mut frames: Vec<Vec<u8>> = Vec::with_capacity(input_files.len());
+    let fps = if frame_rate == 0 { 24 } else { frame_rate };
+    let options = postkit::mxf_wrap::IncrementalWrapOptions {
+        output: output_mxf.to_path_buf(),
+        standard: postkit::mxf_wrap::MxfStandard::AsDcp,
+        fps_num: fps,
+        fps_den: 1,
+        encryption,
+        hdr: Some(dci_hdr_metadata()),
+        asset_uuid,
+    };
+    let mut wrap = match postkit::mxf_wrap::IncrementalJ2kWrap::new(options) {
+        Ok(wrap) => wrap,
+        Err(e) => {
+            tracing::error!("JP2K HDR wrap failed: {e}");
+            return None;
+        }
+    };
+    // a feature's codestreams run to tens of GB
     for f in &input_files {
-        match std::fs::read(f) {
-            Ok(data) => frames.push(data),
+        let frame = match std::fs::read(f) {
+            Ok(frame) => frame,
             Err(e) => {
                 tracing::error!("failed to read {}: {e}", f.display());
                 return None;
             }
-        }
-    }
-
-    // validate every frame as a DCI JPEG 2000 codestream (matches postkit's wrap)
-    let mut header = None;
-    for (f, frame) in input_files.iter().zip(&frames) {
-        let Some(h) = postkit::j2k::parse_j2k_header(frame) else {
-            tracing::error!("invalid JPEG 2000 codestream: {}", f.display());
-            return None;
         };
-        if let Err(error) = postkit::j2k::validate_dci_header(&h) {
-            tracing::error!("invalid DCI JPEG 2000 codestream: {error}: {}", f.display());
+        if let Err(e) = wrap.write_frame(&frame) {
+            tracing::error!("{e}: {}", f.display());
             return None;
-        }
-        if header.is_none() {
-            header = Some(h);
         }
     }
-    let header = header.unwrap();
-
-    let asset_uuid = asset_uuid.unwrap_or_else(|| *uuid::Uuid::new_v4().as_bytes());
-    let mut info = asdcplib::WriterInfo {
-        asset_uuid,
-        context_id: *uuid::Uuid::new_v4().as_bytes(),
-        label_set: asdcplib::LabelSet::Smpte,
-        ..Default::default()
-    };
-
-    let mut enc_ctx = None;
-    let mut hmac_ctx = None;
-    if let Some(e) = &encryption {
-        info.encrypted_essence = true;
-        info.uses_hmac = true;
-        info.cryptographic_key_id = e.key_id;
-        let mut ec = asdcplib::crypto::AesEncContext::new();
-        if let Err(err) = ec.init_key(&e.content_key) {
-            tracing::error!("AES key init failed: {err}");
-            return None;
+    match wrap.finish() {
+        Ok(track) => {
+            tracing::info!(
+                "Wrapped DCI HDR picture MXF (ST 2084 / P3-D65): {}",
+                output_mxf.display()
+            );
+            Some(track)
         }
-        let mut hc = asdcplib::crypto::HmacContext::new();
-        if let Err(err) = hc.init_key(&e.content_key, info.label_set) {
-            tracing::error!("HMAC key init failed: {err}");
-            return None;
-        }
-        enc_ctx = Some(ec);
-        hmac_ctx = Some(hc);
-    }
-
-    let codestream = match asdcplib::jp2k::CodestreamHeader::parse(&frames[0]) {
-        Ok(c) => c,
         Err(e) => {
-            tracing::error!("failed to parse the JPEG 2000 codestream header: {e}");
-            return None;
-        }
-    };
-
-    let fps = if frame_rate == 0 { 24 } else { frame_rate };
-    let desc = asdcplib::jp2k::PictureDescriptor {
-        edit_rate: asdcplib::Rational::new(fps as i32, 1),
-        sample_rate: asdcplib::Rational::new(fps as i32, 1),
-        stored_width: header.width,
-        stored_height: header.height,
-        aspect_ratio: asdcplib::Rational::new(header.width as i32, header.height as i32),
-        container_duration: frames.len() as u32,
-        codestream,
-    };
-    let hdr = dci_hdr_metadata();
-
-    let mut writer = asdcplib::jp2k::MxfWriter::new();
-    let output_str = output_mxf.to_string_lossy().to_string();
-    if let Err(e) = writer.open_write_hdr(&output_str, &info, &desc, &hdr, 16384) {
-        tracing::error!("JP2K HDR open_write failed: {e}");
-        return None;
-    }
-    for frame in &frames {
-        if let Err(e) = writer.write_frame(frame, enc_ctx.as_mut(), hmac_ctx.as_mut()) {
-            tracing::error!("JP2K HDR write_frame failed: {e}");
-            return None;
+            tracing::error!("JP2K HDR wrap failed: {e}");
+            None
         }
     }
-    if let Err(e) = writer.finalize() {
-        tracing::error!("JP2K HDR finalize failed: {e}");
-        return None;
-    }
-
-    let data = std::fs::read(output_mxf).ok()?;
-    let hash = {
-        use sha1::Digest;
-        sha1::Sha1::digest(&data)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
-    tracing::info!(
-        "Wrapped DCI HDR picture MXF (ST 2084 / P3-D65): {}",
-        output_mxf.display()
-    );
-    Some(postkit::mxf_wrap::MxfTrackFile {
-        uuid: uuid::Uuid::from_bytes(asset_uuid).hyphenated().to_string(),
-        hash,
-        size: data.len() as u64,
-        duration: frames.len() as u64,
-        path: output_mxf.to_path_buf(),
-        success: true,
-        error: String::new(),
-    })
 }
 
 /// Wrap a stereoscopic (ST 429-10) picture MXF from equal-length left/right eye
