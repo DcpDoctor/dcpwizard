@@ -2407,6 +2407,19 @@ fn encode_geometry(
     }
 }
 
+/// The DCI family the package declares: a named container names its own, and
+/// `--twok`/`--fourk` decide only when there is no container.
+fn config_resolution(fourk: bool, container: (u32, u32)) -> dcpwizard_core::Resolution {
+    if container != NO_CONTAINER {
+        return dcpwizard_core::Resolution::for_raster(container.0, container.1);
+    }
+    if fourk {
+        dcpwizard_core::Resolution::FourK
+    } else {
+        dcpwizard_core::Resolution::TwoK
+    }
+}
+
 /// One `-vf` argument, or None when nothing has to happen while decoding.
 fn join_decode_filters(picture: &[String], extra: Option<&str>) -> Option<String> {
     let mut filters: Vec<&str> = picture.iter().map(String::as_str).collect();
@@ -3807,6 +3820,8 @@ fn run() {
                         .as_ref()
                         .map(|p| p.resolution_width >= 4096)
                         .unwrap_or(false));
+            let package_resolution = config_resolution(fourk, (container_width, container_height));
+            let package_is_four_k = package_resolution == dcpwizard_core::Resolution::FourK;
             let frame_rate = frame_rate.or_else(|| profile.as_ref().map(|p| p.frame_rate));
             let video_bit_rate =
                 video_bit_rate.or_else(|| profile.as_ref().map(|p| p.bitrate_mbps));
@@ -4077,7 +4092,7 @@ fn run() {
                 hdr_dci,
                 video_bit_rate_mbps: video_bit_rate.unwrap_or(0),
                 right_eye: right_eye.as_deref().map(PathBuf::from),
-                four_k: fourk,
+                four_k: package_is_four_k,
                 reel_length_minutes: reel_length.unwrap_or(0),
                 reel_split_frames: match resolve_reel_splits(
                     split_at.as_deref(),
@@ -4265,7 +4280,7 @@ fn run() {
                 // reject an illegal fps/resolution combo before the encode runs
                 if let Err(e) = dcpwizard_core::hfr::validate_fps_resolution(
                     fps,
-                    fourk,
+                    package_is_four_k,
                     std_val == dcpwizard_core::Standard::Smpte,
                 ) {
                     tracing::error!("{e}");
@@ -4693,11 +4708,7 @@ fn run() {
                     (audio_path, None)
                 };
 
-                let resolution = if fourk {
-                    dcpwizard_core::Resolution::FourK
-                } else {
-                    dcpwizard_core::Resolution::TwoK
-                };
+                let resolution = package_resolution;
                 let ct = content_type
                     .as_deref()
                     .and_then(dcpwizard_core::ContentType::from_abbrev)
@@ -4793,11 +4804,7 @@ fn run() {
             } else {
                 // Input is a J2K directory or image sequence
                 print_hints(hints_pass);
-                let resolution = if fourk {
-                    dcpwizard_core::Resolution::FourK
-                } else {
-                    dcpwizard_core::Resolution::TwoK
-                };
+                let resolution = package_resolution;
                 let ct = content_type
                     .as_deref()
                     .and_then(dcpwizard_core::ContentType::from_abbrev)
@@ -6905,11 +6912,6 @@ fn run() {
             } else {
                 dcpwizard_core::Standard::Smpte
             };
-            let resolution = if fourk {
-                dcpwizard_core::Resolution::FourK
-            } else {
-                dcpwizard_core::Resolution::TwoK
-            };
             let (container_width, container_height) =
                 match resolve_container(container.as_deref(), container_dims.as_deref(), fourk) {
                     Ok(dims) => dims,
@@ -6918,6 +6920,7 @@ fn run() {
                         std::process::exit(1);
                     }
                 };
+            let resolution = config_resolution(fourk, (container_width, container_height));
             let ct = content_type
                 .as_deref()
                 .and_then(dcpwizard_core::ContentType::from_abbrev)
@@ -6977,6 +6980,34 @@ mod tests {
         // ffmpeg colorspace targets are not dcdm-module targets
         assert_eq!(parse_dcdm_target("rec709"), None);
         assert_eq!(parse_dcdm_target("p3"), None);
+    }
+
+    #[test]
+    fn a_named_container_names_its_own_dci_family() {
+        let scope_4k = resolve_container(Some("4k-scope"), None, false).unwrap();
+        assert_eq!(scope_4k, (4096, 1716));
+        assert_eq!(
+            config_resolution(false, scope_4k),
+            dcpwizard_core::Resolution::FourK,
+            "a 4K container is a 4K package without --fourk"
+        );
+
+        // --fourk beside a 2K container is accepted, and the container wins
+        let scope_2k = resolve_container(Some("2k-scope"), None, true).unwrap();
+        assert_eq!(scope_2k, (2048, 858));
+        assert_eq!(
+            config_resolution(true, scope_2k),
+            dcpwizard_core::Resolution::TwoK
+        );
+
+        assert_eq!(
+            config_resolution(true, NO_CONTAINER),
+            dcpwizard_core::Resolution::FourK
+        );
+        assert_eq!(
+            config_resolution(false, NO_CONTAINER),
+            dcpwizard_core::Resolution::TwoK
+        );
     }
 
     fn codestream_dir(root: &Path, frames: u64) -> PathBuf {

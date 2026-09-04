@@ -120,6 +120,15 @@ impl Resolution {
             Resolution::FourK => 2160,
         }
     }
+
+    /// The family a coded raster belongs to: anything past the 2K frame is 4K.
+    pub fn for_raster(width: u32, height: u32) -> Resolution {
+        if width > Resolution::TwoK.width() || height > Resolution::TwoK.height() {
+            Resolution::FourK
+        } else {
+            Resolution::TwoK
+        }
+    }
 }
 
 /// DCP content type (SMPTE 429-7).

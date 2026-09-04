@@ -123,16 +123,6 @@ fn resolution_of(resolution: &str) -> dcpwizard_core::Resolution {
     }
 }
 
-fn resolution_of_raster(width: u32, height: u32) -> dcpwizard_core::Resolution {
-    if width > dcpwizard_core::Resolution::TwoK.width()
-        || height > dcpwizard_core::Resolution::TwoK.height()
-    {
-        dcpwizard_core::Resolution::FourK
-    } else {
-        dcpwizard_core::Resolution::TwoK
-    }
-}
-
 fn request_picture_raster(request: &IsdcfNameRequest) -> Result<Option<(u32, u32)>, String> {
     if request.resolution.as_deref() != Some("auto") {
         return Ok(None);
@@ -232,7 +222,7 @@ fn isdcf_name_for(request: &IsdcfNameRequest) -> Result<String, String> {
         title: request.title.clone(),
         standard: standard_of(request.standard.as_deref().unwrap_or(DEFAULT_STANDARD)),
         resolution: picture_raster
-            .map(|(width, height)| resolution_of_raster(width, height))
+            .map(|(width, height)| dcpwizard_core::Resolution::for_raster(width, height))
             .unwrap_or_else(|| resolution_of(resolution)),
         content_type: content_type_of(
             request
@@ -1079,7 +1069,7 @@ fn checked_job_plan(
     let mut plan = job_plan(job);
     let planned_picture = dcpwizard_core::preflight::plan_picture(&plan)?;
     if let Some(picture) = planned_picture {
-        plan.four_k = resolution_of_raster(picture.raster.0, picture.raster.1)
+        plan.four_k = dcpwizard_core::Resolution::for_raster(picture.raster.0, picture.raster.1)
             == dcpwizard_core::Resolution::FourK;
     }
     dcpwizard_core::preflight::check_before_encode(&plan)?;
@@ -2028,7 +2018,12 @@ fn build_dcp_config(
     let (container_width, container_height) = container_of(&job.resolution);
     let resolution = if container_width == 0 && container_height == 0 {
         dcpwizard_core::cpl::picture_geometry(&j2k_dir, 0, 0)
-            .map(|geometry| resolution_of_raster(geometry.stored_width, geometry.stored_height))
+            .map(|geometry| {
+                dcpwizard_core::Resolution::for_raster(
+                    geometry.stored_width,
+                    geometry.stored_height,
+                )
+            })
             .unwrap_or_else(|_| resolution_of(&job.resolution))
     } else {
         resolution_of(&job.resolution)
