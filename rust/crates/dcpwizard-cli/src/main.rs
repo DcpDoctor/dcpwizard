@@ -2385,19 +2385,25 @@ fn build_sign_language_audio(
 /// `--container-dims` was given.
 const NO_CONTAINER: (u32, u32) = (0, 0);
 
-/// The rasters `create` has to land the picture on: the one `--twok`/`--fourk`
-/// forces, and the container's active area inside it.
+/// The raster `create` has to land the picture on: a named container is itself
+/// the coded raster, and `--twok`/`--fourk` alone force the full DCI frame.
 fn encode_geometry(
     twok: bool,
     fourk: bool,
     container: (u32, u32),
 ) -> dcpwizard_core::source_picture::EncodeGeometry {
+    if container != NO_CONTAINER {
+        return dcpwizard_core::source_picture::EncodeGeometry {
+            forced_raster: Some(container),
+            container: Some(container),
+        };
+    }
     let forced = fourk
         .then_some(dcpwizard_core::Resolution::FourK)
         .or(twok.then_some(dcpwizard_core::Resolution::TwoK));
     dcpwizard_core::source_picture::EncodeGeometry {
         forced_raster: forced.map(|resolution| (resolution.width(), resolution.height())),
-        container: (container != NO_CONTAINER).then_some(container),
+        container: None,
     }
 }
 

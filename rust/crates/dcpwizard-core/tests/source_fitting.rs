@@ -1,7 +1,6 @@
-//! `create --twok --container 2k-scope --fill-crop` on a letterboxed HD source:
-//! the bars are cut, the picture is scaled to the scope container and centred on
-//! the 2K raster, and the CPL declares that raster with the container masked out
-//! of it.
+//! `create --container 2k-scope --fill-crop` on a letterboxed HD source: the bars
+//! are cut, the picture is scaled to the scope container, and that container is
+//! the coded raster the CPL declares as both stored and active area.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,7 +16,6 @@ const CONTENT_HEIGHT: u32 = 804;
 const FPS: u32 = 24;
 const FRAMES: u64 = 6;
 
-const TWO_K_RASTER: (u32, u32) = (2048, 1080);
 const TWO_K_SCOPE: (u32, u32) = (2048, 858);
 
 /// A letterboxed HD clip: colour bars at the scope aspect with real black above
@@ -129,7 +127,7 @@ fn area(cpl: &str, block_name: &str) -> (u32, u32) {
 }
 
 #[test]
-fn a_letterboxed_source_fills_the_scope_container_on_the_two_k_raster() {
+fn a_letterboxed_source_fills_the_scope_container_as_the_coded_raster() {
     let dir = tempfile::tempdir().unwrap();
     let clip = dir.path().join("letterboxed.mp4");
     make_letterboxed_clip(&clip);
@@ -143,16 +141,13 @@ fn a_letterboxed_source_fills_the_scope_container_on_the_two_k_raster() {
         SOURCE_WIDTH,
         SOURCE_HEIGHT,
         &EncodeGeometry {
-            forced_raster: Some(TWO_K_RASTER),
+            forced_raster: Some(TWO_K_SCOPE),
             container: Some(TWO_K_SCOPE),
         },
         false,
     )
     .expect("the fill crop resolves");
-    assert_eq!(
-        (resolved.encode_width, resolved.encode_height),
-        TWO_K_RASTER
-    );
+    assert_eq!((resolved.encode_width, resolved.encode_height), TWO_K_SCOPE);
 
     let work = dir.path().join("encode");
     let cancel = Arc::new(AtomicBool::new(false));
@@ -192,14 +187,21 @@ fn a_letterboxed_source_fills_the_scope_container_on_the_two_k_raster() {
 
     assert_eq!(
         essence_raster(&out),
-        TWO_K_RASTER,
-        "the encoder wrote the forced raster, not the source size"
+        TWO_K_SCOPE,
+        "the encoder wrote the container, not the source size or a padded frame"
     );
     let cpl = read_cpl(&out);
-    assert_eq!(area(&cpl, "MainPictureStoredArea"), TWO_K_RASTER);
+    assert_eq!(area(&cpl, "MainPictureStoredArea"), TWO_K_SCOPE);
     assert_eq!(
         area(&cpl, "MainPictureActiveArea"),
         TWO_K_SCOPE,
-        "the container is masked out of the raster: {cpl}"
+        "a container is the whole coded raster, so nothing is masked: {cpl}"
+    );
+
+    let verified = dcpwizard_core::verify::verify_dcp(&out);
+    assert!(
+        verified.valid && verified.errors.is_empty(),
+        "dcpdoctor must accept the scope package: {:?}",
+        verified.errors
     );
 }

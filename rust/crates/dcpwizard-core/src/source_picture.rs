@@ -61,8 +61,9 @@ impl SourcePictureOptions {
     }
 }
 
-/// The rasters the encode has to land on: the one `--twok`/`--fourk` forces, and
-/// the active area a container declares inside it.
+/// The rasters the encode has to land on: `forced_raster` is the coded raster the
+/// encoder writes, `container` is the aspect the picture is fitted into and the
+/// active area the CPL declares. A named container is both of them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EncodeGeometry {
     pub forced_raster: Option<(u32, u32)>,
@@ -254,6 +255,63 @@ mod tests {
         assert_eq!(
             (resolved.plan.scaled_width, resolved.plan.scaled_height),
             (2048, 856)
+        );
+    }
+
+    #[test]
+    fn a_named_container_is_the_coded_raster_the_source_is_letterboxed_into() {
+        let geometry = EncodeGeometry {
+            forced_raster: Some(TWO_K_SCOPE),
+            container: Some(TWO_K_SCOPE),
+        };
+        let resolved = resolve_picture(
+            &SourcePictureOptions::default(),
+            Path::new("/source/near-scope.mov"),
+            2048,
+            872,
+            &geometry,
+            false,
+        )
+        .unwrap();
+        assert_eq!((resolved.encode_width, resolved.encode_height), TWO_K_SCOPE);
+        assert_eq!(
+            (resolved.plan.scaled_width, resolved.plan.scaled_height),
+            (2014, 858)
+        );
+        assert_eq!((resolved.plan.pad_left, resolved.plan.pad_top), (17, 0));
+    }
+
+    #[test]
+    fn a_fill_crop_onto_a_named_container_neither_scales_nor_pads() {
+        let resolved = resolve_picture(
+            &SourcePictureOptions {
+                fill_crop: true,
+                ..SourcePictureOptions::default()
+            },
+            Path::new("/source/near-scope.mov"),
+            2048,
+            872,
+            &EncodeGeometry {
+                forced_raster: Some(TWO_K_SCOPE),
+                container: Some(TWO_K_SCOPE),
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.processing.crop,
+            Crop {
+                left: 0,
+                right: 0,
+                top: 7,
+                bottom: 7
+            }
+        );
+        assert_eq!((resolved.encode_width, resolved.encode_height), TWO_K_SCOPE);
+        let filters = resolved.plan.filters.join(",");
+        assert!(
+            !filters.contains("scale=") && !filters.contains("pad="),
+            "the crop already lands on the container: {filters}"
         );
     }
 

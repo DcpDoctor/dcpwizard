@@ -294,11 +294,13 @@ fn write_test_video(path: &std::path::Path, width: u32, height: u32) {
 
 /// Three frames of colour bars as 8-bit PNG stills, a format postkit hands to
 /// ffmpeg rather than reading itself.
-fn write_test_stills(dir: &std::path::Path) {
+fn write_test_stills(dir: &std::path::Path, width: u32, height: u32) {
     std::fs::create_dir_all(dir).unwrap();
     let status = std::process::Command::new("ffmpeg")
         .args(["-y", "-f", "lavfi", "-i"])
-        .arg("testsrc=size=2048x1080:rate=24:duration=0.125")
+        .arg(format!(
+            "testsrc=size={width}x{height}:rate=24:duration=0.125"
+        ))
         .arg(dir.join("frame_%03d.png"))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -311,7 +313,7 @@ fn write_test_stills(dir: &std::path::Path) {
 fn encode_compresses_a_still_sequence_into_a_j2k_directory() {
     let dir = TempDir::new().unwrap();
     let stills = dir.path().join("stills");
-    write_test_stills(&stills);
+    write_test_stills(&stills, 2048, 1080);
     let out = dir.path().join("out");
 
     cmd()
@@ -777,23 +779,37 @@ fn write_subtitle(path: &std::path::Path, start: &str, end: &str, text: &str) {
     std::fs::write(path, format!("1\n{start} --> {end}\n{text}\n")).unwrap();
 }
 
+/// Codestreams are compressed already, so nothing is fitted onto the container
+/// and its active area can be wider than the frames a package would carry.
 #[test]
-fn check_refuses_a_container_larger_than_the_frames_without_encoding() {
+fn check_refuses_a_container_larger_than_the_codestreams_it_would_declare() {
     let dir = TempDir::new().unwrap();
-    let video = dir.path().join("hd.mp4");
-    write_test_video(&video, 1920, 1080);
-    let out = dir.path().join("out");
-
-    create_with(&dir, &video, &["--check", "--container", "2k-scope"])
+    let stills = dir.path().join("stills");
+    write_test_stills(&stills, 1920, 1080);
+    let encoded = dir.path().join("encoded");
+    cmd()
+        .args([
+            "encode",
+            "--input",
+            stills.to_str().unwrap(),
+            "--output",
+            encoded.to_str().unwrap(),
+            "--bandwidth",
+            "250",
+        ])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains(
-            "container 2048x858 is larger than the 1920x1080",
-        ));
-    assert!(
-        !out.join("j2k").exists(),
-        "the check must refuse before anything is encoded"
-    );
+        .success();
+
+    create_with(
+        &dir,
+        &encoded.join("j2k"),
+        &["--check", "--container", "2k-full"],
+    )
+    .assert()
+    .failure()
+    .stdout(predicate::str::contains(
+        "container 2048x1080 is larger than the 1920x1080",
+    ));
 }
 
 #[test]

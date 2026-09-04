@@ -25,8 +25,8 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 - **Frame rates** 24, 25, 30 fps (2K/4K); HFR 48, 50, 60, 96, 100, 120 fps (2K only)
 - **Reel splitting** via `create --reel-length <minutes>` (multi-reel CPL, sample-accurate audio and per-reel subtitle boundaries)
 - **Explicit reel splits** via `create --split-at <tc>[,<tc>...]` (HH:MM:SS or HH:MM:SS:FF) or `create --split-chapters` (source chapter marks via ffprobe)
-- **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): declares the active area a projector masks to. The CPL's stored area and aspect always come from the coded raster the encoder produced, so a container larger than the frames is refused
-- **Automatic source fitting**: with `create --twok`/`--fourk` the source is scaled to the container preserving its aspect and centred on the DCI raster with black around it, so a 1998x1080 flat master or a 1920x1080 HD master encodes at 2048x1080 instead of being refused
+- **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): the container is the raster the picture is encoded at, so a scope package is 2048x858 frames and the CPL's stored area, active area and aspect all read back from that essence
+- **Automatic source fitting**: the source is scaled into the container preserving its aspect, so a 1920x1080 HD master with `--container 2k-scope` encodes at 2048x858 with letterbox bars only where the aspects differ. `--twok`/`--fourk` with no container fit the source onto the full 2048x1080 or 4096x2160 frame instead of refusing it
 - **Source picture processing** on `create`: `--crop-left/--crop-right/--crop-top/--crop-bottom <px>` (source pixels, before any rotation), `--auto-crop` with `--auto-crop-threshold <0..1>` (black borders measured over the content), `--fill-crop` (crop to the container aspect so the picture fills the frame), `--deinterlace`, `--denoise`, `--rotate 90|180|270` (clockwise) and `--flip horizontal|vertical|both`
 - **Head/tail padding** via `create --pad-head <dur> --pad-tail <dur>` (`48f`/`2s`), with `--pad-color <RRGGBB>` for a filled pad instead of black
 - **Trim** via `create --trim-start <dur> --trim-end <dur>` (same syntax), cutting the source before any padding; picture, sound and subtitles move together
@@ -245,6 +245,16 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+grok looks for `libgrokj2k_plugin` in the directory `GRK_PLUGIN_PATH` names, then in the working directory, then in the executable's own directory, and never on `LD_LIBRARY_PATH` or `PATH`. A GUI launched without `GRK_PLUGIN_PATH` therefore encodes on the CPU even with the GPU toggle on:
+
+```bash
+export LD_LIBRARY_PATH=/path/to/grok/lib64
+export GRK_PLUGIN_PATH=/path/to/grok/lib64
+./src-tauri/target/release/dcpwizard-gui
+```
+
+A desktop launcher inherits neither variable, so put both on the `.desktop` Exec line or in `~/.config/environment.d`. The job log at `<output>/dcpwizard.log` confirms the device ran: the header prints `Accelerator: requested, active` and the encode is followed by `[ENCODE] Frames on the device: N of M`.
+
 ## CLI Usage
 
 ```bash
@@ -314,10 +324,10 @@ dcpwizard create --title "My Feature" --video movie.mov --output ./dcp --split-c
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --container 2k-flat
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp --container-dims 1920x1080
 
-# Fit an HD master into the scope container on the 2K raster: the black bars are
-# cropped off, the picture is scaled to 2048x858 and centred on a 2048x1080 frame
+# Fit an HD master into the scope container: the black bars are cropped off and
+# the picture is scaled to 2048x858, which is the raster the DCP is encoded at
 dcpwizard create --title "My Film" --video movie.mov --output ./dcp \
-    --twok --container 2k-scope --fill-crop --deinterlace
+    --container 2k-scope --fill-crop --deinterlace
 
 # Route a stereo source across the DCP lanes: L and R untouched, a -6 dB centre
 dcpwizard create --title "My Film" --video movie.mov --audio stereo.wav \

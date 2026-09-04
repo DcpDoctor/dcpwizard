@@ -1518,11 +1518,6 @@ const RESOLUTION_CONTAINERS: [(&str, u32, u32); 6] = [
 /// which is the panel's "Auto (from source)".
 const NO_CONTAINER: (u32, u32) = (0, 0);
 
-/// The DCI rasters a fitted picture is centred on. The container is masked out
-/// of one of these, so a scope package is 2048x858 inside a 2048x1080 frame.
-const TWO_K_RASTER: (u32, u32) = (2048, 1080);
-const FOUR_K_RASTER: (u32, u32) = (4096, 2160);
-
 fn container_of(resolution: &str) -> (u32, u32) {
     RESOLUTION_CONTAINERS
         .iter()
@@ -1531,24 +1526,20 @@ fn container_of(resolution: &str) -> (u32, u32) {
         .unwrap_or(NO_CONTAINER)
 }
 
-/// The rasters a job's picture has to land on. Choosing a container in the panel
-/// is choosing the DCI raster around it, so the picture is always scaled onto
-/// that raster; the container fill only decides whether the source is cropped to
-/// the container's aspect or letterboxed inside it.
+/// The raster a job's picture has to land on. Choosing a container in the panel
+/// is choosing the coded raster, so the picture is scaled onto the container
+/// itself; the container fill only decides whether the source is cropped to the
+/// container's aspect or letterboxed inside it.
 fn job_geometry(job: &JobConfig) -> dcpwizard_core::source_picture::EncodeGeometry {
     geometry_for_resolution(&job.resolution)
 }
 
 fn geometry_for_resolution(resolution: &str) -> dcpwizard_core::source_picture::EncodeGeometry {
     let container = container_of(resolution);
-    let raster = if resolution.contains("4k") {
-        FOUR_K_RASTER
-    } else {
-        TWO_K_RASTER
-    };
+    let named = (container != NO_CONTAINER).then_some(container);
     dcpwizard_core::source_picture::EncodeGeometry {
-        forced_raster: (container != NO_CONTAINER).then_some(raster),
-        container: (container != NO_CONTAINER).then_some(container),
+        forced_raster: named,
+        container: named,
     }
 }
 
@@ -3541,6 +3532,17 @@ mod tests {
                 (core.resolution_width, core.resolution_height)
             );
         }
+    }
+
+    #[test]
+    fn a_named_resolution_is_the_coded_raster_the_encode_lands_on() {
+        let scope = geometry_for_resolution("2k-scope");
+        assert_eq!(scope.forced_raster, Some((2048, 858)));
+        assert_eq!(scope.container, Some((2048, 858)));
+
+        let auto = geometry_for_resolution("auto");
+        assert_eq!(auto.forced_raster, None);
+        assert_eq!(auto.container, None);
     }
 
     #[test]
