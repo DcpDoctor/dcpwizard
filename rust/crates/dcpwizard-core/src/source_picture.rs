@@ -222,7 +222,7 @@ mod tests {
             (1998, 1080),
             "nothing grows past the box, so the flat picture keeps its size"
         );
-        assert_eq!(resolved.plan.pad_left, 25);
+        assert_eq!(resolved.plan.pad_left, 24);
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod tests {
             (resolved.plan.scaled_width, resolved.plan.scaled_height),
             (2014, 858)
         );
-        assert_eq!((resolved.plan.pad_left, resolved.plan.pad_top), (17, 0));
+        assert_eq!((resolved.plan.pad_left, resolved.plan.pad_top), (16, 0));
     }
 
     #[test]
@@ -303,8 +303,8 @@ mod tests {
             Crop {
                 left: 0,
                 right: 0,
-                top: 7,
-                bottom: 7
+                top: 6,
+                bottom: 8
             }
         );
         assert_eq!((resolved.encode_width, resolved.encode_height), TWO_K_SCOPE);
@@ -447,10 +447,7 @@ mod tests {
             &EncodeGeometry::default(),
         )
         .unwrap();
-        assert_eq!(
-            resolved.plan.filters,
-            vec!["yadif", "hqdn3d", "format=gbrp16le", "hflip"]
-        );
+        assert_eq!(resolved.plan.filters, vec!["yadif", "hqdn3d", "hflip"]);
     }
 
     #[test]

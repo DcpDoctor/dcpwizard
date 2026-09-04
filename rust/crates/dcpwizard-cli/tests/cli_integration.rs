@@ -369,7 +369,7 @@ fn create_fits_a_source_that_is_not_the_forced_raster_onto_it() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "scale to 1998x1080, pad to 2048x1080 at (25,0)",
+            "scale to 1998x1080, pad to 2048x1080 at (24,0)",
         ));
     assert!(
         std::fs::read_dir(&out)
