@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Changed
-- **grok is pinned at the v20.4.3 release**: every workflow builds the tag instead of a commit on master.
+- **grok is pinned at the v20.4.3 release**: every workflow builds the tag instead of a commit on master. A `--gpu create` of a 21312 frame 2K feature with six channel sound on this release encodes at 127.5 fps and finishes the whole DCP, sound wrap and packaging included, in 190 s (112 fps end to end) at a 1.45 GB peak, where the previous full run on the same clip took 234 s at 2.21 GB. `dcpdoctor validate --check-mxf` passes the result.
 - **The audio level hint measures true peak in Rust**: the hint ran ffmpeg's loudnorm over the whole WAV to read one number off it, 107.7 s on an 888 s six channel 24-bit track. It now calls `postkit::loudness::measure_true_peak_dbtp`, which streams the file and meters each channel on its own thread, 1.0 s on the same track for the same -0.20 dBTP. A WAV the pass cannot read is still skipped by the hint and reported by the encode.
 - **`create` hashes the picture MXF once**: a picture wrapped during the encode is hashed by the wrap as it finishes, and `create_dcp` then read the whole file back to hash it again for the CPL and PKL, 19 s on a 16 GB feature. `PreWrappedPicture` now carries the wrap's SHA-1 and size (postkit's `MxfTrackFile::hash_base64`) and the package declares those.
 - **`create` gathers its hints beside the encode**: the audio level hint runs ffmpeg's loudnorm measurement over the whole WAV, 106 s on an 888 s six channel track, and the command waited for it before the first frame was decoded. The hint pass now runs on a thread while the picture encodes and the hints print before packaging. `--check` still waits for them and prints the count as before.
