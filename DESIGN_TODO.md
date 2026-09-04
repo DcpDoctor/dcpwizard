@@ -179,7 +179,7 @@ one side, mirror the other:
   imfwizard, dcpdoctor differing by binary/artifact names + per-app build deps.
   Separate git repos, so no shared reusable-workflow without a central repo. Keep
   aligned by hand. Every job that compiles the rust workspace sets grok up through
-  PostPerfection/setup-grok@v1 at grok-ref v20.4.0, windows on a separate msvc
+  PostPerfection/setup-grok@v1 at grok-ref v20.4.3, windows on a separate msvc
   build of the same tag. All three platforms are required in ci, none are
   continue-on-error.
   imfwizard sets grok up in ci, release and gui-release the same way, and links
