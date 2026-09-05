@@ -99,7 +99,7 @@ pub enum XyzRoute {
 /// The route a source carrying `space` takes to X'Y'Z' inside the encode.
 ///
 /// Rec.709 is the compressor's own transform, X'Y'Z' is already there, and P3,
-/// Rec.2020 and LogC go through postkit's own per-frame transform: that space's
+/// P3-D65, Rec.2020 and LogC go through postkit's own per-frame transform: that space's
 /// curve, its matrix, and the compressor's transform off. ACES and ACEScg are
 /// refused: they are scene-referred, so no matrix reaches X'Y'Z' from them and
 /// approximating one would be silently wrong colour.
@@ -108,7 +108,7 @@ pub fn xyz_route(space: postkit::colour::ColourSpace) -> Result<XyzRoute, String
     match space {
         ColourSpace::Rec709 => Ok(XyzRoute::CompressorTransform),
         ColourSpace::Xyz => Ok(XyzRoute::AlreadyXyz),
-        ColourSpace::P3 | ColourSpace::Rec2020 | ColourSpace::LogC => {
+        ColourSpace::P3 | ColourSpace::P3D65 | ColourSpace::Rec2020 | ColourSpace::LogC => {
             Ok(XyzRoute::FrameTransform(space))
         }
         ColourSpace::Aces | ColourSpace::AcesCg => Err(format!(
@@ -127,7 +127,9 @@ impl XyzRoute {
     }
 
     /// postkit's per-frame transform, built once for a whole encode.
-    pub fn frame_transform(self) -> Result<Option<Arc<postkit::colour::DcdmTransform>>, String> {
+    pub fn frame_transform(
+        self,
+    ) -> Result<Option<Arc<postkit::colour::FrameColourTransform>>, String> {
         self.source_colour().frame_transform()
     }
 

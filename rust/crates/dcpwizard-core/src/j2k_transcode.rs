@@ -615,6 +615,7 @@ fn decode_source_frame(
         height,
         precision,
         components: components.to_vec(),
+        chroma_subsampled: false,
     };
     postkit::grok::write_tiff_rgb(
         &tif,
