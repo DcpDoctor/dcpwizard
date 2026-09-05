@@ -43,6 +43,13 @@ document.querySelectorAll(".sidebar-btn[data-view]").forEach((btn) => {
 });
 
 // === Theme toggle ===
+document.getElementById("set-gpu-license-show")?.addEventListener("click", (event) => {
+  const license = document.getElementById("set-gpu-license");
+  const hidden = license.type === "password";
+  license.type = hidden ? "text" : "password";
+  event.currentTarget.textContent = hidden ? "Hide" : "Show";
+});
+
 document.getElementById("theme-toggle")?.addEventListener("click", () => {
   document.body.classList.toggle("light");
   const btn = document.getElementById("theme-toggle");
