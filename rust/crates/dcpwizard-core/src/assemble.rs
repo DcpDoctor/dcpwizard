@@ -103,6 +103,7 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
     let mut new_assets: Vec<(String, String, String, u64)> = Vec::new(); // id, filename, hash, size
     let mut copied: HashSet<String> = HashSet::new();
     let mut used_names: HashSet<String> = HashSet::new();
+    let mut main_sound_track: Option<PathBuf> = None;
 
     for input in &inputs {
         let pkl_map = parse_pkls(&input.dir);
@@ -150,6 +151,9 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
             if let Err(c) = copy_track(&reel.subtitle_asset_id, &reel.subtitle_file) {
                 return c;
             }
+            if main_sound_track.is_none() && !reel.sound_asset_id.is_empty() {
+                main_sound_track = Some(PathBuf::from(&reel.sound_file));
+            }
 
             let has_sub = !reel.subtitle_asset_id.is_empty();
             cpl_reels.push(crate::cpl::CplReel {
@@ -196,6 +200,20 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
         config.title.clone()
     };
 
+    // the program combines several sources, so no input CPL's block describes it
+    let main_sound = match main_sound_track {
+        Some(ref track) if standard == crate::Standard::Smpte => {
+            match crate::cpl::main_sound_from_track_file(track) {
+                Ok(sound) => Some(sound),
+                Err(e) => {
+                    tracing::error!("{e}");
+                    return -1;
+                }
+            }
+        }
+        _ => None,
+    };
+
     // ── CPL ──
     let cpl_uuid = uuid::Uuid::new_v4().to_string();
     let cpl_path = config.output_dir.join(format!("CPL_{cpl_uuid}.xml"));
@@ -205,7 +223,7 @@ pub fn assemble(config: &AssembleConfig) -> i32 {
         rating: String::new(),
         reels: cpl_reels,
         standard,
-        main_sound: None,
+        main_sound,
         sign_language: None,
         ..Default::default()
     };

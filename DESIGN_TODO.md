@@ -16,10 +16,6 @@ user-facing surface is here.
   skip and frame-step buttons, the decode-resolution menu and HUD, the crop
   overlay and the subtitle/CC render toggles. Everything in guikit's preview
   header is owed the same pass in imfwizard.
-- `vf` and `assemble` write no `CompositionMetadataAsset`: both can replace or
-  combine the sound, so the source CPL's `MainSoundConfiguration` need not
-  describe their output, and they would have to read the sound essence to
-  declare it.
 - Hints not ported from DCP-o-matic's list, each for a reason. Signing certificate
   checks (utf8 subject strings, a chain valid for more than 15 years) are about
   the configured signer rather than the job, and our signer is held to ST 430-2

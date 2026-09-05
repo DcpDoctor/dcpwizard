@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 const W: u32 = 2048;
 const H: u32 = 1080;
 
+/// What `create_dcp` packages when a job brings no audio: 5.1 silence.
+const FILL_SOUND_CONFIGURATION: &str = "51/L,R,C,LFE,Ls,Rs";
+const DCP_SAMPLE_RATE: u32 = 48_000;
+
 fn make_content_frames(dir: &Path, count: usize, fps: u32) {
     std::fs::create_dir_all(dir).unwrap();
     let seed = dir.join("seed.j2c");
@@ -92,6 +96,25 @@ fn assembles_two_dcps_into_one_valid_ov() {
     assert_eq!(cpl_reel_count(&out), 2, "two reels, one per input");
     let xml = std::fs::read_to_string(&cpls[0]).unwrap();
     assert!(xml.contains("<ContentTitleText>Program</ContentTitleText>"));
+
+    // the sound the program ships is the sources' 5.1 silent fill, read back off
+    // the copied track file
+    assert!(
+        xml.contains("<meta:CompositionMetadataAsset"),
+        "SMPTE Bv2.1 wants the metadata asset: {xml}"
+    );
+    assert!(
+        xml.contains(&format!(
+            "<meta:MainSoundConfiguration>{FILL_SOUND_CONFIGURATION}</meta:MainSoundConfiguration>"
+        )),
+        "assembled CPL must declare the sound it ships: {xml}"
+    );
+    assert!(
+        xml.contains(&format!(
+            "<meta:MainSoundSampleRate>{DCP_SAMPLE_RATE} 1</meta:MainSoundSampleRate>"
+        )),
+        "{xml}"
+    );
 
     let result = dcpwizard_core::verify::verify_dcp(&out);
     assert!(result.valid, "dcpdoctor errors: {:?}", result.errors);

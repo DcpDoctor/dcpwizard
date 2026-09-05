@@ -301,6 +301,96 @@ pub fn main_sound_from_cpl(cpl_xml: &str) -> Option<MainSound> {
     })
 }
 
+const MCA_CHANNEL_TAG_PREFIX: &str = "ch";
+const MCA_SOUNDFIELD_TAG_PREFIX: &str = "sg";
+const ACCESSIBILITY_CHANNEL_TAGS: [&str; 2] = ["HI", "VIN"];
+
+pub fn main_sound_from_track_file(path: &Path) -> Result<MainSound, String> {
+    let file = path.to_string_lossy().to_string();
+    let mut reader = asdcplib::pcm::MxfReader::new();
+    // an encrypted track still reads here, the descriptor is in the plain header
+    reader
+        .open_read(&file)
+        .map_err(|e| format!("cannot open the sound track {}: {e}", path.display()))?;
+    let descriptor = reader.audio_descriptor().map_err(|e| {
+        format!(
+            "cannot read the audio descriptor of {}: {e}",
+            path.display()
+        )
+    })?;
+    let rate = descriptor.audio_sampling_rate;
+    if rate.numerator <= 0 || rate.denominator <= 0 {
+        return Err(format!(
+            "{} declares the sampling rate {} {}",
+            path.display(),
+            rate.numerator,
+            rate.denominator
+        ));
+    }
+    let labels = reader
+        .mca_label_subdescriptors()
+        .map_err(|e| format!("cannot read the MCA labels of {}: {e}", path.display()))?;
+    let configuration = mca_main_sound_configuration(&labels, descriptor.channel_count)
+        .unwrap_or_else(|| {
+            main_sound_configuration(
+                descriptor.channel_count,
+                descriptor.channel_count,
+                None,
+                None,
+            )
+        });
+    Ok(MainSound {
+        configuration,
+        sample_rate: (rate.numerator / rate.denominator) as u32,
+    })
+}
+
+fn mca_main_sound_configuration(
+    labels: &[asdcplib::pcm::McaLabelSubDescriptor],
+    channel_count: u32,
+) -> Option<String> {
+    use asdcplib::pcm::McaLabelKind;
+
+    let mut slots = vec![SOUNDFIELD_NONE; channel_count as usize];
+    let mut labelled_any_channel = false;
+    for label in labels
+        .iter()
+        .filter(|l| l.kind == McaLabelKind::AudioChannel)
+    {
+        // MCAChannelID is one based
+        let Some(channel_id) = label.channel_id.filter(|id| *id > 0) else {
+            continue;
+        };
+        let Some(slot) = slots.get_mut(channel_id as usize - 1) else {
+            continue;
+        };
+        *slot = strip_mca_prefix(&label.tag_symbol, MCA_CHANNEL_TAG_PREFIX);
+        labelled_any_channel = true;
+    }
+    if !labelled_any_channel {
+        return None;
+    }
+    // stereo and mono have no ST 428-12 group label, so the count names the group
+    let group = labels
+        .iter()
+        .find(|l| l.kind == McaLabelKind::SoundfieldGroup)
+        .map(|l| strip_mca_prefix(&l.tag_symbol, MCA_SOUNDFIELD_TAG_PREFIX))
+        .unwrap_or_else(|| {
+            let main_channels = slots
+                .iter()
+                .filter(|slot| {
+                    **slot != SOUNDFIELD_NONE && !ACCESSIBILITY_CHANNEL_TAGS.contains(slot)
+                })
+                .count();
+            soundfield_group(main_channels as u32)
+        });
+    Some(format!("{group}/{}", slots.join(",")))
+}
+
+fn strip_mca_prefix<'a>(tag_symbol: &'a str, prefix: &str) -> &'a str {
+    tag_symbol.strip_prefix(prefix).unwrap_or(tag_symbol)
+}
+
 /// Generate a Composition Playlist XML via the shared postkit writer.
 pub fn generate_cpl(config: &CplConfig, cpl_uuid: &str, output_file: &Path) -> i32 {
     use postkit::packaging::{self, DcpCpl, DcpCplReel, DcpRating};
@@ -474,6 +564,16 @@ const SOUNDFIELD_MONO: &str = "M";
 /// for a MainSoundConfiguration with nothing to declare.
 const SOUNDFIELD_NONE: &str = "-";
 
+fn soundfield_group(main_channels: u32) -> &'static str {
+    match main_channels {
+        1 => SOUNDFIELD_MONO,
+        2 => "20",
+        6 | 16 => "51",
+        8 => "71",
+        _ => SOUNDFIELD_NONE,
+    }
+}
+
 /// Build the ST 429-16 MainSoundConfiguration. The group comes from the channels
 /// the content fills, the slot count from the channels the track is packaged
 /// with, so the silent fill channels are written '-' rather than counted into
@@ -495,14 +595,14 @@ pub fn main_sound_configuration(
     // canonical DCP channel order per ISDCF / SMPTE RDD 52. 16 is 5.1 because no
     // content is 16 channels wide: a caller that knows only the packaged count is
     // looking at the 5.1 track the wrap has always filled.
-    let (group, labels): (&str, &[&str]) = match main_count {
-        1 => (SOUNDFIELD_MONO, &[]),
-        2 => ("20", &["L", "R"]),
-        6 | 16 => ("51", &["L", "R", "C", "LFE", "Ls", "Rs"]),
-        8 => ("71", &["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs"]),
-        _ => (SOUNDFIELD_NONE, &[]),
+    let labels: &[&str] = match main_count {
+        2 => &["L", "R"],
+        6 | 16 => &["L", "R", "C", "LFE", "Ls", "Rs"],
+        8 => &["L", "R", "C", "LFE", "Lss", "Rss", "Lrs", "Rrs"],
+        _ => &[],
     };
-    let mut slots = vec!["-"; packaged_channels as usize];
+    let group = soundfield_group(main_count);
+    let mut slots = vec![SOUNDFIELD_NONE; packaged_channels as usize];
     for (i, l) in labels.iter().enumerate() {
         if let Some(slot) = slots.get_mut(i) {
             *slot = l;
@@ -1392,5 +1492,107 @@ mod tests {
         let aux_pos = xml.find("<axd:AuxData").unwrap();
         let close_pos = xml.find("</AssetList>").unwrap();
         assert!(aux_pos < close_pos);
+    }
+
+    const ACCESSIBILITY_TRACK_CHANNELS: u32 = 8;
+    const STEREO_CHANNELS: u32 = 2;
+    const HEARING_IMPAIRED_CHANNEL: u32 = 6;
+    const VISUALLY_IMPAIRED_CHANNEL: u32 = 7;
+    const SILENCE_FRAMES: u64 = 24;
+    const TEST_FRAME_RATE: u32 = 24;
+    const DCP_SAMPLE_RATE: u32 = 48_000;
+
+    fn silent_wav(dir: &Path, channels: u32) -> std::path::PathBuf {
+        let wav = dir.join("silence.wav");
+        crate::audio_fallback::write_silent_wav(&wav, channels, SILENCE_FRAMES, TEST_FRAME_RATE)
+            .expect("write silence");
+        wav
+    }
+
+    #[test]
+    fn main_sound_from_track_file_reads_the_mca_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = silent_wav(dir.path(), ACCESSIBILITY_TRACK_CHANNELS);
+        let labels = crate::mxf_wrap::build_mca_config(
+            ACCESSIBILITY_TRACK_CHANNELS,
+            ACCESSIBILITY_TRACK_CHANNELS,
+            Some(HEARING_IMPAIRED_CHANNEL),
+            Some(VISUALLY_IMPAIRED_CHANNEL),
+        )
+        .expect("5.1 plus HI and VI-N labels");
+        let mxf = dir.path().join("labelled.mxf");
+        crate::mxf_wrap::wrap_mxf_files(
+            vec![wav],
+            &mxf,
+            crate::mxf_wrap::MxfType::PcmAudio,
+            TEST_FRAME_RATE,
+            None,
+            Some(postkit::mxf_wrap::McaConfig {
+                labels,
+                spoken_language: None,
+            }),
+            None,
+        )
+        .expect("wrap the labelled track");
+
+        let sound = main_sound_from_track_file(&mxf).expect("read the sound track");
+        // the channel count alone would call these eight channels 7.1
+        assert_eq!(sound.configuration, "51/L,R,C,LFE,Ls,Rs,HI,VIN");
+        assert_eq!(sound.sample_rate, DCP_SAMPLE_RATE);
+    }
+
+    #[test]
+    fn main_sound_from_track_file_names_the_stereo_group_the_essence_omits() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = silent_wav(dir.path(), STEREO_CHANNELS);
+        let mxf = dir.path().join("stereo.mxf");
+        crate::mxf_wrap::wrap_mxf_files(
+            vec![wav],
+            &mxf,
+            crate::mxf_wrap::MxfType::PcmAudio,
+            TEST_FRAME_RATE,
+            None,
+            None,
+            None,
+        )
+        .expect("wrap the stereo track");
+
+        let sound = main_sound_from_track_file(&mxf).expect("read the sound track");
+        assert_eq!(sound.configuration, "20/L,R");
+    }
+
+    #[test]
+    fn main_sound_from_track_file_falls_back_to_the_channel_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = silent_wav(dir.path(), ACCESSIBILITY_TRACK_CHANNELS);
+        let mxf = dir.path().join("unlabelled.mxf");
+        let result = postkit::mxf_wrap::mxf_wrap(&postkit::mxf_wrap::MxfWrapOptions {
+            input_files: vec![wav],
+            output: mxf.clone(),
+            essence_type: postkit::mxf_wrap::EssenceType::Pcm,
+            standard: postkit::mxf_wrap::MxfStandard::AsDcp,
+            fps_num: TEST_FRAME_RATE,
+            fps_den: 1,
+            partition_size: 0,
+            encryption: None,
+            mca_config: None,
+            resource_ids: vec![],
+            hdr: None,
+            asset_uuid: None,
+            timed_text_duration_frames: None,
+        });
+        assert!(result.success, "wrap failed: {}", result.error);
+
+        let sound = main_sound_from_track_file(&mxf).expect("read the sound track");
+        assert_eq!(sound.configuration, "71/L,R,C,LFE,Lss,Rss,Lrs,Rrs");
+        assert_eq!(sound.sample_rate, DCP_SAMPLE_RATE);
+    }
+
+    #[test]
+    fn main_sound_from_track_file_names_the_file_it_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent.mxf");
+        let error = main_sound_from_track_file(&missing).expect_err("a missing track must fail");
+        assert!(error.contains("absent.mxf"), "{error}");
     }
 }

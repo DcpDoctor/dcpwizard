@@ -120,6 +120,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
 
     let mut cpl_reels: Vec<crate::cpl::CplReel> = Vec::new();
     let mut new_assets: Vec<NewAsset> = Vec::new();
+    let mut main_sound_track: Option<PathBuf> = None;
 
     for entry in &ov_timeline {
         let rep = config
@@ -162,10 +163,16 @@ pub fn create_vf(config: &VfConfig) -> i32 {
                     return -1;
                 };
                 let out = Some((a.id.clone(), a.duration));
+                if main_sound_track.is_none() {
+                    main_sound_track = Some(config.vf_dir.join(&a.filename));
+                }
                 new_assets.push(a);
                 out
             }
             None if !entry.sound_asset_id.is_empty() => {
+                if main_sound_track.is_none() {
+                    main_sound_track = Some(PathBuf::from(&entry.sound_file));
+                }
                 Some((entry.sound_asset_id.clone(), entry.duration_frames))
             }
             None => None,
@@ -265,6 +272,20 @@ pub fn create_vf(config: &VfConfig) -> i32 {
         ov_cpl.content_kind.clone()
     };
 
+    // the VF can replace the sound, so the OV CPL's block may not describe it
+    let main_sound = match main_sound_track {
+        Some(ref track) if standard == crate::Standard::Smpte => {
+            match crate::cpl::main_sound_from_track_file(track) {
+                Ok(sound) => Some(sound),
+                Err(e) => {
+                    tracing::error!("{e}");
+                    return -1;
+                }
+            }
+        }
+        _ => None,
+    };
+
     // ── Write CPL via the shared postkit writer, then mark it supplemental ──
     let cpl_uuid = uuid::Uuid::new_v4().to_string();
     let cpl_path = config.vf_dir.join(format!("CPL_{cpl_uuid}.xml"));
@@ -274,7 +295,7 @@ pub fn create_vf(config: &VfConfig) -> i32 {
         rating: String::new(),
         reels: cpl_reels,
         standard,
-        main_sound: None,
+        main_sound,
         sign_language: None,
         ..Default::default()
     };

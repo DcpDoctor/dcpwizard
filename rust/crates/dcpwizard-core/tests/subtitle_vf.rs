@@ -16,6 +16,10 @@ const W: u32 = 2048;
 const H: u32 = 1080;
 const FPS: u32 = 24;
 
+/// The layout of the stereo WAV `make_ov` wraps.
+const OV_SOUND_CONFIGURATION: &str = "20/L,R";
+const DCP_SAMPLE_RATE: u32 = 48_000;
+
 fn make_content_frames(dir: &Path, count: usize) {
     std::fs::create_dir_all(dir).unwrap();
     let seed = dir.join("seed.j2c");
@@ -140,6 +144,24 @@ fn subtitle_only_vf_references_ov_and_volume_validates() {
     assert!(
         vf_cpl.contains(&ov_pic),
         "VF CPL still references the OV picture by id"
+    );
+
+    // the VF declares the sound it plays, read back off the OV track it references
+    assert!(
+        vf_cpl.contains("<meta:CompositionMetadataAsset"),
+        "SMPTE Bv2.1 wants the metadata asset: {vf_cpl}"
+    );
+    assert!(
+        vf_cpl.contains(&format!(
+            "<meta:MainSoundConfiguration>{OV_SOUND_CONFIGURATION}</meta:MainSoundConfiguration>"
+        )),
+        "VF CPL must declare the OV's stereo sound: {vf_cpl}"
+    );
+    assert!(
+        vf_cpl.contains(&format!(
+            "<meta:MainSoundSampleRate>{DCP_SAMPLE_RATE} 1</meta:MainSoundSampleRate>"
+        )),
+        "{vf_cpl}"
     );
 
     // the VF ships exactly one subtitle MXF and no picture/sound MXF
