@@ -2,33 +2,6 @@ pub use postkit::probe::*;
 
 use std::path::Path;
 
-/// Detect whether the primary video stream carries an alpha channel.
-pub fn video_has_alpha(path: &Path) -> Result<bool, String> {
-    let output = std::process::Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=pix_fmt",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
-        .arg(path)
-        .output()
-        .map_err(|error| format!("failed to run ffprobe: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe could not inspect {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let pixel_format = String::from_utf8_lossy(&output.stdout);
-    Ok(pixel_format_has_alpha(pixel_format.trim()))
-}
-
 /// Whether the local ffmpeg build lists a given encoder (e.g. "libvpx-vp9").
 pub fn ffmpeg_has_encoder(name: &str) -> bool {
     ffmpeg_lists("-encoders", name)
@@ -97,7 +70,7 @@ fn ffmpeg_lists(flag: &str, name: &str) -> bool {
     }
 }
 
-fn pixel_format_has_alpha(pixel_format: &str) -> bool {
+pub fn pixel_format_has_alpha(pixel_format: &str) -> bool {
     pixel_format.starts_with("yuva")
         || pixel_format.starts_with("gbrap")
         || matches!(

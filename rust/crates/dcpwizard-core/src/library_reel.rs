@@ -312,6 +312,7 @@ fn encode_item_picture(
             frames,
             width,
             height,
+            &postkit::probe::probe_pixel_format(&item.media),
             &cancel,
             false,
             Some(&filters.join(",")),

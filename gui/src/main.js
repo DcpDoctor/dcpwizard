@@ -12,11 +12,13 @@ import { initTimeline, loadTimelineFromCpl } from "./timeline.js";
 import { initShortcuts, getBinding } from "../../extern/guikit/src/shortcuts.js";
 
 // === Browse wrapper (remembers last directory) ===
-let lastBrowseDir = null;
+const LAST_BROWSE_DIR_KEY = "dcpwizard-last-browse-dir";
+let lastBrowseDir = localStorage.getItem(LAST_BROWSE_DIR_KEY);
 async function open(opts = {}) {
   const result = await _open({ ...opts, defaultPath: opts.defaultPath || lastBrowseDir || undefined });
   if (result) {
     lastBrowseDir = opts.directory ? result : result.replace(/[/\\][^/\\]*$/, '');
+    localStorage.setItem(LAST_BROWSE_DIR_KEY, lastBrowseDir);
   }
   return result;
 }

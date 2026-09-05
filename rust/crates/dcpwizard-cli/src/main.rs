@@ -4235,18 +4235,19 @@ fn run() {
                 } else {
                     dcpwizard_core::probe::probe_video(&encode_video_path)
                 };
-                match dcpwizard_core::probe::video_has_alpha(&encode_video_path) {
-                    Ok(true) => {
-                        tracing::error!(
-                            "Input video has alpha. Composite it over an opaque background before creating a DCP."
-                        );
-                        std::process::exit(1);
-                    }
-                    Ok(false) => {}
-                    Err(error) => {
-                        tracing::error!("Cannot determine whether the input has alpha: {error}");
-                        std::process::exit(1);
-                    }
+                let Some(source_pixel_format) = video_info.as_ref().map(|info| info.pixel_format())
+                else {
+                    tracing::error!(
+                        "ffprobe cannot read the input video: {}",
+                        encode_video_path.display()
+                    );
+                    std::process::exit(1);
+                };
+                if dcpwizard_core::probe::pixel_format_has_alpha(&source_pixel_format.pix_fmt) {
+                    tracing::error!(
+                        "Input video has alpha. Composite it over an opaque background before creating a DCP."
+                    );
+                    std::process::exit(1);
                 }
                 let source_fps = video_info
                     .as_ref()
@@ -4481,6 +4482,7 @@ fn run() {
                     encode_frames,
                     width,
                     height,
+                    &source_pixel_format,
                     &cancel,
                     resume,
                     video_filter.as_deref(),
@@ -4567,6 +4569,7 @@ fn run() {
                         encode_frames,
                         width,
                         height,
+                        &postkit::probe::probe_pixel_format(&re_path),
                         &cancel,
                         false,
                         picture_filter.as_deref(),
