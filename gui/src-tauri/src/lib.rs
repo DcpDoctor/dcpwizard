@@ -96,6 +96,11 @@ pub fn run() {
             app.manage(guikit::preview::create_player(app, MAIN_WINDOW_LABEL));
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                app.state::<pipeline::JobQueue>().stop_for_exit();
+            }
+        });
 }
