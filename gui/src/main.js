@@ -116,9 +116,8 @@ initShortcuts({
 });
 refreshButtonTooltips();
 
-// === Preferences (localStorage) ===
+// === Preferences ===
 const PREFS_KEY = "dcpwizard-preferences";
-const PREFS_VERSION = 6;
 
 // clear of DCI's 250 on purpose: at 250 exactly, rate allocation overshoot is a
 // peak bitrate failure, and validators warn from 230 up
@@ -129,32 +128,59 @@ const PREF_DEFAULTS = {
   standard: "SMPTE", resolution: "2K", framerate: DEFAULT_FRAMERATE,
   encrypt: false, stereo3d: false, validate: true,
   creator: "", facility: "", bandwidth: DEFAULT_BANDWIDTH_MBPS, gpu: false,
+  gpuLicense: "", gpuRegistrationUrl: "",
   signingCert: "", signingKey: "", outputDir: "", isdcfNaming: false,
   channels: "5.1", showHintsBeforeBuild: true,
 };
 
+let currentPreferences = { ...PREF_DEFAULTS };
+
 function getPrefs() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
-    if ((stored._version || 0) < PREFS_VERSION) {
-      const migrated = { ...PREF_DEFAULTS, ...stored, _version: PREFS_VERSION };
-      // a saved 250 encodes at the DCI ceiling and fails validation
-      migrated.bandwidth = Math.min(migrated.bandwidth, DEFAULT_BANDWIDTH_MBPS);
-      // older installs stored a device number here
-      migrated.gpu = migrated.gpu === true;
-      delete migrated.naming;
-      savePrefs(migrated);
-      return migrated;
-    }
-    const prefs = { ...PREF_DEFAULTS, ...stored };
-    prefs.gpu = prefs.gpu === true;
-    return prefs;
-  } catch { return { ...PREF_DEFAULTS, _version: PREFS_VERSION }; }
+  return { ...currentPreferences };
 }
 
-function savePrefs(prefs) {
-  prefs._version = PREFS_VERSION;
-  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+async function savePrefs(prefs) {
+  currentPreferences = { ...PREF_DEFAULTS, ...prefs };
+  try {
+    await invoke("save_preferences", { preferences: currentPreferences });
+    return true;
+  } catch (error) {
+    setStatus(`Could not save settings: ${error}`);
+    return false;
+  }
+}
+
+async function initializePreferences() {
+  try {
+    const loaded = await invoke("load_preferences");
+    let legacy = {};
+    try {
+      legacy = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    } catch {
+      localStorage.removeItem(PREFS_KEY);
+    }
+    if (Object.keys(legacy).length > 0) {
+      const migrated = { ...PREF_DEFAULTS, ...loaded, ...legacy };
+      migrated.bandwidth = Math.min(migrated.bandwidth, DEFAULT_BANDWIDTH_MBPS);
+      migrated.gpu = migrated.gpu === true;
+      delete migrated._version;
+      delete migrated.naming;
+      currentPreferences = migrated;
+      if (await savePrefs(migrated)) localStorage.removeItem(PREFS_KEY);
+    } else {
+      currentPreferences = { ...PREF_DEFAULTS, ...loaded };
+    }
+  } catch (error) {
+    setStatus(`Could not load settings: ${error}`);
+  }
+
+  loadSettings();
+  const preferences = getPrefs();
+  applyGpuSetting(
+    preferences.gpu,
+    preferences.gpuLicense,
+    preferences.gpuRegistrationUrl,
+  );
 }
 
 // Load prefs into settings form
@@ -170,6 +196,8 @@ function loadSettings() {
     "set-signing-cert": prefs.signingCert,
     "set-signing-key": prefs.signingKey,
     "set-output-dir": prefs.outputDir,
+    "set-gpu-license": prefs.gpuLicense,
+    "set-gpu-registration-url": prefs.gpuRegistrationUrl,
   };
   for (const [id, val] of Object.entries(map)) {
     const el = document.getElementById(id);
@@ -184,9 +212,13 @@ function loadSettings() {
 }
 
 // grok routes every compress and decompress in the process
-async function applyGpuSetting(enabled) {
+async function applyGpuSetting(enabled, license, registrationUrl) {
   try {
-    await invoke("set_gpu", { enabled });
+    await invoke("set_gpu", {
+      enabled,
+      license: license || null,
+      registrationUrl: registrationUrl || null,
+    });
   } catch (error) {
     setStatus(`GPU encoding unavailable: ${error}`);
     const gpu = document.getElementById("set-gpu");
@@ -227,9 +259,10 @@ function showHintsDialog(hints) {
   });
 }
 
-document.getElementById("settings-form")?.addEventListener("submit", (e) => {
+document.getElementById("settings-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const prefs = {
+    ...getPrefs(),
     standard: document.getElementById("set-standard")?.value,
     resolution: document.getElementById("set-resolution")?.value,
     framerate: parseInt(document.getElementById("set-framerate")?.value) || DEFAULT_FRAMERATE,
@@ -242,20 +275,26 @@ document.getElementById("settings-form")?.addEventListener("submit", (e) => {
     isdcfNaming: document.getElementById("set-isdcf-naming")?.checked || false,
     showHintsBeforeBuild: !!document.getElementById("set-show-hints")?.checked,
     gpu: !!document.getElementById("set-gpu")?.checked,
+    gpuLicense: document.getElementById("set-gpu-license")?.value.trim() || "",
+    gpuRegistrationUrl: document.getElementById("set-gpu-registration-url")?.value.trim() || "",
   };
-  savePrefs(prefs);
+  if (!await savePrefs(prefs)) return;
   refreshIsdcfPreview();
   setStatus("Settings saved");
-  applyGpuSetting(prefs.gpu);
+  applyGpuSetting(prefs.gpu, prefs.gpuLicense, prefs.gpuRegistrationUrl);
 });
 
-document.getElementById("set-reset")?.addEventListener("click", () => {
-  localStorage.removeItem(PREFS_KEY);
-  location.reload();
+document.getElementById("set-reset")?.addEventListener("click", async () => {
+  try {
+    await invoke("reset_preferences");
+    localStorage.removeItem(PREFS_KEY);
+    location.reload();
+  } catch (error) {
+    setStatus(`Could not reset settings: ${error}`);
+  }
 });
 
-loadSettings();
-applyGpuSetting(getPrefs().gpu);
+initializePreferences();
 
 // === Project State ===
 const project = {

@@ -20,6 +20,7 @@ const MAIN_WINDOW_BACKGROUND: tauri::window::Color = tauri::window::Color(0, 0, 
 
 mod library;
 mod pipeline;
+mod preferences;
 mod timeline;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -57,6 +58,9 @@ pub fn run() {
             guikit::preview::preview_set_subtitle_file,
             guikit::preview::preview_set_subtitle_visibility,
             guikit::gpu::set_gpu,
+            preferences::load_preferences,
+            preferences::save_preferences,
+            preferences::reset_preferences,
             pipeline::submit_job,
             pipeline::cancel_job,
             pipeline::pause_job,
