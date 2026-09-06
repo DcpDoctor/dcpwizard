@@ -226,6 +226,7 @@ async function applyGpuSetting(enabled, license, registrationUrl) {
       license: license || null,
       registrationUrl: registrationUrl || null,
     });
+    if (enabled) setStatus("GPU encoding on");
   } catch (error) {
     setStatus(`GPU encoding unavailable: ${error}`);
     const gpu = document.getElementById("set-gpu");
@@ -233,6 +234,15 @@ async function applyGpuSetting(enabled, license, registrationUrl) {
     savePrefs({ ...getPrefs(), gpu: false });
   }
 }
+
+document.getElementById("set-gpu")?.addEventListener("change", (event) => {
+  if (!event.target.checked) return;
+  applyGpuSetting(
+    true,
+    document.getElementById("set-gpu-license")?.value.trim() || "",
+    document.getElementById("set-gpu-registration-url")?.value.trim() || "",
+  );
+});
 
 // Advisory findings the pre-build check made. Returns true to build anyway.
 function showHintsDialog(hints) {
