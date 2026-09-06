@@ -82,7 +82,7 @@ pub fn list_cpls(dcp_dir: &Path) -> Vec<CplEntry> {
             if in_asset && !current_id.is_empty() && !current_path.is_empty() {
                 // Check if this is a CPL by reading the file
                 let full_path = dcp_dir.join(&current_path);
-                if full_path.exists()
+                if is_xml_file(&full_path)
                     && let Ok(file_content) = std::fs::read_to_string(&full_path)
                     && file_content.contains("CompositionPlaylist")
                 {
@@ -836,6 +836,14 @@ pub fn create_multi_composition(config: &DcpConfig, comps: &[CompositionSpec]) -
     0
 }
 
+// a picture mxf is an asset too, and reading one whole to look for a cpl tag takes gigabytes
+fn is_xml_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+}
+
 fn find_assetmap(dir: &Path) -> Option<PathBuf> {
     for name in &["ASSETMAP", "ASSETMAP.xml"] {
         let path = dir.join(name);
@@ -900,4 +908,47 @@ fn closes_local_element(trimmed: &str, element: &str) -> bool {
 
 fn local_name(qualified: &str) -> &str {
     qualified.rsplit(':').next().unwrap_or(qualified)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_cpls_reads_only_xml_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("CPL_abc.xml"),
+            r#"<?xml version="1.0"?><CompositionPlaylist><ContentTitleText>Film</ContentTitleText></CompositionPlaylist>"#,
+        )
+        .unwrap();
+        // essence that happens to carry the tag must never be read for it
+        std::fs::write(
+            dir.path().join("picture.mxf"),
+            b"\x06\x0e\x2bCompositionPlaylist",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("ASSETMAP.xml"),
+            r#"<?xml version="1.0"?>
+<AssetMap>
+  <AssetList>
+    <Asset>
+      <Id>urn:uuid:1111</Id>
+      <ChunkList><Chunk><Path>CPL_abc.xml</Path></Chunk></ChunkList>
+    </Asset>
+    <Asset>
+      <Id>urn:uuid:2222</Id>
+      <ChunkList><Chunk><Path>picture.mxf</Path></Chunk></ChunkList>
+    </Asset>
+  </AssetList>
+</AssetMap>"#,
+        )
+        .unwrap();
+
+        let cpls = list_cpls(dir.path());
+        assert_eq!(cpls.len(), 1, "{cpls:?}");
+        assert_eq!(cpls[0].id, "1111");
+        assert_eq!(cpls[0].content_title, "Film");
+    }
 }
