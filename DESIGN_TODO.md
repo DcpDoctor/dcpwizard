@@ -65,17 +65,13 @@ user-facing surface is here.
   lacks is the list, since `PlaybackOptions` names one `input` and one `cpl_uuid`,
   so this needs a queue above it plus GUI ordering. Nothing about package
   correctness depends on it.
-- Live playback decodes J2K with libavcodec, not grok. The frame-accurate preview
-  (PK preview.rs) is on grok now, in process through PK grok_decoder: 68 ms a
-  frame on 2K at 125 Mb/s against ffmpeg's 302 ms, and 5 ms at `reduce` 2. Live
-  playback is not: PK mpv.rs, and the embedded surface through PK mpv_render,
-  which is libmpv's render API and still decodes inside mpv, hand the picture MXF
-  to mpv and get ffmpeg's software jpeg2000 codec at a few fps, which is why a 250
-  Mbps track sits black for seconds on load and can read as a frozen GUI. Routing
-  playback through grok means postkit presenting the frames it can already decode
-  on the embedded surface, with mpv kept for audio or dropped; feeding mpv raw
-  frames over a pipe is the other route, but no pipe format carries 12-bit X'Y'Z',
-  so the colour conversion would have to happen before the pipe either way. GUI.
+- 4K playback is not real time. PK grok_player's pool runs one grok thread per
+  core and sustains 48 fps at 2048x1080 on 16 cores, and a 4096x2160 frame is
+  four times the samples, so 4K wants a GPU decoder rather than more CPU workers.
+  Stereoscopic J2K stays on libmpv, since `GrokPlayer::accepts` refuses it and
+  nothing there pairs the two eyes. The pool reads ahead two frames per worker,
+  32 on this machine, a frame count with nothing bounding the bytes those frames
+  hold, so the cache costs four times as much on 4K as on 2K. GUI.
 - `report --scan-picture` decodes through ffmpeg's filters, so it is bound by that
   same few frames a second. Moving it to grok at `reduce` 2 would be around fifty
   times faster, at the cost of writing the black and frozen tests in Rust rather
