@@ -6,14 +6,14 @@
 
 Digital Cinema Package (DCP) creator, CLI tool and desktop GUI.
 
-Version 1.1 creates consistent CPL, PKL, and ASSETMAP identities for SMPTE and Interop packages. Grok is the JPEG 2000 encoder. 
+Version 1.2 creates consistent CPL, PKL, and ASSETMAP identities for SMPTE and Interop packages. Grok is the JPEG 2000 encoder.
 
 ## Overview
 
 DCP Wizard creates valid DCPs (Digital Cinema Packages) from video sources,
 image sequences, and WAV audio, conforming to SMPTE ST 429 (Bv2.1) and Interop standards.
 
-Free and open-source alternative to easyDCP Creator+ (€2,998).
+Free and open-source alternative to easyDCP Creator+.
 
 ## Features
 
@@ -50,6 +50,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 
 ### Encoding & Transcoding
 - **JPEG 2000 encoding** via Grok (create, pipeline, and DCP transcode paths)
+- **CPU and GPU encoding**: CPU encoding uses the available cores by default. `--gpu` or the desktop GPU setting enables Grok's accelerator plugin for JPEG 2000 encode and decode. An explicit `--gpu` fails if the plugin cannot start, while a saved desktop preference warns and continues on the CPU. `--no-gpu` forces the CPU
 - **Video file import**, QuickTime (.mov), MP4, MXF, AVI, MKV
 - **Video transcoding**, ProRes, H.264, H.265, DNxHR → image sequence → J2K (via ffmpeg)
 - **Image sequence input**, DPX, TIFF, EXR, PNG, JPEG, BMP
@@ -121,7 +122,7 @@ Free and open-source alternative to easyDCP Creator+ (€2,998).
 ### Export & Playback
 - **Export DCP** to ProRes, H.264, H.265, DNxHR, or image sequence
 - **Frame extraction**, extract individual frames as images (thumbnails/preview)
-- **Frame-accurate preview** with display colourspace selection
+- **Frame-accurate preview**: DCP directories, CPLs, picture MXFs and J2K directories decode in process through Grok. The CPU worker pool sustains 2K playback, and the accelerator plugin adds device decode and the X'Y'Z' to display-RGB transform for 4K playback. MP4, ProRes and other sources use libmpv. Encrypted and stereoscopic J2K also use libmpv
 
 ### Delivery & Automation
 - **Copy to drive** with a free-space precheck and post-copy hash verification (USB/CRU); **format-drive** (ext2/ext3, volume label, mounted-target refusal) and **check-drive** (report fs type + label) for cinema hard-drive delivery
@@ -810,7 +811,7 @@ docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --port 8080
 | Timeline conform (EDL/FCP7 XML) | ✅ | ❌ |
 | Version dashboard & distribution matrix | ✅ | ❌ |
 | Open source | ✅ (AGPL-3.0) | ❌ |
-| **Price** | **Free** | **€2,998 or €138/mo** |
+| **Price** | **Free** | **Commercial** |
 
 ## Architecture
 

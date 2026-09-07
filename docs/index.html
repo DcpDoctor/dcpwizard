@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DCP Wizard: Turn Your Master Into a Cinema-Ready DCP</title>
-    <meta name="description" content="DCP Wizard turns your finished master into a cinema-ready Digital Cinema Package. Start from ProRes, DPX, or camera masters, package SMPTE or Interop, encrypt every track with KDMs, preview, quality-check, and deliver. Free desktop app for Windows, macOS, and Linux.">
+    <meta name="description" content="DCP Wizard turns your finished master into a cinema-ready Digital Cinema Package. Encode and preview JPEG 2000 on the CPU or GPU, package SMPTE or Interop, encrypt every track with KDMs, quality-check, and deliver. Free desktop app for Windows, macOS, and Linux.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -334,7 +334,7 @@
 
 <section class="hero">
     <h1>Turn your master into a<br><span>cinema-ready DCP</span></h1>
-    <p>DCP Wizard packages your finished picture and sound into a Digital Cinema Package the projector will accept, ready for the screen.</p>
+    <p>DCP Wizard encodes your finished picture on the CPU or GPU, packages the sound and picture into a Digital Cinema Package, and plays the result back before delivery.</p>
     <div class="hero-buttons">
         <a href="#download" class="btn btn-primary btn-lg">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -388,7 +388,7 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(74,222,128,0.15);">📥</div>
             <h3>Camera ingest</h3>
-            <p>Bring in ARRI, RED, and Blackmagic RAW masters and apply a 3D LUT on the way in, so your look is baked before packaging.</p>
+            <p>Detect ARRI, RED, Blackmagic, Canon, and Sony camera formats. FFmpeg-decodable ProRes and DNxHR camera masters can be transcoded with a 3D LUT. True RAW sources are identified and refused with a clear error.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(56,189,248,0.15);">🎬</div>
@@ -408,6 +408,11 @@
             <div class="feature-icon" style="background: rgba(34,211,238,0.15);">🖥️</div>
             <h3>2K, 4K, any frame rate</h3>
             <p>2K and 4K at standard rates, plus high frame rate up to 120 fps at 2K.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon" style="background: rgba(74,222,128,0.15);">⚙️</div>
+            <h3>CPU or GPU JPEG 2000</h3>
+            <p>Encode through Grok on all available CPU cores, or enable its accelerator plugin from the app or with <code>--gpu</code>. The job log records whether the device started and how many frames it encoded.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(251,113,133,0.15);">🖼️</div>
@@ -465,7 +470,7 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(167,139,250,0.15);">▶️</div>
             <h3>Source and package preview</h3>
-            <p>Play the source or the finished DCP in the app. Crop bands follow the Picture panel, Sub and CC load the packaged tracks, and the header carries a safe-area box, an aspect mask, a centre cross, a thirds grid, decode scale, and a HUD.</p>
+            <p>Play the source or the finished DCP in the app. JPEG 2000 decodes in process through a CPU worker pool, or on the device when GPU mode is active. Grok handles DCP directories, CPLs, picture MXFs, and codestream folders. Other sources use libmpv.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(34,211,238,0.15);">📋</div>
@@ -519,7 +524,7 @@
 
 <section class="section" id="comparison">
     <h2 class="section-title">DCP Wizard vs easyDCP Creator+</h2>
-    <p class="section-subtitle">The same delivery workflow, free and open source, against a €2,998 (or €138/month) product.</p>
+    <p class="section-subtitle">The same delivery workflow, free and open source, alongside a commercial suite.</p>
 
     <style>
         .comparison-table {
@@ -575,6 +580,7 @@
             <tr><td>AES-128 essence encryption</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>DKDM re-wrap</td><td class="yes">✓</td><td class="yes">✓</td></tr>
             <tr><td>Desktop app</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>GPU JPEG 2000 encode and preview decode</td><td class="yes">✓</td><td class="yes">✓ (Windows)</td></tr>
             <tr><td colspan="3" style="color:var(--accent);font-weight:600;padding-top:20px;">DCP Wizard exclusive</td></tr>
             <tr><td>Pre-build check and cinema hints</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Preview with crop, Sub/CC, and QC overlays</td><td class="yes">✓</td><td class="no">✗</td></tr>
@@ -593,7 +599,7 @@
             <tr><td>Timeline conform (EDL / FCP7 XML)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Version dashboard &amp; distribution matrix</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Open source (AGPL-3.0)</td><td class="yes">✓</td><td class="no">✗</td></tr>
-            <tr><td><strong>Price</strong></td><td class="yes"><strong>Free</strong></td><td class="no"><strong>€2,998 or €138/mo</strong></td></tr>
+            <tr><td><strong>Price</strong></td><td class="yes"><strong>Free</strong></td><td class="no"><strong>Commercial</strong></td></tr>
         </tbody>
     </table>
     </div>
@@ -622,7 +628,8 @@
 
     <div class="prereqs-list">
         <div class="prereq"><span class="tag required">Required</span><span>Rust toolchain</span></div>
-        <div class="prereq"><span class="tag required">Required</span><span>Grok (JPEG 2000)</span></div>
+        <div class="prereq"><span class="tag required">Required</span><span>Grok (CPU JPEG 2000)</span></div>
+        <div class="prereq"><span class="tag optional">Optional</span><span>Grok accelerator plugin (GPU encode and preview decode)</span></div>
         <div class="prereq"><span class="tag required">Required</span><span>OpenSSL</span></div>
         <div class="prereq"><span class="tag required">Required</span><span>Xerces-C</span></div>
         <div class="prereq"><span class="tag optional">Optional</span><span>ffmpeg (transcoding)</span></div>
