@@ -180,34 +180,24 @@ const ATMOS_DATA_TYPE_UL: &str = "urn:smpte:ul:060e2b34.04010105.0e090604.000000
 
 /// Wrap a timed-text input into an MXF: SRT/styled formats are converted to
 /// DCST (cues moved onto the packaged `timing`, fonts/PNGs embedded), a supplied
-/// SMPTE DCST is wrapped unchanged. Returns the track duration, or None on failure
-/// (already logged). Used for the closed-caption track; the open subtitle path
-/// stays inline in create_dcp.
+/// SMPTE DCST is wrapped unchanged. Returns the track duration. Used for the
+/// closed-caption track; the open subtitle path stays inline in create_dcp.
 fn wrap_timed_text_track(
     wrap: crate::mxf_wrap::MxfWrapConfig,
     lang: &str,
     timing: crate::subtitle::CueTiming,
     opts: &crate::subtitle::SubtitleOptions,
-) -> Option<u64> {
+) -> Result<u64, String> {
     // temp DCST and staged resources land next to the output MXF
     let work_dir = wrap
         .output_mxf
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let kind = match crate::subtitle::detect_subtitle_kind(&wrap.input_path) {
-        Ok(k) => k,
-        Err(e) => {
-            tracing::error!("{e}");
-            return None;
-        }
-    };
+    let kind = crate::subtitle::detect_subtitle_kind(&wrap.input_path)?;
     if kind == crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough {
         return match crate::mxf_wrap::wrap_mxf_result(&wrap) {
-            Some(t) => Some(t.duration),
-            None => {
-                tracing::error!("Failed to wrap timed-text MXF");
-                None
-            }
+            Some(t) => Ok(t.duration),
+            None => Err("Failed to wrap timed-text MXF".into()),
         };
     }
     let dcst_path = wrap.output_mxf.with_extension("dcst.xml");
@@ -220,10 +210,7 @@ fn wrap_timed_text_track(
         &dcst_path,
     ) {
         Ok(p) => p,
-        Err(e) => {
-            tracing::error!("closed-caption conversion failed: {e}");
-            return None;
-        }
+        Err(e) => return Err(format!("closed-caption conversion failed: {e}")),
     };
     let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
         &prepared.dcst_path,
@@ -241,11 +228,8 @@ fn wrap_timed_text_track(
         }
     }
     match wrapped {
-        Some(t) => Some(t.duration),
-        None => {
-            tracing::error!("Failed to wrap timed-text MXF");
-            None
-        }
+        Some(t) => Ok(t.duration),
+        None => Err("Failed to wrap timed-text MXF".into()),
     }
 }
 
@@ -307,14 +291,26 @@ fn silent_sound_fill(config: &DcpConfig, fps: u32) -> Result<Option<PathBuf>, St
 /// 2. Generate CPL, PKL, ASSETMAP
 /// 3. Optionally encrypt
 pub fn create_dcp(config: &DcpConfig) -> i32 {
-    create_dcp_with_progress(config, &NoProgress)
+    match create_dcp_with_progress(config, &NoProgress) {
+        Ok(()) => 0,
+        Err(message) => {
+            tracing::error!("{message}");
+            -1
+        }
+    }
 }
 
+const CANCELLED_MESSAGE: &str = "cancelled between stages";
+
 /// As [`create_dcp`], reporting coarse stage progress and honouring cooperative
-/// cancellation through `progress`. Returns -2 when cancelled between stages.
-pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink) -> i32 {
+/// cancellation through `progress`. Fails with `CANCELLED_MESSAGE` when cancelled
+/// between stages.
+pub fn create_dcp_with_progress(
+    config: &DcpConfig,
+    progress: &dyn ProgressSink,
+) -> Result<(), String> {
     if progress.cancelled() {
-        return -2;
+        return Err(CANCELLED_MESSAGE.into());
     }
     progress.stage(5, "starting");
     tracing::info!(
@@ -328,12 +324,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     );
 
     let Some(j2k_dir) = config.j2k_dir.as_ref() else {
-        tracing::error!("A J2K input directory is required");
-        return -1;
+        return Err("A J2K input directory is required".into());
     };
     if !j2k_dir.is_dir() {
-        tracing::error!("J2K input directory does not exist: {}", j2k_dir.display());
-        return -1;
+        return Err(format!(
+            "J2K input directory does not exist: {}",
+            j2k_dir.display()
+        ));
     }
 
     // an already-wrapped picture is one MXF over one composition, so refuse it
@@ -343,10 +340,9 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             &crate::overlapped_picture::PackageShape::of(config, false),
         )
     {
-        tracing::error!(
+        return Err(format!(
             "this package cannot take a picture MXF wrapped during the encode: {reason}"
-        );
-        return -1;
+        ));
     }
 
     // Reject a bad signer before anything is written, so signing cannot fail
@@ -354,13 +350,11 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if let Some(signer) = config.signer.as_ref()
         && let Err(e) = signer.check_usable()
     {
-        tracing::error!("{e}");
-        return -1;
+        return Err(e);
     }
 
     if let Err(e) = std::fs::create_dir_all(&config.output_dir) {
-        tracing::error!("Failed to create output directory: {e}");
-        return -1;
+        return Err(format!("Failed to create output directory: {e}"));
     }
 
     // Fail early if the essence won't fit: the wrapped MXFs are ~the size of the
@@ -378,32 +372,23 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     for item in config.head_items.iter().chain(&config.tail_items) {
         required += postkit::free_space::path_size(&item.media);
     }
-    if let Err(e) = postkit::free_space::check_destination_space(&config.output_dir, required) {
-        tracing::error!("{e}");
-        return -1;
-    }
+    postkit::free_space::check_destination_space(&config.output_dir, required)?;
 
     // An item reel is ordinary 2D SDR picture and sound: refuse the combinations
     // it has no place for before anything is wrapped.
-    if let Err(e) =
-        crate::preflight::check_library_item_support(&crate::preflight::LibraryItemContent {
-            attached: config.has_library_items(),
-            stereo_3d: config.right_eye_dir.is_some(),
-            atmos: config.atmos_path.is_some(),
-            hdr_dci: config.hdr_dci,
-            markers: !config.markers.is_empty(),
-        })
-    {
-        tracing::error!("{e}");
-        return -1;
-    }
+    crate::preflight::check_library_item_support(&crate::preflight::LibraryItemContent {
+        attached: config.has_library_items(),
+        stereo_3d: config.right_eye_dir.is_some(),
+        atmos: config.atmos_path.is_some(),
+        hdr_dci: config.hdr_dci,
+        markers: !config.markers.is_empty(),
+    })?;
 
     // Fail before doing any work if we'd have nowhere safe to put the keys.
     if config.encrypt && config.key_out.is_none() {
-        tracing::error!(
-            "--key-out is required when encrypting; keys are never written next to the DCP"
+        return Err(
+            "--key-out is required when encrypting; keys are never written next to the DCP".into(),
         );
-        return -1;
     }
     let fps = if config.frame_rate_num > 0 {
         config.frame_rate_num
@@ -413,12 +398,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // reject an illegal frame rate / resolution combo before wrapping anything
     let is_4k = config.resolution == crate::Resolution::FourK;
-    if let Err(e) =
-        crate::hfr::validate_fps_resolution(fps, is_4k, config.standard == crate::Standard::Smpte)
-    {
-        tracing::error!("{e}");
-        return -1;
-    }
+    crate::hfr::validate_fps_resolution(fps, is_4k, config.standard == crate::Standard::Smpte)?;
 
     let stereoscopic = config.right_eye_dir.is_some();
 
@@ -427,8 +407,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         Some(spec) => match crate::pad::parse_pad_frames(spec, fps) {
             Ok(n) => n,
             Err(e) => {
-                tracing::error!("--pad-head: {e}");
-                return -1;
+                return Err(format!("--pad-head: {e}"));
             }
         },
         None => 0,
@@ -437,8 +416,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         Some(spec) => match crate::pad::parse_pad_frames(spec, fps) {
             Ok(n) => n,
             Err(e) => {
-                tracing::error!("--pad-tail: {e}");
-                return -1;
+                return Err(format!("--pad-tail: {e}"));
             }
         },
         None => 0,
@@ -448,8 +426,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         Some(spec) => match crate::pad::parse_pad_color(spec) {
             Ok(rgb) => rgb,
             Err(e) => {
-                tracing::error!("--pad-color: {e}");
-                return -1;
+                return Err(format!("--pad-color: {e}"));
             }
         },
         None => [0, 0, 0],
@@ -475,36 +452,35 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let supplied_subtitle_xml = supplied_xml(&config.subtitle_path);
     if config.source_trim.is_active() && (supplied_subtitle_xml || supplied_xml(&config.ccap_path))
     {
-        tracing::error!(
+        return Err(
             "trimming cannot re-time supplied SMPTE timed-text XML; supply SRT or another parsable \
              format, or trim nothing"
+                .into(),
         );
-        return -1;
     }
 
     let padding = head_frames + tail_frames > 0;
     if padding {
         if config.reel_length_minutes > 0 || !config.reel_split_frames.is_empty() {
-            tracing::error!(
+            return Err(
                 "head/tail padding is not supported with reel splitting (--reel-length / --split-at)"
+                    .into(),
             );
-            return -1;
         }
         if stereoscopic {
-            tracing::error!("head/tail padding is not supported with stereoscopic 3D");
-            return -1;
+            return Err("head/tail padding is not supported with stereoscopic 3D".into());
         }
         if config.atmos_path.is_some() {
-            tracing::error!(
+            return Err(
                 "head/tail padding is not supported with Atmos: the auxiliary track cannot be re-timed soundly this pass"
+                    .into(),
             );
-            return -1;
         }
         if head_frames > 0 && supplied_subtitle_xml {
-            tracing::error!(
+            return Err(
                 "head padding cannot re-time supplied SMPTE subtitle XML; supply SRT to shift, or pad only the tail"
+                    .into(),
             );
-            return -1;
         }
     }
 
@@ -522,8 +498,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 Ok(true) => Some(output),
                 Ok(false) => None,
                 Err(e) => {
-                    tracing::error!("audio preparation failed: {e}");
-                    return -1;
+                    return Err(format!("audio preparation failed: {e}"));
                 }
             }
         }
@@ -540,18 +515,13 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // multi-reel path is opt-in; the single-reel path below is unchanged
     if config.reel_length_minutes > 0 || !config.reel_split_frames.is_empty() {
-        if let Err(e) =
-            crate::preflight::check_reel_split_support(&crate::preflight::ReelSplitContent {
-                splitting: true,
-                stereo_3d: stereoscopic,
-                atmos: config.atmos_path.is_some(),
-                hdr_dci: config.hdr_dci,
-                markers: !config.markers.is_empty(),
-            })
-        {
-            tracing::error!("{e}");
-            return -1;
-        }
+        crate::preflight::check_reel_split_support(&crate::preflight::ReelSplitContent {
+            splitting: true,
+            stereo_3d: stereoscopic,
+            atmos: config.atmos_path.is_some(),
+            hdr_dci: config.hdr_dci,
+            markers: !config.markers.is_empty(),
+        })?;
         let mut reel_config = config.clone();
         if let Some(path) = prepared_audio.as_ref() {
             reel_config.audio_path = Some(path.clone());
@@ -561,14 +531,15 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         if let Some(path) = prepared_audio {
             let _ = std::fs::remove_file(path);
         }
-        if code == 0 {
-            progress.stage(100, "done");
+        if code != 0 {
+            return Err(format!("assembling the reels failed with code {code}"));
         }
-        return code;
+        progress.stage(100, "done");
+        return Ok(());
     }
 
     if progress.cancelled() {
-        return -2;
+        return Err(CANCELLED_MESSAGE.into());
     }
     progress.stage(
         15,
@@ -597,15 +568,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         &picture_uuid.to_string(),
     ) {
         Ok(k) => k,
-        Err(()) => return -1,
+        Err(()) => return Err("minting the picture content key failed".into()),
     };
 
     {
         let left_frames = crate::reel::collect_frames(j2k_dir);
         let content_count = left_frames.len() as u64;
         if content_count == 0 {
-            tracing::error!("J2K input directory contains no codestreams");
-            return -1;
+            return Err("J2K input directory contains no codestreams".into());
         }
 
         let encryption = picture_key
@@ -623,20 +593,11 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         } else if padding {
             // encode one black frame at the content's pixel dimensions, then repeat
             // its codestream for every padded frame (frame-wrapped MXF reuses it)
-            let (bw, bh) = match crate::pad::read_j2k_dimensions(&left_frames[0]) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::error!("{e}");
-                    return -1;
-                }
-            };
+            let (bw, bh) = crate::pad::read_j2k_dimensions(&left_frames[0])?;
             let black = config
                 .output_dir
                 .join(format!(".dcpwizard_pad_{picture_uuid}.j2c"));
-            if let Err(e) = crate::pad::generate_solid_frame(bw, bh, fps, pad_rgb, &black) {
-                tracing::error!("{e}");
-                return -1;
-            }
+            crate::pad::generate_solid_frame(bw, bh, fps, pad_rgb, &black)?;
             let mut files =
                 Vec::with_capacity(head_frames as usize + left_frames.len() + tail_frames as usize);
             files.extend(std::iter::repeat_n(black.clone(), head_frames as usize));
@@ -664,27 +625,24 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             };
             let _ = std::fs::remove_file(&black);
             if wrapped.is_none() {
-                tracing::error!("Failed to wrap padded picture MXF");
-                return -1;
+                return Err("Failed to wrap padded picture MXF".into());
             }
             tracing::info!(
                 "Picture MXF: {picture_mxf_name} ({picture_duration} frames: {head_frames} head + {content_count} content + {tail_frames} tail)"
             );
         } else if stereoscopic {
             if config.hdr_dci {
-                tracing::error!("--hdr-dci is not supported for stereoscopic (3D) DCPs");
-                return -1;
+                return Err("--hdr-dci is not supported for stereoscopic (3D) DCPs".into());
             }
             picture_duration = content_count;
             // left eye is j2k_dir, right eye its own dir; both must match frame counts
             let right_dir = config.right_eye_dir.as_ref().unwrap();
             let right_frames = crate::reel::collect_frames(right_dir);
             if right_frames.len() as u64 != picture_duration {
-                tracing::error!(
+                return Err(format!(
                     "3D eye frame count mismatch: left={picture_duration}, right={}",
                     right_frames.len()
-                );
-                return -1;
+                ));
             }
             // ST 429-10 legal 3D rates: the essence runs at 2x the edit rate, so
             // the composition edit rate must itself be a legal DCP rate.
@@ -698,8 +656,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             )
             .is_none()
             {
-                tracing::error!("Failed to wrap stereoscopic picture MXF");
-                return -1;
+                return Err("Failed to wrap stereoscopic picture MXF".into());
             }
             tracing::info!(
                 "Stereoscopic picture MXF: {picture_mxf_name} ({picture_duration} frame pairs)"
@@ -715,8 +672,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             )
             .is_none()
             {
-                tracing::error!("Failed to wrap DCI HDR picture MXF");
-                return -1;
+                return Err("Failed to wrap DCI HDR picture MXF".into());
             }
             tracing::info!("Picture MXF: {picture_mxf_name} ({picture_duration} frames, DCI HDR)");
         } else {
@@ -731,15 +687,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 asset_uuid: Some(*picture_uuid.as_bytes()),
             };
             if crate::mxf_wrap::wrap_mxf(&wrap_config) != 0 {
-                tracing::error!("Failed to wrap picture MXF");
-                return -1;
+                return Err("Failed to wrap picture MXF".into());
             }
             tracing::info!("Picture MXF: {picture_mxf_name} ({picture_duration} frames)");
         }
     }
 
     if progress.cancelled() {
-        return -2;
+        return Err(CANCELLED_MESSAGE.into());
     }
     progress.stage(55, "wrapping sound");
     // ── Wrap sound MXF ────────────────────────────────────────────────
@@ -763,7 +718,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             &sound_uuid.to_string(),
         ) {
             Ok(k) => k,
-            Err(()) => return -1,
+            Err(()) => return Err("minting the sound content key failed".into()),
         };
         // labels follow the content, counts follow the container: the fill added
         // silent channels the soundfield must not claim, so the source is probed
@@ -775,8 +730,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         ) {
             (Ok(content), Ok(packaged)) => (content as u32, packaged as u32),
             (Err(e), _) | (_, Err(e)) => {
-                tracing::error!("{e}");
-                return -1;
+                return Err(e);
             }
         };
         // sign-language: override the MCA config so channel 15 is labelled SLVS
@@ -817,23 +771,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             sample_rate,
         });
         if config.has_library_items() {
-            match crate::library_reel::job_sound(audio_path) {
-                Ok(sound) => job_sound = Some(sound),
-                Err(e) => {
-                    tracing::error!("{e}");
-                    return -1;
-                }
-            }
+            job_sound = Some(crate::library_reel::job_sound(audio_path)?);
         }
         // when padding, extend the PCM with silence so the sound stays aligned
         // with the padded picture (sample-accurate at frame edges)
         let mut padded_audio: Option<PathBuf> = None;
         let wrap_source = if padding {
             let sample_rate = crate::mxf_wrap::wav_sample_rate(audio_path).unwrap_or(48000);
-            if let Err(e) = crate::pad::check_frame_aligned_sample_rate(sample_rate, fps) {
-                tracing::error!("{e}");
-                return -1;
-            }
+            crate::pad::check_frame_aligned_sample_rate(sample_rate, fps)?;
             let spf = (sample_rate / fps) as u64;
             let out = config
                 .output_dir
@@ -844,8 +789,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
                 tail_frames * spf,
                 &out,
             ) {
-                tracing::error!("audio padding failed: {e}");
-                return -1;
+                return Err(format!("audio padding failed: {e}"));
             }
             padded_audio = Some(out.clone());
             out
@@ -871,8 +815,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             let _ = std::fs::remove_file(tmp);
         }
         if wrap_code != 0 {
-            tracing::error!("Failed to wrap sound MXF");
-            return -1;
+            return Err("Failed to wrap sound MXF".into());
         }
         has_sound = true;
         tracing::info!("Sound MXF: {sound_mxf_name}");
@@ -894,20 +837,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if let Some(subtitle_path) = config.subtitle_path.as_ref()
         && subtitle_path.exists()
     {
-        let kind = match crate::subtitle::detect_subtitle_kind(subtitle_path) {
-            Ok(k) => k,
-            Err(e) => {
-                tracing::error!("{e}");
-                return -1;
-            }
-        };
+        let kind = crate::subtitle::detect_subtitle_kind(subtitle_path)?;
         subtitle_key = match crate::versions::mint_key(
             config,
             crate::encrypt::KeyType::Mdsk,
             &subtitle_uuid.to_string(),
         ) {
             Ok(k) => k,
-            Err(()) => return -1,
+            Err(()) => return Err("minting the subtitle content key failed".into()),
         };
         let track = if kind == crate::subtitle::SubtitleInputKind::SmpteDcstPassthrough {
             // preserve authored SMPTE XML unchanged (placement, styling, timing)
@@ -923,8 +860,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             match crate::mxf_wrap::wrap_mxf_result(&wrap_config) {
                 Some(t) => t,
                 None => {
-                    tracing::error!("Failed to wrap subtitle MXF");
-                    return -1;
+                    return Err("Failed to wrap subtitle MXF".into());
                 }
             }
         } else {
@@ -943,8 +879,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             ) {
                 Ok(p) => p,
                 Err(e) => {
-                    tracing::error!("Subtitle conversion failed: {e}");
-                    return -1;
+                    return Err(format!("Subtitle conversion failed: {e}"));
                 }
             };
             let wrapped = crate::mxf_wrap::wrap_timed_text_resources(
@@ -966,8 +901,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             match wrapped {
                 Some(t) => t,
                 None => {
-                    tracing::error!("Failed to wrap subtitle MXF");
-                    return -1;
+                    return Err("Failed to wrap subtitle MXF".into());
                 }
             }
         };
@@ -997,9 +931,9 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             &ccap_uuid.to_string(),
         ) {
             Ok(k) => k,
-            Err(()) => return -1,
+            Err(()) => return Err("minting the closed-caption content key failed".into()),
         };
-        match wrap_timed_text_track(
+        ccap_duration = wrap_timed_text_track(
             crate::mxf_wrap::MxfWrapConfig {
                 input_path: ccap_path.clone(),
                 output_mxf: ccap_mxf_path.clone(),
@@ -1012,14 +946,9 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             ccap_lang,
             cue_timing,
             &config.subtitle_opts.for_closed_caption(),
-        ) {
-            Some(d) => {
-                ccap_duration = d;
-                has_ccap = true;
-                tracing::info!("Closed-caption MXF: {ccap_mxf_name}");
-            }
-            None => return -1,
-        }
+        )?;
+        has_ccap = true;
+        tracing::info!("Closed-caption MXF: {ccap_mxf_name}");
     }
 
     // ── Wrap Atmos / DCData auxiliary MXF (ST 429-18) ─────────────────
@@ -1030,17 +959,14 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let mut atmos_key = None;
 
     if let Some(ref atmos_path) = config.atmos_path {
-        if let Err(e) = crate::preflight::check_atmos_path(atmos_path) {
-            tracing::error!("{e}");
-            return -1;
-        }
+        crate::preflight::check_atmos_path(atmos_path)?;
         atmos_key = match crate::versions::mint_key(
             config,
             crate::encrypt::KeyType::Mdek,
             &atmos_uuid.to_string(),
         ) {
             Ok(k) => k,
-            Err(()) => return -1,
+            Err(()) => return Err("minting the Atmos content key failed".into()),
         };
         // the synthetic id keeps CPL/PKL/ASSETMAP consistent (same pattern as
         // picture/sound)
@@ -1054,14 +980,9 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             asset_uuid: Some(*atmos_uuid.as_bytes()),
         };
         let Some(track) = crate::mxf_wrap::wrap_mxf_result(&wrap_config) else {
-            tracing::error!("Failed to wrap Atmos MXF");
-            return -1;
+            return Err("Failed to wrap Atmos MXF".into());
         };
-        if let Err(e) = crate::preflight::check_atmos_frame_count(track.duration, picture_duration)
-        {
-            tracing::error!("{e}");
-            return -1;
-        }
+        crate::preflight::check_atmos_frame_count(track.duration, picture_duration)?;
         aux_data = Some(crate::cpl::AuxData {
             id: atmos_uuid.to_string(),
             edit_rate_num: fps,
@@ -1075,7 +996,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     }
 
     if progress.cancelled() {
-        return -2;
+        return Err(CANCELLED_MESSAGE.into());
     }
     progress.stage(85, "writing CPL/PKL/ASSETMAP");
     // ── Generate CPL ──────────────────────────────────────────────────
@@ -1084,17 +1005,8 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
 
     // the CPL declares the raster the encoder produced; the container is the
     // active area inside it
-    let geometry = match crate::cpl::picture_geometry(
-        j2k_dir,
-        config.container_width,
-        config.container_height,
-    ) {
-        Ok(g) => g,
-        Err(e) => {
-            tracing::error!("{e}");
-            return -1;
-        }
-    };
+    let geometry =
+        crate::cpl::picture_geometry(j2k_dir, config.container_width, config.container_height)?;
 
     // with items joined on, the feature is no longer the first or last reel, so
     // FFOC/LFOC belong to the composition rather than to this reel and are
@@ -1102,13 +1014,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     let markers = if config.has_library_items() {
         Vec::new()
     } else {
-        match crate::markers::markers_for_composition(&config.markers, fps, picture_duration) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::error!("{e}");
-                return -1;
-            }
-        }
+        crate::markers::markers_for_composition(&config.markers, fps, picture_duration)?
     };
 
     // hashed here rather than with the rest of the PKL entries because the CPL
@@ -1196,13 +1102,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
             geometry,
             sound: job_sound,
         };
-        match crate::library_reel::join_library_items(config, &format, vec![reel]) {
-            Ok(joined) => joined,
-            Err(e) => {
-                tracing::error!("{e}");
-                return -1;
-            }
-        }
+        crate::library_reel::join_library_items(config, &format, vec![reel])?
     } else {
         crate::library_reel::JoinedComposition {
             reels: vec![reel],
@@ -1232,13 +1132,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {
-        tracing::error!("Failed to generate CPL");
-        return -1;
+        return Err("Failed to generate CPL".into());
     }
     // Sign before the PKL hashes the file, otherwise the PKL records the hash of
     // the unsigned CPL and no longer matches what is on disk.
     if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &cpl_path, "CPL") {
-        return -1;
+        return Err("signing the CPL failed".into());
     }
 
     // ── Generate PKL ──────────────────────────────────────────────────
@@ -1329,12 +1228,11 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         &pkl_path,
     ) != 0
     {
-        tracing::error!("Failed to generate PKL");
-        return -1;
+        return Err("Failed to generate PKL".into());
     }
     // Nothing hashes the PKL, so this can follow the write.
     if !crate::package_signature::sign_if_configured(config.signer.as_ref(), &pkl_path, "PKL") {
-        return -1;
+        return Err("signing the PKL failed".into());
     }
 
     // ── Generate ASSETMAP ─────────────────────────────────────────────
@@ -1397,8 +1295,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
     if crate::assetmap::generate_assetmap(&am_entries, &config.output_dir, config.standard, None)
         != 0
     {
-        tracing::error!("Failed to generate ASSETMAP");
-        return -1;
+        return Err("Failed to generate ASSETMAP".into());
     }
 
     // Persist the content keys for the KDM step. The essence was already
@@ -1408,14 +1305,12 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         // Guaranteed Some by the early guard, but stay defensive: never fall
         // back to a default location for secret key material.
         let Some(keys_path) = config.key_out.as_ref() else {
-            tracing::error!("--key-out is required when encrypting");
-            return -1;
+            return Err("--key-out is required when encrypting".into());
         };
         if let Some(parent) = keys_path.parent().filter(|p| !p.as_os_str().is_empty())
             && let Err(e) = std::fs::create_dir_all(parent)
         {
-            tracing::error!("Failed to create key-out directory: {e}");
-            return -1;
+            return Err(format!("Failed to create key-out directory: {e}"));
         }
         let mut bundle = crate::encrypt::KeyBundle {
             cpl_id: cpl_uuid.clone(),
@@ -1429,8 +1324,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         }
         bundle.keys.append(&mut joined.keys);
         if let Err(e) = bundle.write(keys_path) {
-            tracing::error!("Failed to write keys file: {e}");
-            return -1;
+            return Err(format!("Failed to write keys file: {e}"));
         }
         tracing::warn!(
             "Wrote content keys to {} — this file holds the plaintext AES keys. \
@@ -1444,7 +1338,7 @@ pub fn create_dcp_with_progress(config: &DcpConfig, progress: &dyn ProgressSink)
         let _ = std::fs::remove_file(path);
     }
     progress.stage(100, "done");
-    0
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1463,7 +1357,10 @@ mod tests {
     fn create_bails_when_cancelled() {
         // an already-cancelled sink must stop before touching inputs
         let config = DcpConfig::default();
-        assert_eq!(create_dcp_with_progress(&config, &CancelledSink), -2);
+        assert_eq!(
+            create_dcp_with_progress(&config, &CancelledSink),
+            Err(CANCELLED_MESSAGE.to_string())
+        );
     }
 
     #[test]

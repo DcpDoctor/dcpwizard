@@ -383,6 +383,7 @@ pub fn start_job_queue(queue: &JobQueue) {
                             "Completed successfully",
                         ),
                         Some(Err(cause)) => {
+                            tracing::error!("job {} failed: {cause}", job.id);
                             queue_clone.update_job(&job.id, JobState::Failed, 0, &cause)
                         }
                         None => queue_clone.update_job(
@@ -446,10 +447,7 @@ fn process_job(job: &Job, control: &JobControl) -> Result<(), String> {
     match job.job_type {
         JobType::CreateDcp => {
             let config = parse_params::<crate::dcp::DcpConfig>(&job.params, "CreateDcp")?;
-            from_exit_code(
-                crate::dcp::create_dcp_with_progress(&config, control),
-                "creating the DCP",
-            )
+            crate::dcp::create_dcp_with_progress(&config, control)
         }
         JobType::VerifyDcp => {
             let path = std::path::PathBuf::from(&job.params);
@@ -683,6 +681,46 @@ mod tests {
 
         assert!(
             failed.message.contains(missing_dcp.to_str().unwrap()),
+            "message hid the cause: {}",
+            failed.message
+        );
+    }
+
+    #[test]
+    fn a_failed_create_carries_the_missing_source_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_j2k = dir.path().join("no_such_frames");
+        let config = crate::dcp::DcpConfig {
+            title: "Test Film".into(),
+            output_dir: dir.path().join("out"),
+            j2k_dir: Some(missing_j2k.clone()),
+            frame_rate_num: 24,
+            frame_rate_den: 1,
+            ..Default::default()
+        };
+        let params = serde_json::to_string(&config).unwrap();
+
+        let queue = JobQueue::with_jobs_file(dir.path().join("jobs.jsonl"));
+        let id = queue.submit(JobType::CreateDcp, &params);
+        start_job_queue(&queue);
+
+        let deadline = std::time::Instant::now() + FAILURE_POLL_LIMIT;
+        let failed = loop {
+            let job = queue.get(&id).expect("the submitted job");
+            if job.state == JobState::Failed {
+                break job;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "job stayed {:?} for {FAILURE_POLL_LIMIT:?}",
+                job.state
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        stop_job_queue(&queue);
+
+        assert!(
+            failed.message.contains(missing_j2k.to_str().unwrap()),
             "message hid the cause: {}",
             failed.message
         );
