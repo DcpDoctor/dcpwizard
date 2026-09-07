@@ -96,13 +96,6 @@ user-facing surface is here.
   code-complete but untested against a real file, since libaaf's public test
   corpus has video tracks but no video clips. AAF pan and gain automation are
   surfaced in the timeline's skipped list but not applied, deliberate scope.
-- Sony RAW / X-OCN is detected but undecodable (ffmpeg can't decode it), same as
-  ARRIRAW/R3D/BRAW/Canon: a match only yields a clearer detected-but-undecodable
-  error. postkit's detect_format matches Sony's private essence ULs in the .mxf
-  header. Those ULs are reverse-engineered from MediaInfo, NOT SMPTE-registered,
-  and mark the Sony RAW family without distinguishing X-OCN ST/LT/XT tiers, which
-  is fine since the match only sharpens the error. Non-Sony .mxf resolves to
-  DNxHR.
 
 ### Batch E (easyDCP parity, surveyed 2026-08-16)
 

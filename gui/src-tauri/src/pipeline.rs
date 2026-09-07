@@ -1924,6 +1924,7 @@ fn encode_still(
         rsiz: postkit::encode::default_rsiz(),
         colour_transform: route.frame_transform()?,
         burn: job_subtitle_burn(job, fps)?,
+        watermark: None,
         out_dir: &j2k_dir,
     })?;
     log(&format!(

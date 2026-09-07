@@ -5,6 +5,9 @@
 ### Changed
 - **`watermark` marks a DCP's picture essence**: the command took a video or image file and drew the mark with ffmpeg drawtext, which nothing a DCP is made of passes through. It takes a DCP directory now and writes a marked DCP: every picture frame is decoded, the mark is composited over the picture and over anything already burnt into it, and the frame is re-encoded, at the source picture's own average bandwidth (its frame lengths summed at its edit rate, read without decoding them) unless `--video-bit-rate` names one. Sound, subtitle, caption and Atmos tracks ship unchanged under their own asset ids, `--kdm`/`--recipient-key`/`--keys` mark an encrypted source into a cleartext output, and a stereoscopic source is refused rather than marked in one eye. `--font-size` is a percent of the frame height, as the burn-in flags take theirs, `--colour` is RRGGBB or RRGGBBAA and `--font` names the face; `--video-codec` and `--crf` are gone with the movie-file path, and so is `watermark::embed_watermark`. `create --watermark TEXT` marks at build time through the same builder, with `--watermark-font-size`, `--watermark-colour` and `--watermark-position`, drawn over a `--burn-subtitle` where both are given and refused loud on a source that reaches the encoder as X'Y'Z' or as codestreams. postkit's `SourcePreparation` carries the mark beside the subtitle burn and composites it after them, on a packed 16-bit frame or on the planar components an existing codestream decodes to.
 
+### Removed
+- **`ingest` is gone**: it matched camera RAW (ARRIRAW, R3D, BRAW, Canon Cinema RAW Light, Sony X-OCN) by file name or MXF header and refused every match, and transcoded ProRes and DNxHR through ffmpeg, which `transcode` does. Camera RAW is graded and exported as a master before a DCP is built, and `create --video` already refuses a file ffmpeg cannot decode.
+
 ## [1.2.0] - 2026-09-07
 
 ### Changed

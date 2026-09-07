@@ -1681,29 +1681,6 @@ enum Commands {
         signer_opts: SignerOpts,
     },
 
-    /// Ingest camera raw media
-    Ingest {
-        /// Camera card/media directory
-        #[arg(short, long)]
-        source: String,
-
-        /// Output directory
-        #[arg(short, long)]
-        output: String,
-
-        /// Output format (dpx, tiff, exr, prores)
-        #[arg(short, long, default_value = "dpx")]
-        format: String,
-
-        /// Colour space (ACES, Rec.709, P3, LogC)
-        #[arg(short, long, default_value = "ACES")]
-        colour_space: String,
-
-        /// 3D LUT (.cube) applied during transcode via ffmpeg lut3d
-        #[arg(long)]
-        lut: Option<String>,
-    },
-
     /// Extract a frame from video/MXF as image
     #[command(name = "frame-extract")]
     FrameExtract {
@@ -6342,32 +6319,6 @@ fn run() {
                 }
             }
         },
-
-        Commands::Ingest {
-            source,
-            output,
-            format,
-            colour_space,
-            lut,
-        } => {
-            if let Some(ref l) = lut
-                && !std::path::Path::new(l).is_file()
-            {
-                tracing::error!("LUT file not found: {l}");
-                std::process::exit(1);
-            }
-            let opts = postkit::ingest::IngestOptions {
-                source: std::path::PathBuf::from(&source),
-                output_dir: std::path::PathBuf::from(&output),
-                output_format: format,
-                colour_space,
-                debayer_quality: 3,
-                apply_lut: lut.is_some(),
-                lut_path: lut.map(std::path::PathBuf::from).unwrap_or_default(),
-                gpu_device: -1,
-            };
-            postkit::ingest::ingest(&opts)
-        }
 
         Commands::FrameExtract {
             input,

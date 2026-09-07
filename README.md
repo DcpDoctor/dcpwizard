@@ -112,11 +112,7 @@ Free and open-source alternative to easyDCP Creator+.
 - **HDR format conversion**, HDR10 ↔ HLG ↔ SDR tone mapping
 - **HDR source delivery** via `create --hdr-to-dci-lut <lut>` (runs the LUT before J2K encode); `--allow-generic-hdr-tonemap` opts into FFmpeg tone mapping with a warning. `create --hdr-dci` authors a DCI HDR Addendum DCP: the picture MXF is stamped with TransferCharacteristic=ST 2084 (PQ) and ColorPrimaries=P3-D65. Needs a PQ source path (`--hdr-to-dci-lut` or `--hdr-already-pq`); not available with 3D or reel splitting
 
-### Camera Ingest
-- **Camera format detection** (ARRIRAW, RED R3D, Blackmagic BRAW, Canon, Sony RAW / X-OCN); true RAW is detected and rejected loud, only ffmpeg-decodable masters (ProRes, DNxHR) transcode
-- **Media scanning**, auto-detect resolution, frame rate, codec, reel names
-- **Transcode to intermediate**, DPX, TIFF, EXR, ProRes 4444 (via ffmpeg)
-- **3D LUT application** during ingest via `ingest --lut <lut.cube>`
+### Timeline Conform
 - **Timeline conform** from EDL (CMX 3600) / FCP7 XML (xmeml) / FCPX (fcpxml): parse, or with `--media-dir --output` resolve every reel to media and build a finished multi-reel DCP (per-reel encode + wrap + CPL assembly). The reel/asset plan (`conform_plan.json`) and conform manifest are kept as artifacts
 
 ### Export & Playback
@@ -589,10 +585,6 @@ dcpwizard convert --input movie.mov --output movie_2k_scope.mov --target 2k-scop
 dcpwizard conform -i timeline.edl --json
 dcpwizard conform -i timeline.edl --media-dir ./reels --output ./conform_out
 
-# Camera raw ingest (--lut applies a 3D LUT during transcode)
-dcpwizard ingest -s /mnt/camera_card -o ./dpx_frames -f dpx --colour-space ACES
-dcpwizard ingest -s /mnt/camera_card -o ./dpx_frames --lut show.cube
-
 # Extract a single frame from MXF/video
 dcpwizard frame-extract -i video.mxf -f 100 -o frame100.png
 
@@ -811,7 +803,6 @@ docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --port 8080
 | Content version tracking | ✅ | ❌ |
 | Accessibility compliance (CVAA/EAA) | ✅ | ❌ |
 | Dolby Vision / HDR10 / HLG | ✅ | ❌ |
-| Camera format detection (ARRI/RED/BRAW) | ✅ | ❌ |
 | Timeline conform (EDL/FCP7 XML) | ✅ | ❌ |
 | Version dashboard & distribution matrix | ✅ | ❌ |
 | Open source | ✅ (AGPL-3.0) | ❌ |

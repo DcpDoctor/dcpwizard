@@ -36,7 +36,6 @@ pub mod hfr;
 pub mod hints;
 pub mod import;
 pub mod info;
-pub mod ingest;
 pub mod ingest_package;
 pub mod isdcf_name;
 pub mod isdcf_title;
