@@ -418,7 +418,21 @@
                 <fieldset>
                   <legend>HDR</legend>
                   <div class="prop-field">
-                    <label><input type="checkbox" id="prop-hdr-dci"> DCI HDR (ST 2084 PQ / P3-D65)</label>
+                    <label><input type="checkbox" id="prop-hdr-dci"> DCI HDR (ST 2084 PQ)</label>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-hdr-source">HDR source grade</label>
+                    <select id="prop-hdr-source">
+                      <option value="auto">Auto (from the master's colour tags)</option>
+                      <option value="hdr10">HDR10 (PQ, BT.2020)</option>
+                      <option value="hlg">HLG (BT.2020)</option>
+                      <option value="pq-p3d65">PQ P3-D65</option>
+                      <option value="dolby-vision">Dolby Vision (profile 8.1)</option>
+                    </select>
+                  </div>
+                  <div class="prop-field">
+                    <label for="prop-hdr-peak-nits">Peak luminance (cd/m², blank reads the master)</label>
+                    <input id="prop-hdr-peak-nits" type="number" min="1" step="1" placeholder="MaxCLL or mastering display maximum…">
                   </div>
                   <div class="prop-field">
                     <label for="prop-hdr-lut">HDR-to-DCI LUT</label>
@@ -433,7 +447,7 @@
                   <div class="prop-field">
                     <label><input type="checkbox" id="prop-hdr-generic-tonemap"> Allow generic FFmpeg tone mapping</label>
                   </div>
-                  <p class="field-hint">DCI HDR needs a LUT or an already-PQ source, and rules out 3D, reel splitting and versions. Generic tone mapping lands on SDR and is not a delivery transform.</p>
+                  <p class="field-hint">DCI HDR reads the master's own grade, or takes a LUT or an already-PQ source, and rules out 3D, reel splitting and versions. Generic tone mapping lands on SDR and is not a delivery transform.</p>
                 </fieldset>
 
                 <fieldset>

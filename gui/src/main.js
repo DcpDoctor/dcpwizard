@@ -1223,6 +1223,8 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       splitChapters: document.getElementById("prop-split-chapters")?.checked || false,
       versions: document.getElementById("prop-versions")?.value || null,
       hdrDci: document.getElementById("prop-hdr-dci")?.checked || false,
+      hdrSource: document.getElementById("prop-hdr-source")?.value || "auto",
+      hdrPeakNits: parseFloat(document.getElementById("prop-hdr-peak-nits")?.value) || null,
       hdrToDciLut: document.getElementById("prop-hdr-lut")?.value || null,
       hdrAlreadyPq: document.getElementById("prop-hdr-already-pq")?.checked || false,
       allowGenericHdrTonemap: document.getElementById("prop-hdr-generic-tonemap")?.checked || false,

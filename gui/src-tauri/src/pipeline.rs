@@ -583,6 +583,8 @@ pub async fn submit_job(
     split_chapters: Option<bool>,
     versions: Option<String>,
     hdr_dci: Option<bool>,
+    hdr_source: Option<String>,
+    hdr_peak_nits: Option<f32>,
     hdr_to_dci_lut: Option<String>,
     hdr_already_pq: Option<bool>,
     allow_generic_hdr_tonemap: Option<bool>,
@@ -851,10 +853,13 @@ pub async fn submit_job(
     let hdr_source_colour = resolve_hdr(
         &HdrPanelOptions {
             dci: hdr_dci,
+            source: hdr_source,
+            peak_nits: hdr_peak_nits,
             lut: hdr_to_dci_lut,
             already_pq: hdr_already_pq.unwrap_or(false),
             allow_generic_tonemap: allow_generic_hdr_tonemap,
         },
+        Path::new(&video),
         fps_num,
         bandwidth.unwrap_or(DEFAULT_BANDWIDTH_MBPS),
         right_eye.is_some(),
@@ -1567,8 +1572,14 @@ fn parse_upmixer(value: Option<&str>) -> Result<Option<postkit::upmix::Upmixer>,
 }
 
 /// The create panel's HDR controls, before validation.
+// what the HDR source selector reads when the master's own tags decide
+const AUTO_HDR_SOURCE: &str = "auto";
+
 struct HdrPanelOptions {
     dci: bool,
+    // the master's own grade when the selector is left on auto
+    source: Option<String>,
+    peak_nits: Option<f32>,
     lut: Option<String>,
     already_pq: bool,
     allow_generic_tonemap: bool,
@@ -1580,6 +1591,7 @@ struct HdrPanelOptions {
 /// signaling can never end up over transformed frames.
 fn resolve_hdr(
     panel: &HdrPanelOptions,
+    video: &Path,
     frame_rate: u32,
     bandwidth: u32,
     stereoscopic: bool,
@@ -1594,13 +1606,33 @@ fn resolve_hdr(
         .as_deref()
         .map(str::trim)
         .filter(|path| !path.is_empty());
-    let source_paths = [lut.is_some(), panel.already_pq, panel.allow_generic_tonemap]
-        .into_iter()
-        .filter(|set| *set)
-        .count();
+    let grade = panel
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && *name != AUTO_HDR_SOURCE);
+    let source_paths = [
+        lut.is_some(),
+        panel.already_pq,
+        panel.allow_generic_tonemap,
+        grade.is_some(),
+    ]
+    .into_iter()
+    .filter(|set| *set)
+    .count();
     if source_paths > 1 {
         return Err(
-            "Choose one HDR source path: an HDR-to-DCI LUT, an already-PQ source, or generic tone mapping".into(),
+            "Choose one HDR source path: an HDR grade, an HDR-to-DCI LUT, an already-PQ source, or generic tone mapping".into(),
+        );
+    }
+    if let Some(name) = grade.filter(|_| !panel.dci) {
+        return Err(format!(
+            "An HDR source of {name} only names the grade a DCI HDR package is authored from: turn DCI HDR on"
+        ));
+    }
+    if panel.allow_generic_tonemap && panel.dci {
+        return Err(
+            "The generic tone map lands on SDR, which is not an HDR grade to signal: turn DCI HDR off or drop the tone map".into(),
         );
     }
 
@@ -1619,11 +1651,20 @@ fn resolve_hdr(
     if !panel.dci {
         return Ok(source_colour);
     }
-    if source_colour == SourceColour::DisplayRgb {
-        return Err(
-            "DCI HDR needs the source path to PQ: choose an HDR-to-DCI LUT or mark the source already PQ".into(),
-        );
-    }
+    // the master's own grade is the third path to PQ, read from its colour tags
+    // when the panel names none
+    let source_colour = if source_colour == SourceColour::DisplayRgb {
+        let format = match grade {
+            Some(name) => Some(
+                dcpwizard_core::hdr::HdrSourceFormat::parse(name)
+                    .ok_or_else(|| format!("Unknown HDR source '{name}'"))?,
+            ),
+            None => None,
+        };
+        dcpwizard_core::hdr::plan_hdr_dcdm(video, format, panel.peak_nits)?
+    } else {
+        source_colour
+    };
     if bandwidth > hdr::HDR_MAX_MBPS {
         return Err(format!(
             "DCI HDR caps the codestream at {} bytes/frame ({} Mbit/s at {frame_rate} fps): lower the bandwidth from {bandwidth}",
@@ -1650,9 +1691,10 @@ enum HdrSourceStep {
     TonemapToSdr,
 }
 
-/// Mirrors the CLI: an HDR source reaches the encoder through its HDR-to-DCI LUT
-/// or as already-PQ essence, and anything else needs the generic tone map
-/// opt-in. The tone map lands on SDR, so it is unreachable for a PQ source.
+/// Mirrors the CLI: an HDR source reaches the encoder as its own DCI HDR grade,
+/// through an HDR-to-DCI LUT, or as already-PQ essence, and anything else needs
+/// the generic tone map opt-in. The tone map lands on SDR, so it is unreachable
+/// for any of those three.
 fn plan_hdr_source(
     hdr_type: postkit::dolby_vision::HdrType,
     source_colour: &postkit::encode::SourceColour,
@@ -1674,7 +1716,7 @@ fn plan_hdr_source(
         return Ok(HdrSourceStep::TonemapToSdr);
     }
     Err(format!(
-        "Source is {hdr_type:?}: choose an HDR-to-DCI LUT, mark it already PQ, or allow generic tone mapping"
+        "Source is {hdr_type:?}: turn DCI HDR on, choose an HDR-to-DCI LUT, mark it already PQ, or allow generic tone mapping"
     ))
 }
 
@@ -2885,9 +2927,16 @@ mod tests {
         assert!(isdcf_name_for(&request).is_err());
     }
 
+    // the LUT and already-PQ paths never open the master, so nothing reads this
+    fn unread_master() -> &'static Path {
+        Path::new("master.mov")
+    }
+
     fn hdr_panel() -> HdrPanelOptions {
         HdrPanelOptions {
             dci: true,
+            source: None,
+            peak_nits: None,
             lut: None,
             already_pq: true,
             allow_generic_tonemap: false,
@@ -3363,21 +3412,88 @@ mod tests {
         assert!(load_version_specs(Some(missing.to_str().unwrap())).is_err());
     }
 
+    // the matroska muxer writes the tags the frames carry, so setparams stamps them
+    fn tagged_clip(dir: &Path, name: &str, setparams: &str) -> PathBuf {
+        let clip = dir.join(name);
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:s=64x64:r=24:d=0.084")
+            .args(["-vf", setparams])
+            .args(["-pix_fmt", "yuv420p10le", "-c:v", "ffv1"])
+            .arg(&clip)
+            .status()
+            .expect("ffmpeg has to run");
+        assert!(
+            status.success(),
+            "ffmpeg could not write {}",
+            clip.display()
+        );
+        clip
+    }
+
     #[test]
-    fn dci_hdr_needs_a_pq_source() {
+    fn dci_hdr_reads_the_masters_own_grade_and_refuses_an_sdr_one() {
+        let dir = tempfile::tempdir().unwrap();
         let panel = HdrPanelOptions {
             dci: true,
+            source: None,
+            peak_nits: None,
             lut: None,
             already_pq: false,
             allow_generic_tonemap: false,
         };
-        let error = resolve_hdr(&panel, 24, 250, false, false, false).unwrap_err();
-        assert!(error.contains("already PQ"), "{error}");
+
+        let hdr10 = tagged_clip(
+            dir.path(),
+            "hdr10.mkv",
+            "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
+        );
+        assert_eq!(
+            resolve_hdr(&panel, &hdr10, 24, 250, false, false, false).unwrap(),
+            postkit::encode::SourceColour::HdrDcdm {
+                source: postkit::colour::HdrSource::Hdr10,
+                source_peak_nits: postkit::colour::HdrSource::DEFAULT_PEAK_NITS,
+            }
+        );
+
+        let sdr = tagged_clip(
+            dir.path(),
+            "sdr.mkv",
+            "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709",
+        );
+        let error = resolve_hdr(&panel, &sdr, 24, 250, false, false, false).unwrap_err();
+        assert!(error.contains("--hdr-source"), "{error}");
 
         assert_eq!(
-            resolve_hdr(&hdr_panel(), 24, 250, false, false, false).unwrap(),
+            resolve_hdr(&hdr_panel(), unread_master(), 24, 250, false, false, false).unwrap(),
             postkit::encode::SourceColour::AlreadyPq
         );
+    }
+
+    #[test]
+    fn an_hdr_grade_named_without_dci_hdr_is_refused() {
+        let named = HdrPanelOptions {
+            dci: false,
+            source: Some("hdr10".into()),
+            peak_nits: None,
+            lut: None,
+            already_pq: false,
+            allow_generic_tonemap: false,
+        };
+        let error = resolve_hdr(&named, unread_master(), 24, 250, false, false, false).unwrap_err();
+        assert!(error.contains("turn DCI HDR on"), "{error}");
+
+        let tonemapped = HdrPanelOptions {
+            dci: true,
+            source: None,
+            peak_nits: None,
+            lut: None,
+            already_pq: false,
+            allow_generic_tonemap: true,
+        };
+        let error =
+            resolve_hdr(&tonemapped, unread_master(), 24, 250, false, false, false).unwrap_err();
+        assert!(error.contains("lands on SDR"), "{error}");
     }
 
     #[test]
@@ -3388,12 +3504,14 @@ mod tests {
 
         let panel = HdrPanelOptions {
             dci: true,
+            source: None,
+            peak_nits: None,
             lut: Some(lut.to_string_lossy().into_owned()),
             already_pq: false,
             allow_generic_tonemap: false,
         };
         assert_eq!(
-            resolve_hdr(&panel, 24, 250, false, false, false).unwrap(),
+            resolve_hdr(&panel, unread_master(), 24, 250, false, false, false).unwrap(),
             postkit::encode::SourceColour::DciLut(lut)
         );
 
@@ -3401,39 +3519,46 @@ mod tests {
             lut: Some(dir.path().join("gone.cube").to_string_lossy().into_owned()),
             ..panel
         };
-        assert!(resolve_hdr(&missing, 24, 250, false, false, false)
-            .unwrap_err()
-            .contains("LUT not found"));
+        assert!(
+            resolve_hdr(&missing, unread_master(), 24, 250, false, false, false)
+                .unwrap_err()
+                .contains("LUT not found")
+        );
     }
 
     #[test]
     fn dci_hdr_rejects_the_combinations_the_cli_rejects() {
-        let over_cap = resolve_hdr(&hdr_panel(), 24, 500, false, false, false).unwrap_err();
+        let over_cap =
+            resolve_hdr(&hdr_panel(), unread_master(), 24, 500, false, false, false).unwrap_err();
         assert!(over_cap.contains("2343750 bytes/frame"), "{over_cap}");
 
-        assert!(resolve_hdr(&hdr_panel(), 24, 250, true, false, false).is_err());
-        assert!(resolve_hdr(&hdr_panel(), 24, 250, false, true, false).is_err());
-        assert!(resolve_hdr(&hdr_panel(), 24, 250, false, false, true).is_err());
+        assert!(resolve_hdr(&hdr_panel(), unread_master(), 24, 250, true, false, false).is_err());
+        assert!(resolve_hdr(&hdr_panel(), unread_master(), 24, 250, false, true, false).is_err());
+        assert!(resolve_hdr(&hdr_panel(), unread_master(), 24, 250, false, false, true).is_err());
 
         let two_paths = HdrPanelOptions {
             allow_generic_tonemap: true,
             ..hdr_panel()
         };
-        assert!(resolve_hdr(&two_paths, 24, 250, false, false, false)
-            .unwrap_err()
-            .contains("Choose one HDR source path"));
+        assert!(
+            resolve_hdr(&two_paths, unread_master(), 24, 250, false, false, false)
+                .unwrap_err()
+                .contains("Choose one HDR source path")
+        );
     }
 
     #[test]
     fn a_plain_job_keeps_display_rgb() {
         let panel = HdrPanelOptions {
             dci: false,
+            source: None,
+            peak_nits: None,
             lut: None,
             already_pq: false,
             allow_generic_tonemap: false,
         };
         assert_eq!(
-            resolve_hdr(&panel, 24, 250, true, true, true).unwrap(),
+            resolve_hdr(&panel, unread_master(), 24, 250, true, true, true).unwrap(),
             postkit::encode::SourceColour::DisplayRgb
         );
     }
