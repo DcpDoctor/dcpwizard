@@ -110,7 +110,7 @@ Free and open-source alternative to easyDCP Creator+.
 - **Dolby Vision RPU injection** via dovi_tool
 - **HDR10 static metadata** injection (SMPTE ST 2086 + CTA 861.3)
 - **HDR format conversion**, HDR10 ↔ HLG ↔ SDR tone mapping
-- **HDR source delivery** via `create --hdr-to-dci-lut <lut>` (runs the LUT before J2K encode); `--allow-generic-hdr-tonemap` opts into FFmpeg tone mapping with a warning. `create --hdr-dci` authors a DCI HDR Addendum DCP: the picture MXF is stamped with TransferCharacteristic=ST 2084 (PQ) and ColorPrimaries=P3-D65. Needs a PQ source path (`--hdr-to-dci-lut` or `--hdr-already-pq`); not available with 3D or reel splitting
+- **HDR source delivery** via `create --hdr-to-dci-lut <lut>` (runs the LUT before J2K encode); `--allow-generic-hdr-tonemap` opts into FFmpeg tone mapping with a warning, and is refused with `--hdr-dci`. `create --hdr-dci` authors a DCI HDR Addendum DCP from an HDR master: the picture MXF is stamped with TransferCharacteristic=ST 2084 (PQ), the CPL carries the ST 429-16 `Image Encoding Parameters` extension with EOTF `ST 2084`, and the ISDCF name takes the `HDR1` content modifier. The master's own colour tags name the grade, or `--hdr-source <hdr10|hlg|pq-p3d65|dolby-vision>` names it (a Dolby Vision profile 8.1 base layer is read as HDR10, and profile 5 is refused). `--hdr-peak-nits <cd/m²>` is where the roll-off starts, defaulting to the master's MaxCLL, then its mastering display maximum, then 1000. An SDR or untagged master is refused. `--hdr-to-dci-lut` and `--hdr-already-pq` are the other two paths to PQ; not available with 3D or reel splitting
 
 ### Timeline Conform
 - **Timeline conform** from EDL (CMX 3600) / FCP7 XML (xmeml) / FCPX (fcpxml): parse, or with `--media-dir --output` resolve every reel to media and build a finished multi-reel DCP (per-reel encode + wrap + CPL assembly). The reel/asset plan (`conform_plan.json`) and conform manifest are kept as artifacts
@@ -352,6 +352,10 @@ dcpwizard create --title "My Film" --video ./j2k --audio ./audio.wav --output ./
 # HDR source with an HDR-to-DCI 3D LUT (LUT runs before J2K encode)
 dcpwizard create --title "My Film" --video hdr.mov --output ./dcp \
     --hdr-to-dci-lut hdr_to_dci.cube
+
+# DCI HDR Addendum package from an HDR10 master graded to 1000 cd/m²
+dcpwizard create --title "My Film" --video hdr10.mov --output ./dcp \
+    --hdr-dci --hdr-source hdr10 --hdr-peak-nits 1000
 
 # Create with a subtitle track (SRT -> ST 428-7 timed text, wrapped and registered)
 dcpwizard create --title "My Film" --video ./j2k --output ./dcp \
