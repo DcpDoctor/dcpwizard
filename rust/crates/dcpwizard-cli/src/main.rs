@@ -4805,21 +4805,8 @@ fn run() {
                     }
                 };
                 let picture_filter = join_decode_filters(&resolved_picture.plan.filters, None);
-                // the HDR grade reaches the transform through zscale, ahead of
-                // everything the picture plan does
-                let hdr_decode_filter = hdr_dcdm_colour
-                    .as_ref()
-                    .and_then(|colour| colour.hdr_source())
-                    .and_then(|source| {
-                        dcpwizard_core::hdr::hdr_decode_filter(&source_pixel_format, source)
-                    });
                 let video_filter =
-                    join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref())
-                        .map(|filters| match hdr_decode_filter.as_deref() {
-                            Some(hdr) => format!("{hdr},{filters}"),
-                            None => filters,
-                        })
-                        .or(hdr_decode_filter);
+                    join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref());
                 // the picture MXF is written as the frames finish where the run
                 // allows it, so packaging never reads the J2K directory back
                 let overlap_refusal = dcpwizard_core::overlapped_picture::overlap_refusal(
@@ -4872,6 +4859,9 @@ fn run() {
                     width,
                     height,
                     &source_pixel_format,
+                    hdr_dcdm_colour
+                        .as_ref()
+                        .unwrap_or(&postkit::encode::SourceColour::DisplayRgb),
                     &cancel,
                     resume,
                     video_filter.as_deref(),
