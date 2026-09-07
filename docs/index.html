@@ -588,7 +588,7 @@
             <tr><td>DCDM intermediate format</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Trailer packaging (ratings / leaders)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Content version tracking</td><td class="yes">✓</td><td class="no">✗</td></tr>
-            <tr><td>Accessibility compliance (CVAA / EAA)</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>Accessibility track check (CVAA / EAA / AODA / Ofcom)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Dolby Vision / HDR10 / HLG</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Timeline conform (EDL / FCP7 XML)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Version dashboard &amp; distribution matrix</td><td class="yes">✓</td><td class="no">✗</td></tr>
@@ -606,11 +606,11 @@
     <div class="code-block"><code><span class="comment"># Raise every refusal and hint before committing to the encode</span>
 <span class="cmd">dcpwizard</span> create <span class="flag">--title</span> <span class="val">"My Film"</span> <span class="flag">--video</span> <span class="val">movie.mov</span> <span class="flag">--output</span> <span class="val">./dcp</span> <span class="flag">--check</span>
 
-<span class="comment"># Watch a folder and build a DCP whenever a master lands in it</span>
-<span class="cmd">dcpwizard</span> watch <span class="val">./incoming</span>
+<span class="comment"># Build a DCP from every master that lands in a watched folder</span>
+<span class="cmd">dcpwizard</span> watch <span class="val">./incoming</span> <span class="flag">--output</span> <span class="val">./packages</span> <span class="flag">--webhook-url</span> <span class="val">https://pipeline/hook</span>
 
-<span class="comment"># Queue a job and let the daemon work through it</span>
-<span class="cmd">dcpwizard</span> batch add <span class="flag">-T</span> <span class="val">create-dcp</span> <span class="flag">-p</span> <span class="val">'{"title":"My Film","video":"./j2k","output":"./dcp"}'</span>
+<span class="comment"># Queue a job and let the daemon work through it (params are a full DcpConfig)</span>
+<span class="cmd">dcpwizard</span> batch add <span class="flag">-T</span> <span class="val">create-dcp</span> <span class="flag">-p</span> <span class="val">'{"title":"My Film","standard":"Smpte","resolution":"TwoK","content_type":"Feature","frame_rate_num":24,"frame_rate_den":1,"max_bitrate_mbps":250,"encrypt":false,"stereo_3d":false,"container_width":2048,"container_height":858,"output_dir":"./dcp","j2k_dir":"./j2k","audio_input_order":"Canonical51","subtitle_language":"en","reel_length_minutes":0}'</span>
 
 <span class="comment"># Serve the automation API for headless or batch operation</span>
 <span class="cmd">dcpwizard</span> serve <span class="flag">--bind</span> <span class="val">127.0.0.1:8080</span></code></div>
