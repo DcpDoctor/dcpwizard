@@ -483,6 +483,10 @@ function renderAssets() {
     el.addEventListener('contextmenu', (e) => {
       showContextMenu(e, parseInt(el.dataset.assetId));
     });
+    el.addEventListener('click', () => {
+      const asset = project.assets.find(a => a.id === parseInt(el.dataset.assetId));
+      if (asset) selectPreview("source", asset.path);
+    });
   });
   list.querySelectorAll('.asset-remove').forEach(el => {
     el.addEventListener('click', (e) => { e.stopPropagation(); removeAsset(parseInt(el.dataset.removeId)); });
@@ -496,6 +500,8 @@ function renderAssets() {
       el.style.display = name.includes(q) ? "" : "none";
     });
   }
+
+  applyPreviewSelection();
 }
 
 function renderReels() {
@@ -726,29 +732,31 @@ document.getElementById("prop-output")?.addEventListener("input", (event) => {
 });
 
 // === Open existing DCP ===
+async function openDcp(dir) {
+  const name = dir.split(/[/\\]/).pop();
+  document.getElementById("project-name").textContent = name;
+  project.title = name;
+  document.getElementById("prop-title").value = name;
+  addRecentProject(dir, name);
+  setStatus(`Opened: ${dir}`);
+  openedPackage = dir;
+  selectPreview("package", dir);
+
+  // Load timeline from the first CPL found
+  try {
+    const cpls = await invoke('list_cpls', { dcpDir: dir });
+    if (cpls && cpls.length > 0) {
+      const cplPath = dir + '/' + cpls[0].file_path;
+      loadTimelineFromCpl(cplPath);
+    }
+  } catch (e) {
+    console.warn('[main] Could not load timeline:', e);
+  }
+}
+
 document.getElementById("btn-open-project")?.addEventListener("click", async () => {
   const dir = await open({ directory: true });
-  if (dir) {
-    // Load as a DCP to preview/verify
-    const name = dir.split(/[/\\]/).pop();
-    document.getElementById("project-name").textContent = name;
-    project.title = name;
-    document.getElementById("prop-title").value = name;
-    addRecentProject(dir, name);
-    setStatus(`Opened: ${dir}`);
-    previewPackage(dir);
-
-    // Load timeline from the first CPL found
-    try {
-      const cpls = await invoke('list_cpls', { dcpDir: dir });
-      if (cpls && cpls.length > 0) {
-        const cplPath = dir + '/' + cpls[0].file_path;
-        loadTimelineFromCpl(cplPath);
-      }
-    } catch (e) {
-      console.warn('[main] Could not load timeline:', e);
-    }
-  }
+  if (dir) openDcp(dir);
 });
 
 // === Build DCP ===
@@ -1267,16 +1275,55 @@ const PREVIEW_LOAD_POLL_ATTEMPTS = 30;
 // not be given those tracks.
 let previewGeneration = 0;
 let previewShowsJobPicture = false;
+// the package last opened, which the Preview button plays when no picture is imported
+let openedPackage = null;
+
+// the row picked in the asset list or the recent list
+let selectedPreview = null;
+
+function selectPreview(kind, path) {
+  selectedPreview = { kind, path };
+  applyPreviewSelection();
+  updateToolbarState();
+}
+
+function clearPreviewSelection() {
+  selectedPreview = null;
+  applyPreviewSelection();
+  updateToolbarState();
+}
+
+// both lists rebuild their rows from innerHTML
+function applyPreviewSelection() {
+  const selectedAssetId = selectedPreview?.kind === "source"
+    ? project.assets.find(a => a.path === selectedPreview.path)?.id
+    : null;
+  document.querySelectorAll("#asset-list .asset-item").forEach(el => {
+    el.classList.toggle("selected", parseInt(el.dataset.assetId) === selectedAssetId);
+  });
+  document.querySelectorAll("#recent-list .recent-item").forEach(el => {
+    const isSelected = selectedPreview?.kind === "package" && el.dataset.path === selectedPreview.path;
+    el.classList.toggle("selected", isSelected);
+  });
+}
 
 document.getElementById("btn-preview")?.addEventListener("click", async () => {
+  if (selectedPreview?.kind === "source") {
+    previewSourcePicture(selectedPreview.path);
+    return;
+  }
+  if (selectedPreview?.kind === "package") {
+    previewPackage(selectedPreview.path);
+    return;
+  }
+  const reel = project.reels[0];
   const output = document.getElementById("prop-output")?.value;
-  if (output) {
-    // Try to preview the built DCP
+  if (reel?.picture) {
+    previewSourcePicture(reel.picture.path);
+  } else if (openedPackage) {
+    previewPackage(openedPackage);
+  } else if (output) {
     previewPackage(output);
-  } else {
-    // Preview the first video asset
-    const reel = project.reels[0];
-    if (reel?.picture) previewSourcePicture(reel.picture.path);
   }
 });
 
@@ -2024,16 +2071,9 @@ function renderRecentProjects() {
     });
   });
   list.querySelectorAll('.recent-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const dir = el.dataset.path;
-      const name = dir.split(/[/\\]/).pop();
-      document.getElementById("project-name").textContent = name;
-      project.title = name;
-      document.getElementById("prop-title").value = name;
-      setStatus(`Opened: ${dir}`);
-      previewPackage(dir);
-    });
+    el.addEventListener('click', () => openDcp(el.dataset.path));
   });
+  applyPreviewSelection();
 }
 
 // === Desktop Notifications ===
@@ -2066,6 +2106,7 @@ document.getElementById("btn-new-project")?.addEventListener("click", async () =
   if (titleEl) titleEl.value = "";
   document.getElementById("prop-output") && (document.getElementById("prop-output").value = "");
   document.getElementById("project-name").textContent = "Untitled Project";
+  clearPreviewSelection();
   switchView("project");
   renderAssets();
   renderReels();
@@ -2113,7 +2154,8 @@ function updateToolbarState() {
   const buildBtn = document.getElementById("btn-build");
   const previewBtn = document.getElementById("btn-preview");
   if (buildBtn) buildBtn.disabled = buildInFlight || !(hasVideo && hasTitle);
-  if (previewBtn) previewBtn.disabled = !hasVideo && !document.getElementById("prop-output")?.value;
+  const hasOutput = !!document.getElementById("prop-output")?.value;
+  if (previewBtn) previewBtn.disabled = !selectedPreview && !hasVideo && !openedPackage && !hasOutput;
 }
 
 // Keep title in sync and update toolbar state
@@ -2139,6 +2181,7 @@ async function removeAsset(assetId) {
   if (!asset) return;
   if (!(await tauriConfirm(`Remove "${asset.name}" from project?`))) return;
   project.assets = project.assets.filter(a => a.id !== assetId);
+  if (selectedPreview?.kind === "source" && selectedPreview.path === asset.path) clearPreviewSelection();
   project.reels.forEach(r => {
     if (r.picture?.id === assetId) r.picture = null;
     if (r.sound?.id === assetId) r.sound = null;

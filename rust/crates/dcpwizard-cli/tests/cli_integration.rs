@@ -52,6 +52,34 @@ fn a_registration_url_requires_a_license() {
 }
 
 #[test]
+fn the_gpu_preference_stays_on_the_cpu_when_no_plugin_loads() {
+    let directory = TempDir::new().unwrap();
+    let missing = directory.path().join("does_not_exist");
+    cmd()
+        .env("XDG_CONFIG_HOME", directory.path())
+        .args(["preferences", "set", "gpu", "true"])
+        .assert()
+        .success();
+
+    cmd()
+        .env("XDG_CONFIG_HOME", directory.path())
+        .env("GRK_NO_PLUGIN", "1")
+        .args(["verify", missing.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("stays on the CPU"));
+
+    cmd()
+        .env("XDG_CONFIG_HOME", directory.path())
+        .env("GRK_NO_PLUGIN", "1")
+        .args(["--gpu", "verify", missing.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("did not initialise"))
+        .stdout(predicate::str::contains("stays on the CPU").not());
+}
+
+#[test]
 fn preferences_are_shared_between_invocations() {
     let directory = TempDir::new().unwrap();
 
