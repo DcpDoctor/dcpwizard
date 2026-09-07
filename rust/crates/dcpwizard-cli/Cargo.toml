@@ -22,6 +22,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 asdcplib.workspace = true
 assert_cmd = "2"
+dcpdoctor-core.workspace = true
 hound = "3.5"
 predicates = "3"
 tempfile = "3"

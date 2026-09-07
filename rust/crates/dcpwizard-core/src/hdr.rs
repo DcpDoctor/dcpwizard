@@ -9,7 +9,7 @@
 
 use postkit::colour::HdrSource;
 use postkit::dolby_vision::DolbyVisionSummary;
-use postkit::encode::SourceColour;
+use postkit::encode::{SourceColour, YuvMatrix};
 use std::path::Path;
 
 /// ST 2084 (PQ) TransferCharacteristic UL (DCI HDR Addendum s7; asdcplib
@@ -38,6 +38,13 @@ const P3D65_PRIMARIES_TAG: &str = "smpte432";
 
 // ST 2086 mastering display luminance is carried in 0.0001 cd/m² steps
 const MASTERING_DISPLAY_LUMINANCE_STEPS_PER_NIT: f32 = 10_000.0;
+
+// what ffprobe reports for a full-range stream, and the pixel formats that need
+// a matrix to reach RGB at all
+const FULL_RANGE_TAG: &str = "pc";
+const YUV_PIXEL_FORMAT_PREFIXES: [&str; 4] = ["yuv", "nv", "p0", "p2"];
+const ZSCALE_RGB_MATRIX: &str = "gbr";
+const SIXTEEN_BIT_RGB_FILTER: &str = "format=gbrp16le";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HdrSourceFormat {
@@ -179,6 +186,50 @@ fn colour_tags(video: &Path) -> Result<(String, String), String> {
     Ok((transfer, primaries))
 }
 
+// swscale's YCbCr conversion lands 8 of the addendum's 4095 codes below its
+// reference white, so an HDR decode converts the samples with zscale instead
+pub fn hdr_decode_filter(
+    source: &postkit::probe::PixelFormatInfo,
+    hdr_source: HdrSource,
+) -> Option<String> {
+    if !YUV_PIXEL_FORMAT_PREFIXES
+        .iter()
+        .any(|prefix| source.pix_fmt.starts_with(prefix))
+    {
+        return None;
+    }
+    let range = if source.color_range == FULL_RANGE_TAG {
+        "full"
+    } else {
+        "limited"
+    };
+    let matrix = zscale_matrix_name(hdr_yuv_matrix(hdr_source, &source.color_space));
+    Some(format!(
+        "zscale=matrixin={matrix}:rangein={range}:matrix={ZSCALE_RGB_MATRIX}:range=full,\
+         {SIXTEEN_BIT_RGB_FILTER}"
+    ))
+}
+
+// an HDR grade is never BT.601, so an untagged one takes the matrix its transfer implies
+fn hdr_yuv_matrix(hdr_source: HdrSource, color_space: &str) -> YuvMatrix {
+    let tagged = YuvMatrix::for_ffprobe_color_space(color_space);
+    if tagged != YuvMatrix::Bt601 {
+        return tagged;
+    }
+    match hdr_source {
+        HdrSource::Hdr10 | HdrSource::Hlg => YuvMatrix::Bt2020,
+        HdrSource::PqP3D65 => YuvMatrix::Bt709,
+    }
+}
+
+fn zscale_matrix_name(matrix: YuvMatrix) -> &'static str {
+    match matrix {
+        YuvMatrix::Bt601 => "170m",
+        YuvMatrix::Bt709 => "709",
+        YuvMatrix::Bt2020 => "2020_ncl",
+    }
+}
+
 fn resolve_peak_nits(
     explicit: Option<f32>,
     dolby_vision: Option<&DolbyVisionSummary>,
@@ -214,6 +265,7 @@ fn positive_nits(nits: f32) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use postkit::probe::PixelFormatInfo;
 
     #[test]
     fn byte_cap_is_floor_of_450mbit() {
@@ -321,6 +373,40 @@ mod tests {
         );
         let refusal = detect_hdr_source_format(&sdr).unwrap_err();
         assert!(refusal.contains("--hdr-source"), "{refusal}");
+    }
+
+    fn pixel_format(pix_fmt: &str, color_space: &str, color_range: &str) -> PixelFormatInfo {
+        PixelFormatInfo {
+            pix_fmt: pix_fmt.to_string(),
+            color_space: color_space.to_string(),
+            color_range: color_range.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_hdr_yuv_source_converts_to_rgb_with_its_own_matrix_and_range() {
+        assert_eq!(
+            hdr_decode_filter(
+                &pixel_format("yuv420p10le", "bt2020nc", "tv"),
+                HdrSource::Hdr10
+            )
+            .unwrap(),
+            "zscale=matrixin=2020_ncl:rangein=limited:matrix=gbr:range=full,format=gbrp16le"
+        );
+        assert!(
+            hdr_decode_filter(
+                &pixel_format("yuv444p10le", "unknown", "pc"),
+                HdrSource::PqP3D65
+            )
+            .unwrap()
+            .contains("matrixin=709:rangein=full"),
+            "an untagged P3-D65 grade takes the BT.709 matrix at its own range"
+        );
+        assert!(
+            hdr_decode_filter(&pixel_format("rgb48le", "unknown", "pc"), HdrSource::Hdr10)
+                .is_none(),
+            "an RGB source needs no matrix to reach RGB"
+        );
     }
 
     #[test]

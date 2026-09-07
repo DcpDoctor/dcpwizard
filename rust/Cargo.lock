@@ -758,6 +758,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "ctrlc",
+ "dcpdoctor-core",
  "dcpwizard-core",
  "hound",
  "postkit",

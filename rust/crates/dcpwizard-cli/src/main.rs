@@ -20,6 +20,25 @@ impl From<AccessibilityStandardArg> for postkit::accessibility::AccessibilitySta
     }
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum HdrSourceArg {
+    Hdr10,
+    Hlg,
+    PqP3d65,
+    DolbyVision,
+}
+
+impl From<HdrSourceArg> for dcpwizard_core::hdr::HdrSourceFormat {
+    fn from(arg: HdrSourceArg) -> Self {
+        match arg {
+            HdrSourceArg::Hdr10 => Self::Hdr10,
+            HdrSourceArg::Hlg => Self::Hlg,
+            HdrSourceArg::PqP3d65 => Self::PqP3D65,
+            HdrSourceArg::DolbyVision => Self::DolbyVision,
+        }
+    }
+}
+
 /// ST 429-16 composition identity, boxed into the Create variant.
 #[derive(Args)]
 struct CreateCompositionMetadata {
@@ -893,13 +912,26 @@ enum Commands {
         #[arg(long)]
         hdr_to_dci_lut: Option<String>,
         /// Allow generic FFmpeg HDR tone mapping. It is not a delivery transform.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "hdr_dci")]
         allow_generic_hdr_tonemap: bool,
-        /// Author a DCI HDR Addendum DCP (ST 2084 PQ / P3-D65 stamped on the
-        /// picture MXF). Requires --hdr-to-dci-lut or --hdr-already-pq. Not
-        /// supported with 3D or reel splitting.
+        /// Author a DCI HDR Addendum DCP (ST 2084 PQ stamped on the picture MXF
+        /// and the CPL). The master's own colour tags name the grade; pass
+        /// --hdr-source, --hdr-to-dci-lut or --hdr-already-pq to override that.
+        /// Not supported with 3D or reel splitting.
         #[arg(long)]
         hdr_dci: bool,
+        /// HDR grade the master carries, when its colour tags do not say.
+        #[arg(
+            long,
+            value_enum,
+            requires = "hdr_dci",
+            conflicts_with_all = ["hdr_to_dci_lut", "hdr_already_pq"]
+        )]
+        hdr_source: Option<HdrSourceArg>,
+        /// Peak luminance of the grade in cd/m², where the DCI HDR roll-off
+        /// starts. Defaults to the master's MaxCLL or mastering display maximum.
+        #[arg(long, requires = "hdr_dci")]
+        hdr_peak_nits: Option<f32>,
         /// Acknowledge the source is already ST 2084 PQ (DCI HDR), so --hdr-dci
         /// needs no LUT conversion.
         #[arg(long, requires = "hdr_dci", conflicts_with = "hdr_to_dci_lut")]
@@ -2812,18 +2844,21 @@ fn prepare_create_audio(
 }
 
 /// Validate the DCI HDR Addendum flag combo and the raised per-codestream cap.
-/// The picture MXF is wrapped with TransferCharacteristic=ST 2084 / P3-D65
-/// primaries in create_dcp; this only rejects an unusable request up front.
+/// The picture MXF is wrapped with TransferCharacteristic=ST 2084 in create_dcp;
+/// this only rejects an unusable request up front. `hdr_dcdm_source` says the
+/// master's own grade was read, which is the third path to PQ.
 fn validate_hdr_dci(
     hdr_to_dci_lut: &Option<String>,
     hdr_already_pq: bool,
+    hdr_dcdm_source: bool,
     frame_rate: Option<u32>,
     video_bit_rate: Option<u32>,
 ) {
     use dcpwizard_core::hdr;
-    if hdr_to_dci_lut.is_none() && !hdr_already_pq {
+    if hdr_to_dci_lut.is_none() && !hdr_already_pq && !hdr_dcdm_source {
         tracing::error!(
-            "--hdr-dci needs the source path to PQ: pass --hdr-to-dci-lut or --hdr-already-pq"
+            "--hdr-dci needs the source path to PQ: encode from an HDR master (--hdr-source names \
+             its grade), or pass --hdr-to-dci-lut or --hdr-already-pq"
         );
         std::process::exit(1);
     }
@@ -3774,6 +3809,8 @@ fn run() {
             hdr_to_dci_lut,
             allow_generic_hdr_tonemap,
             hdr_dci,
+            hdr_source,
+            hdr_peak_nits,
             hdr_already_pq,
             sign_language_video,
             sign_language_lang,
@@ -3967,7 +4004,7 @@ fn run() {
                 }
             };
             if !xyz_route.compressor_transform()
-                && (hdr_to_dci_lut.is_some() || hdr_already_pq || allow_generic_hdr_tonemap)
+                && (hdr_dci || hdr_to_dci_lut.is_some() || allow_generic_hdr_tonemap)
             {
                 tracing::error!(
                     "--source-colourspace {source_colourspace} and the HDR source flags both decide \
@@ -4085,12 +4122,6 @@ fn run() {
                 std::process::exit(1);
             }
 
-            // DCI HDR Addendum: validate the flag combo + raised codestream cap.
-            // The ST 2084 / P3-D65 ULs are written onto the picture MXF in create_dcp.
-            if hdr_dci {
-                validate_hdr_dci(&hdr_to_dci_lut, hdr_already_pq, frame_rate, video_bit_rate);
-            }
-
             // Detect if input is a video file (not a J2K directory)
             let is_video_file = video_path.is_file()
                 && video_path
@@ -4113,6 +4144,34 @@ fn run() {
                         )
                     })
                     .unwrap_or(false);
+
+            // DCI HDR Addendum: the master's grade and peak luminance, unless a
+            // LUT or --hdr-already-pq already hands the encoder PQ.
+            let hdr_dcdm_colour =
+                if hdr_dci && is_video_file && hdr_to_dci_lut.is_none() && !hdr_already_pq {
+                    match dcpwizard_core::hdr::plan_hdr_dcdm(
+                        &video_path,
+                        hdr_source.map(Into::into),
+                        hdr_peak_nits,
+                    ) {
+                        Ok(colour) => Some(colour),
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    None
+                };
+            if hdr_dci {
+                validate_hdr_dci(
+                    &hdr_to_dci_lut,
+                    hdr_already_pq,
+                    hdr_dcdm_colour.is_some(),
+                    frame_rate,
+                    video_bit_rate,
+                );
+            }
 
             // a single image is a third input shape beside a video and a
             // codestream directory, and it is the only one with no length of its
@@ -4480,20 +4539,28 @@ fn run() {
                 // itself; everything else is grok's own dcdm transform
                 let mut content_already_xyz =
                     matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz);
-                let frame_transform = match xyz_route.frame_transform() {
+                let transform_source = hdr_dcdm_colour.as_ref().map_or_else(
+                    || xyz_route.frame_transform(),
+                    |colour| colour.frame_transform(),
+                );
+                let frame_transform = match transform_source {
                     Ok(t) => t,
                     Err(e) => {
                         tracing::error!("{e}");
                         std::process::exit(1);
                     }
                 };
-                let hdr_type = dcpwizard_core::dolby_vision::detect_hdr_type(&range_src);
+                // an HDR master postkit transforms itself needs no conversion pass
+                let convert_hdr_source = hdr_dcdm_colour.is_none()
+                    && !hdr_already_pq
+                    && dcpwizard_core::dolby_vision::detect_hdr_type(&range_src)
+                        != postkit::dolby_vision::HdrType::Sdr;
                 if hdr_already_pq {
                     // the operator's assertion beats detection: a pq source can
                     // probe as sdr, and transforming it would stamp pq on frames
                     // that are no longer pq
                     content_already_xyz = true;
-                } else if hdr_type != postkit::dolby_vision::HdrType::Sdr {
+                } else if convert_hdr_source {
                     let converted = output_dir.join("hdr_to_dci_source.mov");
                     if let Some(lut) = hdr_to_dci_lut.as_ref() {
                         let lut = PathBuf::from(lut);
@@ -4738,8 +4805,21 @@ fn run() {
                     }
                 };
                 let picture_filter = join_decode_filters(&resolved_picture.plan.filters, None);
+                // the HDR grade reaches the transform through zscale, ahead of
+                // everything the picture plan does
+                let hdr_decode_filter = hdr_dcdm_colour
+                    .as_ref()
+                    .and_then(|colour| colour.hdr_source())
+                    .and_then(|source| {
+                        dcpwizard_core::hdr::hdr_decode_filter(&source_pixel_format, source)
+                    });
                 let video_filter =
-                    join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref());
+                    join_decode_filters(&resolved_picture.plan.filters, fade_filter.as_deref())
+                        .map(|filters| match hdr_decode_filter.as_deref() {
+                            Some(hdr) => format!("{hdr},{filters}"),
+                            None => filters,
+                        })
+                        .or(hdr_decode_filter);
                 // the picture MXF is written as the frames finish where the run
                 // allows it, so packaging never reads the J2K directory back
                 let overlap_refusal = dcpwizard_core::overlapped_picture::overlap_refusal(
