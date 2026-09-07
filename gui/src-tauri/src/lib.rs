@@ -104,6 +104,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                app.state::<guikit::preview::PreviewPlayer>().shutdown();
                 app.state::<pipeline::JobQueue>().stop_for_exit();
             }
         });
