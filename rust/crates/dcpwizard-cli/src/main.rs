@@ -1,5 +1,24 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum AccessibilityStandardArg {
+    Cvaa,
+    Eaa,
+    Aoda,
+    Ofcom,
+}
+
+impl From<AccessibilityStandardArg> for postkit::accessibility::AccessibilityStandard {
+    fn from(arg: AccessibilityStandardArg) -> Self {
+        match arg {
+            AccessibilityStandardArg::Cvaa => Self::Cvaa,
+            AccessibilityStandardArg::Eaa => Self::Eaa,
+            AccessibilityStandardArg::Aoda => Self::Aoda,
+            AccessibilityStandardArg::Ofcom => Self::Ofcom,
+        }
+    }
+}
 
 /// ST 429-16 composition identity, boxed into the Create variant.
 #[derive(Args)]
@@ -2008,9 +2027,9 @@ enum Commands {
     Accessibility {
         /// DCP directory
         dcp_dir: String,
-        /// Standard: cvaa, eaa, aoda, ofcom
-        #[arg(short, long, default_value = "cvaa")]
-        standard: String,
+        /// Accessibility standard to check against
+        #[arg(short, long, value_enum, default_value_t = AccessibilityStandardArg::Cvaa)]
+        standard: AccessibilityStandardArg,
     },
 
     /// Send a webhook notification (HTTP POST via curl)
@@ -3469,10 +3488,25 @@ fn run_conform_assembly(
     dcpwizard_core::conform::assemble_dcp(&plan, &out, signer)
 }
 
+const TRAILER_FALLBACK_TITLE: &str = "Trailer";
+
+fn trailer_content_title(title: &str, content: &Path) -> String {
+    let given = title.trim();
+    if !given.is_empty() {
+        return given.to_string();
+    }
+    content
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(TRAILER_FALLBACK_TITLE)
+        .to_string()
+}
+
 /// Encode the packaged trailer mp4 to J2K and build a DCP (ContentKind=trailer)
 /// in `<output_dir>/dcp`, reusing the same grok encode + create_dcp path as
 /// `create --video`. The mp4 stays in place as the intermediate.
-fn trailer_to_dcp(mp4: &Path, output_dir: &Path, fps_arg: u32) -> i32 {
+fn trailer_to_dcp(mp4: &Path, output_dir: &Path, fps_arg: u32, content_title: &str) -> i32 {
     use postkit::grok_encoder::{self, CompressParams, EncodeProgress};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -3532,11 +3566,7 @@ fn trailer_to_dcp(mp4: &Path, output_dir: &Path, fps_arg: u32) -> i32 {
 
     let dcp_dir = output_dir.join("dcp");
     let config = dcpwizard_core::dcp::DcpConfig {
-        title: mp4
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Trailer")
-            .to_string(),
+        title: content_title.to_string(),
         standard: dcpwizard_core::Standard::Smpte,
         resolution: dcpwizard_core::Resolution::TwoK,
         content_type: dcpwizard_core::ContentType::Trailer,
@@ -6549,7 +6579,7 @@ fn run() {
                 output: std::path::PathBuf::from(&output),
                 embed_rpu: true,
             };
-            postkit::dolby_vision::inject_dolby_vision(&opts)
+            dcpwizard_core::dolby_vision::inject_dolby_vision(&opts)
         }
 
         Commands::Hdr10Inject {
@@ -6578,7 +6608,7 @@ fn run() {
                 dolby_vision_xml: std::path::PathBuf::new(),
                 output: std::path::PathBuf::from(&output),
             };
-            postkit::dolby_vision::inject_hdr10_metadata(&opts)
+            dcpwizard_core::dolby_vision::inject_hdr10_metadata(&opts)
         }
 
         Commands::Watermark {
@@ -6864,6 +6894,7 @@ fn run() {
             countdown,
             fps,
         } => {
+            let content_title = trailer_content_title(&title, Path::new(&content));
             let opts = postkit::trailer::TrailerOptions {
                 content_dir: PathBuf::from(&content),
                 audio_file: PathBuf::new(),
@@ -6897,7 +6928,7 @@ fn run() {
                 );
                 // route the packaged mp4 through the encode + create path so the
                 // deliverable is a real DCP, not just an mp4.
-                trailer_to_dcp(&result.output_file, &result.output_dir, fps)
+                trailer_to_dcp(&result.output_file, &result.output_dir, fps, &content_title)
             }
         }
 
@@ -6928,12 +6959,7 @@ fn run() {
         }
 
         Commands::Accessibility { dcp_dir, standard } => {
-            let std_val = match standard.to_lowercase().as_str() {
-                "eaa" => postkit::accessibility::AccessibilityStandard::Eaa,
-                "aoda" => postkit::accessibility::AccessibilityStandard::Aoda,
-                "ofcom" => postkit::accessibility::AccessibilityStandard::Ofcom,
-                _ => postkit::accessibility::AccessibilityStandard::Cvaa,
-            };
+            let std_val = postkit::accessibility::AccessibilityStandard::from(standard);
             let result =
                 dcpwizard_core::accessibility::check_accessibility(Path::new(&dcp_dir), std_val);
             println!("Standard:  {:?}", result.standard);
@@ -7418,6 +7444,23 @@ fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_trailer_cpl_title_is_the_given_title_or_the_content_stem() {
+        let content = Path::new("/media/Sunrise_Teaser.mov");
+        assert_eq!(
+            trailer_content_title("Sunrise", content),
+            "Sunrise".to_string()
+        );
+        assert_eq!(
+            trailer_content_title("  ", content),
+            "Sunrise_Teaser".to_string()
+        );
+        assert_eq!(
+            trailer_content_title("", Path::new("/")),
+            TRAILER_FALLBACK_TITLE.to_string()
+        );
+    }
 
     #[test]
     fn colour_target_selects_dcdm_target() {

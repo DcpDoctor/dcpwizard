@@ -514,8 +514,15 @@ dcpwizard report --dcp ./my_dcp --output report.html --scan-picture
 # Start REST API server
 dcpwizard serve --bind 127.0.0.1:8080
 
-# Watch folder for auto-DCP creation
-dcpwizard watch ./incoming
+# Build a DCP from every master dropped into ./incoming. feature.mp4 with
+# feature.wav and feature.srt beside it becomes ./packages/feature, its log is
+# ./packages/feature.log and the three sources move into ./incoming/done.
+dcpwizard watch ./incoming --output ./packages
+
+# Poll every 30 s, notify a service, and build every package as Interop scope
+dcpwizard watch ./incoming --output ./packages --interval 30 \
+  --webhook-url https://example.com/hooks/dcp \
+  -- --standard interop --container 2k-scope
 
 # Job queue daemon. $DCPWIZARD_DAEMON_ADDR sets the address it listens on
 # (default 127.0.0.1:9457). The queue is written to
@@ -761,12 +768,12 @@ TMS offers it.
 
 Start the server:
 ```bash
-dcpwizard serve --port 8080
+dcpwizard serve --bind 0.0.0.0:8080
 ```
 
 Or via Docker:
 ```bash
-docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --port 8080
+docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --bind 0.0.0.0:8080
 ```
 
 ## Comparison with easyDCP Creator+

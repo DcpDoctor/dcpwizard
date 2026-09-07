@@ -55,6 +55,10 @@ struct ShippedAsset {
     size: u64,
 }
 
+fn non_empty(hash: &str) -> Option<String> {
+    (!hash.is_empty()).then(|| hash.to_string())
+}
+
 /// Result of re-encoding one reel's picture track.
 struct NewPicture {
     id: String,
@@ -225,24 +229,28 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
             picture_duration: pic.duration,
             picture_entry_point: 0,
             picture_key_id: None,
+            picture_hash: non_empty(&pic.hash),
             sound_id: sound.as_ref().map(|s| s.id.clone()),
             sound_edit_rate_num: pic.edit_rate_num,
             sound_edit_rate_den: pic.edit_rate_den,
             sound_duration: if sound.is_some() { pic.duration } else { 0 },
             sound_entry_point: 0,
             sound_key_id: None,
+            sound_hash: sound.as_ref().and_then(|s| non_empty(&s.hash)),
             subtitle_id: subtitle.as_ref().map(|(s, _)| s.id.clone()),
             subtitle_edit_rate_num: pic.edit_rate_num,
             subtitle_edit_rate_den: pic.edit_rate_den,
             subtitle_duration: subtitle.as_ref().map(|(_, d)| *d).unwrap_or(0),
             subtitle_entry_point: 0,
             subtitle_language: subtitle_lang,
+            subtitle_hash: subtitle.as_ref().and_then(|(s, _)| non_empty(&s.hash)),
             ccap_id: ccap.as_ref().map(|(s, _)| s.id.clone()),
             ccap_edit_rate_num: pic.edit_rate_num,
             ccap_edit_rate_den: pic.edit_rate_den,
             ccap_duration: ccap.as_ref().map(|(_, d)| *d).unwrap_or(0),
             ccap_entry_point: 0,
             ccap_language: ccap_lang,
+            ccap_hash: ccap.as_ref().and_then(|(s, _)| non_empty(&s.hash)),
             stereoscopic: false,
             aux_data: aux.as_ref().map(|(_, a)| a.clone()),
             markers: source_markers.get(reel_index).cloned().unwrap_or_default(),
@@ -316,7 +324,14 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         });
     }
     let pkl_path = config.output_dir.join(format!("PKL_{pkl_uuid}.xml"));
-    if crate::pkl::generate_pkl(&pkl_entries, &pkl_uuid, standard, None, &pkl_path) != 0 {
+    if crate::pkl::generate_pkl(
+        &pkl_entries,
+        &pkl_uuid,
+        standard,
+        Some(&cpl_config.title),
+        &pkl_path,
+    ) != 0
+    {
         tracing::error!("Failed to generate PKL");
         return -1;
     }

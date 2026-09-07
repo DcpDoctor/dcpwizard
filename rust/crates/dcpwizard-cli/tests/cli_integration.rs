@@ -197,6 +197,73 @@ fn verify_help() {
 }
 
 #[test]
+fn an_unknown_accessibility_standard_is_refused_by_name() {
+    let dir = TempDir::new().unwrap();
+
+    cmd()
+        .args([
+            "accessibility",
+            "--standard",
+            "nonsense",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("invalid value 'nonsense'")
+                .and(predicate::str::contains("cvaa"))
+                .and(predicate::str::contains("eaa"))
+                .and(predicate::str::contains("aoda"))
+                .and(predicate::str::contains("ofcom")),
+        );
+}
+
+#[test]
+fn dv_inject_names_the_input_it_cannot_find() {
+    let dir = TempDir::new().unwrap();
+    let missing_input = dir.path().join("missing_input.hevc");
+
+    cmd()
+        .args([
+            "dv-inject",
+            "--input",
+            missing_input.to_str().unwrap(),
+            "--rpu",
+            dir.path().join("rpu.bin").to_str().unwrap(),
+            "--output",
+            dir.path().join("out.hevc").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(missing_input.to_str().unwrap()));
+}
+
+#[test]
+fn dv_inject_names_the_rpu_it_cannot_find() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("input.hevc");
+    std::fs::write(&input, b"not really hevc").unwrap();
+    let missing_rpu = dir.path().join("missing_rpu.bin");
+
+    cmd()
+        .args([
+            "dv-inject",
+            "--input",
+            input.to_str().unwrap(),
+            "--rpu",
+            missing_rpu.to_str().unwrap(),
+            "--output",
+            dir.path().join("out.hevc").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains(missing_rpu.to_str().unwrap())
+                .and(predicate::str::contains("RPU file not found")),
+        );
+}
+
+#[test]
 fn kdm_missing_inputs() {
     cmd()
         .args([

@@ -3,10 +3,14 @@
 //! output and prove the mark is in the picture, that the rest of the frame came
 //! through, and that the package around it still names every asset.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use dcpwizard_core::watermark::{WatermarkOptions, watermark_burn};
 use postkit::subtitle_formats::VAlign;
+
+/// The reel asset elements that name a track file, so each one owes a Hash.
+const HASHED_REEL_ASSETS: [&str; 2] = ["MainPicture", "MainSound"];
 
 mod small_dcp;
 use small_dcp::{FPS, H, W, base_config, find_mxf, make_frames, make_wav, read_picture_frame0};
@@ -68,6 +72,71 @@ fn cpl_xml(dcp_dir: &Path) -> String {
         })
         .expect("CPL written");
     std::fs::read_to_string(cpl).unwrap()
+}
+
+fn strip_urn(id: &str) -> String {
+    id.trim().trim_start_matches("urn:uuid:").to_lowercase()
+}
+
+fn child_text(node: roxmltree::Node, tag: &str) -> Option<String> {
+    node.children()
+        .find(|c| c.has_tag_name(tag))
+        .and_then(|c| c.text())
+        .map(str::to_string)
+}
+
+fn pkl_path(dcp_dir: &Path) -> PathBuf {
+    std::fs::read_dir(dcp_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("PKL_"))
+        })
+        .expect("PKL written")
+}
+
+/// Asset id to Hash for every reel asset that names a track file, each Hash
+/// asserted present and non empty as it is read.
+fn cpl_reel_asset_hashes(cpl_text: &str) -> BTreeMap<String, String> {
+    let doc = roxmltree::Document::parse(cpl_text).expect("parse CPL");
+    let mut hashes = BTreeMap::new();
+    for asset in doc
+        .descendants()
+        .filter(|n| HASHED_REEL_ASSETS.contains(&n.tag_name().name()))
+    {
+        let element = asset.tag_name().name();
+        let id = child_text(asset, "Id")
+            .map(|id| strip_urn(&id))
+            .unwrap_or_else(|| panic!("CPL {element} without an Id"));
+        let hash = child_text(asset, "Hash")
+            .unwrap_or_else(|| panic!("CPL {element} {id} carries no Hash"));
+        assert!(
+            !hash.trim().is_empty(),
+            "CPL {element} {id} has an empty Hash"
+        );
+        hashes.insert(id, hash.trim().to_string());
+    }
+    assert_eq!(
+        hashes.len(),
+        HASHED_REEL_ASSETS.len(),
+        "expected a picture and a sound asset in the marked CPL"
+    );
+    hashes
+}
+
+fn pkl_asset_hashes(pkl_text: &str) -> BTreeMap<String, String> {
+    let doc = roxmltree::Document::parse(pkl_text).expect("parse PKL");
+    doc.descendants()
+        .filter(|n| n.has_tag_name("Asset"))
+        .filter_map(|asset| {
+            let id = child_text(asset, "Id")?;
+            let hash = child_text(asset, "Hash")?;
+            Some((strip_urn(&id), hash.trim().to_string()))
+        })
+        .collect()
 }
 
 fn sound_asset_id(dcp_dir: &Path) -> String {
@@ -144,6 +213,38 @@ fn the_watermark_command_marks_the_picture_and_ships_the_rest_of_the_dcp() {
         find_mxf(&marked_dcp, "sound").is_some(),
         "the sound essence has to ship with the marked picture"
     );
+
+    // every reel asset carries the same hash the PKL ships it under, so a server
+    // hash-checking against the CPL has something to check
+    let pkl_text = std::fs::read_to_string(pkl_path(&marked_dcp)).unwrap();
+    let pkl_hashes = pkl_asset_hashes(&pkl_text);
+    for (id, cpl_hash) in cpl_reel_asset_hashes(&marked_cpl) {
+        let pkl_hash = pkl_hashes
+            .get(&id)
+            .unwrap_or_else(|| panic!("the PKL ships no asset {id}"));
+        assert_eq!(&cpl_hash, pkl_hash, "CPL and PKL disagree on asset {id}");
+    }
+
+    let cpl_doc = roxmltree::Document::parse(&marked_cpl).expect("parse marked CPL");
+    let cpl_title = cpl_doc
+        .descendants()
+        .find(|n| n.has_tag_name("ContentTitleText"))
+        .and_then(|n| n.text())
+        .expect("the marked CPL names its content title")
+        .to_string();
+    let pkl_doc = roxmltree::Document::parse(&pkl_text).expect("parse marked PKL");
+    let pkl_annotation = pkl_doc
+        .root_element()
+        .children()
+        .find(|n| n.has_tag_name("AnnotationText"))
+        .and_then(|n| n.text())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        pkl_annotation, cpl_title,
+        "the PKL AnnotationText has to match the CPL's content title"
+    );
+
     let result = dcpwizard_core::verify::verify_dcp(&marked_dcp);
     assert!(
         result.valid,

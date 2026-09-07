@@ -17,6 +17,10 @@ use std::sync::{Arc, Mutex};
 /// with. Nothing can pick a half-run job back up.
 pub const INTERRUPTED_MESSAGE: &str = "the daemon stopped while this job was running";
 
+/// What a job is failed with when its worker thread ended without sending a
+/// result back.
+pub const WORKER_LOST_MESSAGE: &str = "the job thread stopped without reporting a result";
+
 /// Job type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobType {
@@ -348,13 +352,13 @@ pub fn start_job_queue(queue: &JobQueue) {
                 let (tx, rx) = mpsc::channel();
                 let worker_job = job.clone();
                 std::thread::spawn(move || {
-                    let code = process_job(&worker_job, &control);
-                    let _ = tx.send(code);
+                    let outcome = process_job(&worker_job, &control);
+                    let _ = tx.send(outcome);
                 });
 
-                let result_code = loop {
+                let outcome = loop {
                     match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                        Ok(code) => break Some(code),
+                        Ok(outcome) => break Some(outcome),
                         Err(RecvTimeoutError::Timeout) => {
                             if cancel.load(Ordering::Relaxed) {
                                 break None; // cancelled; detach the worker
@@ -370,15 +374,24 @@ pub fn start_job_queue(queue: &JobQueue) {
 
                 if cancel.load(Ordering::Relaxed) {
                     queue_clone.update_job(&job.id, JobState::Cancelled, 0, "Cancelled");
-                } else if result_code == Some(0) {
-                    queue_clone.update_job(
-                        &job.id,
-                        JobState::Completed,
-                        100,
-                        "Completed successfully",
-                    );
                 } else {
-                    queue_clone.update_job(&job.id, JobState::Failed, 0, "Job failed");
+                    match outcome {
+                        Some(Ok(())) => queue_clone.update_job(
+                            &job.id,
+                            JobState::Completed,
+                            100,
+                            "Completed successfully",
+                        ),
+                        Some(Err(cause)) => {
+                            queue_clone.update_job(&job.id, JobState::Failed, 0, &cause)
+                        }
+                        None => queue_clone.update_job(
+                            &job.id,
+                            JobState::Failed,
+                            0,
+                            WORKER_LOST_MESSAGE,
+                        ),
+                    }
                 }
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -414,87 +427,76 @@ impl crate::dcp::ProgressSink for JobControl {
     }
 }
 
-fn process_job(job: &Job, control: &JobControl) -> i32 {
+fn parse_params<T: serde::de::DeserializeOwned>(params: &str, job_type: &str) -> Result<T, String> {
+    serde_json::from_str(params).map_err(|e| format!("invalid {job_type} params: {e}"))
+}
+
+/// An operation that reports only an exit code leaves the cause in the daemon
+/// log, so say which operation failed and with what.
+fn from_exit_code(code: i32, operation: &str) -> Result<(), String> {
+    if code == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "{operation} failed with code {code}, the daemon log holds the cause"
+    ))
+}
+
+fn process_job(job: &Job, control: &JobControl) -> Result<(), String> {
     match job.job_type {
-        JobType::CreateDcp => match serde_json::from_str::<crate::dcp::DcpConfig>(&job.params) {
-            Ok(config) => crate::dcp::create_dcp_with_progress(&config, control),
-            Err(e) => {
-                tracing::error!("Invalid CreateDcp params: {e}");
-                -1
-            }
-        },
+        JobType::CreateDcp => {
+            let config = parse_params::<crate::dcp::DcpConfig>(&job.params, "CreateDcp")?;
+            from_exit_code(
+                crate::dcp::create_dcp_with_progress(&config, control),
+                "creating the DCP",
+            )
+        }
         JobType::VerifyDcp => {
             let path = std::path::PathBuf::from(&job.params);
             let result = crate::verify::verify_dcp(&path);
-            if result.valid { 0 } else { -1 }
+            if result.valid {
+                return Ok(());
+            }
+            let cause = result.errors.join("; ");
+            Err(if cause.is_empty() {
+                "the DCP did not verify".to_string()
+            } else {
+                cause
+            })
         }
         JobType::ExportDcp => {
-            match serde_json::from_str::<crate::export::ExportConfig>(&job.params) {
-                Ok(config) => crate::export::export_dcp(&config),
-                Err(e) => {
-                    tracing::error!("Invalid ExportDcp params: {e}");
-                    -1
-                }
-            }
+            let config = parse_params::<crate::export::ExportConfig>(&job.params, "ExportDcp")?;
+            from_exit_code(crate::export::export_dcp(&config), "exporting the DCP")
         }
         JobType::ImportVideo => {
-            match serde_json::from_str::<crate::import::ImportConfig>(&job.params) {
-                Ok(config) => crate::import::import_video(&config),
-                Err(e) => {
-                    tracing::error!("Invalid ImportVideo params: {e}");
-                    -1
-                }
-            }
+            let config = parse_params::<crate::import::ImportConfig>(&job.params, "ImportVideo")?;
+            from_exit_code(crate::import::import_video(&config), "importing the video")
         }
         JobType::EncodeJ2k => {
-            match serde_json::from_str::<crate::encode::ImageSequenceEncode>(&job.params) {
-                Ok(encode) => {
-                    let report = |progress: &postkit::pipeline::PipelineProgress| {
-                        crate::dcp::ProgressSink::stage(
-                            control,
-                            progress.percent as u32,
-                            &format!("{}/{} frames", progress.frame, progress.total_frames),
-                        );
-                    };
-                    match crate::encode::encode_image_sequence(&encode, &control.cancel, report) {
-                        Ok(_) => 0,
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            -1
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Invalid EncodeJ2k params: {e}");
-                    -1
-                }
-            }
+            let encode =
+                parse_params::<crate::encode::ImageSequenceEncode>(&job.params, "EncodeJ2k")?;
+            let report = |progress: &postkit::pipeline::PipelineProgress| {
+                crate::dcp::ProgressSink::stage(
+                    control,
+                    progress.percent as u32,
+                    &format!("{}/{} frames", progress.frame, progress.total_frames),
+                );
+            };
+            crate::encode::encode_image_sequence(&encode, &control.cancel, report).map(|_| ())
         }
         JobType::WrapMxf => {
-            match serde_json::from_str::<crate::mxf_wrap::MxfWrapConfig>(&job.params) {
-                Ok(config) => crate::mxf_wrap::wrap_mxf(&config),
-                Err(e) => {
-                    tracing::error!("Invalid WrapMxf params: {e}");
-                    -1
-                }
-            }
+            let config = parse_params::<crate::mxf_wrap::MxfWrapConfig>(&job.params, "WrapMxf")?;
+            from_exit_code(crate::mxf_wrap::wrap_mxf(&config), "wrapping the MXF")
         }
         JobType::CopyToDrive => {
             // params is JSON {"source": "...", "target": "..."}
-            let parsed: Result<HashMap<String, String>, _> = serde_json::from_str(&job.params);
-            match parsed {
-                Ok(map) => {
-                    let src =
-                        std::path::Path::new(map.get("source").map(|s| s.as_str()).unwrap_or(""));
-                    let dst =
-                        std::path::Path::new(map.get("target").map(|s| s.as_str()).unwrap_or(""));
-                    crate::copy_drive::copy_to_drive(src, dst)
-                }
-                Err(e) => {
-                    tracing::error!("Invalid CopyToDrive params: {e}");
-                    -1
-                }
-            }
+            let map = parse_params::<HashMap<String, String>>(&job.params, "CopyToDrive")?;
+            let src = std::path::Path::new(map.get("source").map(|s| s.as_str()).unwrap_or(""));
+            let dst = std::path::Path::new(map.get("target").map(|s| s.as_str()).unwrap_or(""));
+            from_exit_code(
+                crate::copy_drive::copy_to_drive(src, dst),
+                "copying to the drive",
+            )
         }
     }
 }
@@ -650,6 +652,40 @@ mod tests {
 
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text.lines().count(), 2);
+    }
+
+    /// How long the queue processor gets to pick up and finish one job.
+    const FAILURE_POLL_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    #[test]
+    fn a_failed_job_carries_the_runners_own_error_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_dcp = dir.path().join("no_such_dcp");
+
+        let queue = JobQueue::with_jobs_file(dir.path().join("jobs.jsonl"));
+        let id = queue.submit(JobType::VerifyDcp, missing_dcp.to_str().unwrap());
+        start_job_queue(&queue);
+
+        let deadline = std::time::Instant::now() + FAILURE_POLL_LIMIT;
+        let failed = loop {
+            let job = queue.get(&id).expect("the submitted job");
+            if job.state == JobState::Failed {
+                break job;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "job stayed {:?} for {FAILURE_POLL_LIMIT:?}",
+                job.state
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        stop_job_queue(&queue);
+
+        assert!(
+            failed.message.contains(missing_dcp.to_str().unwrap()),
+            "message hid the cause: {}",
+            failed.message
+        );
     }
 
     #[test]
