@@ -56,5 +56,5 @@ RUN useradd -m -s /bin/bash dcpwizard
 USER dcpwizard
 WORKDIR /data
 EXPOSE 8080
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["--help"]
