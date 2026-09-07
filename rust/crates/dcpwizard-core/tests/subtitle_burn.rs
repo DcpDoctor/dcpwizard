@@ -143,6 +143,7 @@ fn a_burnt_still_holds_one_codestream_per_cue_change_and_packages_clean() {
         rsiz: postkit::encode::default_rsiz(),
         colour_transform: None,
         burn: Some(burn),
+        watermark: None,
         out_dir: &j2k,
     })
     .expect("burnt still");
@@ -266,6 +267,7 @@ fn a_styled_burn_lands_yellow_text_over_a_black_outline() {
         rsiz: postkit::encode::default_rsiz(),
         colour_transform: None,
         burn: Some(burn),
+        watermark: None,
         out_dir: &j2k,
     })
     .expect("burnt still");

@@ -76,6 +76,8 @@ user-facing surface is here.
   same few frames a second. Moving it to grok at `reduce` 2 would be around fifty
   times faster, at the cost of writing the black and frozen tests in Rust rather
   than reading blackdetect and freezedetect.
+- The GUI's create step has no watermark field: `create --watermark` and the
+  `watermark` command that marks a finished DCP are CLI only.
 - The GUI's Jobs panel lists both queues but they stay separate: the GUI runs its own
   queue in tauri state (`postkit::gui_job_queue`) and only `serve` proxies to the daemon, so
   two queues exist on one machine and neither can take the other's jobs. The daemon

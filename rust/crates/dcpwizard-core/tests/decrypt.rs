@@ -4,72 +4,12 @@
 //! Also proves a wrong recipient key and a KDM missing a KeyId both fail loud,
 //! and that transcode-dcp can decrypt an encrypted source in memory.
 
-use dcpwizard_core::dcp::DcpConfig;
 use dcpwizard_core::decrypt::{DcpDecryptConfig, decrypt_dcp};
 use postkit::certificate::{CertOptions, CertType, generate_certificate, generate_chain};
 use std::path::{Path, PathBuf};
 
-const FPS: u32 = 24;
-const W: u32 = 2048;
-const H: u32 = 1080;
-const FRAMES: usize = 24;
-
-/// Encode one black J2K frame and copy it into `FRAMES` frames. Returns the
-/// codestream bytes (the pre-encryption source frame 0).
-fn make_frames(dir: &Path) -> Vec<u8> {
-    std::fs::create_dir_all(dir).unwrap();
-    let seed = dir.join("seed.j2c");
-    dcpwizard_core::pad::generate_black_frame(W, H, FPS, &seed).expect("encode content frame");
-    let bytes = std::fs::read(&seed).unwrap();
-    for i in 0..FRAMES {
-        std::fs::copy(&seed, dir.join(format!("frame_{i:05}.j2c"))).unwrap();
-    }
-    std::fs::remove_file(&seed).unwrap();
-    bytes
-}
-
-/// A stereo 48 kHz 24-bit WAV, `FRAMES` frames long.
-fn make_wav(path: &Path) {
-    let sample_rate = 48_000u32;
-    let channels = 2u16;
-    let bits = 24u16;
-    let block_align = (bits / 8) * channels;
-    let n_samples = FRAMES as u64 * (sample_rate as u64 / FPS as u64);
-    let data_len = n_samples * block_align as u64;
-    let mut w = Vec::new();
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
-    w.extend_from_slice(b"WAVE");
-    w.extend_from_slice(b"fmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes());
-    w.extend_from_slice(&channels.to_le_bytes());
-    w.extend_from_slice(&sample_rate.to_le_bytes());
-    w.extend_from_slice(&(sample_rate * block_align as u32).to_le_bytes());
-    w.extend_from_slice(&block_align.to_le_bytes());
-    w.extend_from_slice(&bits.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&(data_len as u32).to_le_bytes());
-    w.resize(w.len() + data_len as usize, 0);
-    std::fs::write(path, &w).unwrap();
-}
-
-fn base_config(out: &Path, j2k: PathBuf, audio: PathBuf, key_out: &Path) -> DcpConfig {
-    DcpConfig {
-        title: "Secret".into(),
-        standard: dcpwizard_core::Standard::Smpte,
-        resolution: dcpwizard_core::Resolution::TwoK,
-        content_type: dcpwizard_core::ContentType::Test,
-        frame_rate_num: FPS,
-        frame_rate_den: 1,
-        output_dir: out.to_path_buf(),
-        j2k_dir: Some(j2k),
-        audio_path: Some(audio),
-        encrypt: true,
-        key_out: Some(key_out.to_path_buf()),
-        ..Default::default()
-    }
-}
+mod small_dcp;
+use small_dcp::{base_config, find_mxf, make_frames, make_wav, read_picture_frame0};
 
 /// Generate a recipient leaf cert + key under `dir` issued by the chain root.
 fn recipient(dir: &Path, chain_dir: &Path, name: &str) -> (PathBuf, PathBuf) {
@@ -87,32 +27,6 @@ fn recipient(dir: &Path, chain_dir: &Path, name: &str) -> (PathBuf, PathBuf) {
     };
     assert_eq!(generate_certificate(&opts), 0, "recipient cert gen failed");
     (cert, key)
-}
-
-fn find_mxf(dir: &Path, prefix: &str) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".mxf"))
-        })
-}
-
-/// Read frame 0 of a picture MXF as cleartext (no crypto context).
-fn read_picture_frame0(mxf: &Path) -> Vec<u8> {
-    let mut reader = asdcplib::jp2k::MxfReader::new();
-    reader
-        .open_read(&mxf.to_string_lossy())
-        .expect("open picture");
-    let mut buf = vec![0u8; 16 * 1024 * 1024];
-    let n = reader
-        .read_frame(0, &mut buf, None, None)
-        .expect("read frame 0");
-    buf.truncate(n);
-    buf
 }
 
 fn is_encrypted(mxf: &Path, kind: &str) -> bool {
@@ -187,7 +101,7 @@ fn decrypt_recovers_cleartext_validates_and_fails_loud() {
     make_wav(&wav);
     let enc_dcp = root.join("enc");
     let keys_file = root.join("KEYS.json");
-    let config = base_config(&enc_dcp, j2k, wav, &keys_file);
+    let config = base_config(&enc_dcp, j2k, wav, Some(&keys_file));
     assert_eq!(
         dcpwizard_core::dcp::create_dcp(&config),
         0,
@@ -309,7 +223,7 @@ fn transcode_dcp_decrypts_encrypted_source() {
     make_wav(&wav);
     let enc_dcp = root.join("enc");
     let keys_file = root.join("KEYS.json");
-    let config = base_config(&enc_dcp, j2k, wav, &keys_file);
+    let config = base_config(&enc_dcp, j2k, wav, Some(&keys_file));
     assert_eq!(
         dcpwizard_core::dcp::create_dcp(&config),
         0,
@@ -321,12 +235,13 @@ fn transcode_dcp_decrypts_encrypted_source() {
     let tc = dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
         input_dir: enc_dcp.clone(),
         output_dir: out.clone(),
-        target_bitrate_mbps: 50,
+        target_bitrate_mbps: Some(50),
         target_width: 0,
         target_height: 0,
         kdm: None,
         recipient_key: None,
         keys: Some(keys_file),
+        watermark: None,
     };
     assert_eq!(
         dcpwizard_core::j2k_transcode::transcode_dcp(&tc),
@@ -349,12 +264,13 @@ fn transcode_dcp_decrypts_encrypted_source() {
     let tc2 = dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
         input_dir: enc_dcp,
         output_dir: out2,
-        target_bitrate_mbps: 50,
+        target_bitrate_mbps: Some(50),
         target_width: 0,
         target_height: 0,
         kdm: None,
         recipient_key: None,
         keys: None,
+        watermark: None,
     };
     assert_eq!(
         dcpwizard_core::j2k_transcode::transcode_dcp(&tc2),
@@ -417,7 +333,7 @@ fn markers_survive_decrypt_and_transcode() {
     make_wav(&wav);
     let enc_dcp = root.join("enc");
     let keys_file = root.join("KEYS.json");
-    let mut config = base_config(&enc_dcp, j2k, wav, &keys_file);
+    let mut config = base_config(&enc_dcp, j2k, wav, Some(&keys_file));
     // a distributor-requested set, not the FFOC/LFOC default, so a rebuild that
     // silently re-derived the defaults would not pass
     config.markers = vec!["FFEC=00:00:00:04".into(), "LFEC=20".into()];
@@ -457,12 +373,13 @@ fn markers_survive_decrypt_and_transcode() {
             &dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
                 input_dir: enc_dcp,
                 output_dir: transcoded.clone(),
-                target_bitrate_mbps: 50,
+                target_bitrate_mbps: Some(50),
                 target_width: 0,
                 target_height: 0,
                 kdm: None,
                 recipient_key: None,
                 keys: Some(keys_file),
+                watermark: None,
             }
         ),
         0,

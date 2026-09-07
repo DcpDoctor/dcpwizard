@@ -281,6 +281,7 @@ fn encode_item_picture(
             rsiz: postkit::encode::default_rsiz(),
             colour_transform: ITEM_COLOUR_ROUTE.frame_transform()?,
             burn: None,
+            watermark: None,
             out_dir,
         })?;
     } else {

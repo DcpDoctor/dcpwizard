@@ -71,8 +71,8 @@ fn encode_solid(rgb16: [u16; 3], route: XyzRoute, dir: &Path) -> std::path::Path
         edit_rate: postkit::encode::FrameRate::whole(FPS),
         apply_xyz_transform: route.compressor_transform(),
         source_preparation: postkit::grok_encoder::SourcePreparation {
-            subtitle_burn: None,
             colour_transform: route.frame_transform().unwrap(),
+            ..Default::default()
         },
         ..CompressParams::default()
     };

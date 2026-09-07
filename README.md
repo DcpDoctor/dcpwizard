@@ -138,7 +138,7 @@ Free and open-source alternative to easyDCP Creator+.
 
 ### Mastering & Compliance
 - **DCDM creation**, Digital Cinema Distribution Master (X'Y'Z' 12/16-bit) intermediate
-- **Visible watermarking** via `watermark`, a burned-in text mark (distributor ID/serial) across image frames, with `--font-size`, `--colour`, `--position top|center|bottom` and the same `--video-codec`/`--crf` the standalone burn-in takes
+- **Visible watermarking** via `watermark`, a text mark (distributor ID/serial) burnt into an existing DCP's JPEG 2000 picture essence, with `--font-size` as a percent of the frame height, `--colour`, `--position top|center|bottom` and `--font`. The picture is decoded, marked and re-encoded at its own average bandwidth unless `--video-bit-rate` names another; sound and timed text ship unchanged, and `--kdm`/`--recipient-key`/`--keys` mark an encrypted source. `create --watermark TEXT` marks at build time instead
 - **Trailer packaging**, ratings cards (MPAA/BBFC/FSK), green/red band, countdown leaders; the packaged mp4 is then encoded and wrapped into a real trailer DCP
 - **Content version tracker**, SQLite database of which version delivered where and when
 - **Accessibility compliance**, verify AD/HI/SL tracks against CVAA, EAA, AODA, Ofcom standards
@@ -602,9 +602,13 @@ dcpwizard dv-inject -i input.hevc -r metadata.bin -o output.hevc
 # Inject HDR10 static metadata
 dcpwizard hdr10-inject -i input.mov -o output.mov --max-cll 1000 --max-fall 400
 
-# Burn a visible watermark into a video/image file
-dcpwizard watermark -i movie.mov -o movie_wm.mov -p "DIST-001-SERIAL" \
-    --font-size 40 --colour yellow --position top
+# Burn a visible watermark into an existing DCP's picture essence
+dcpwizard watermark -i ./MyFilm_DCP -o ./MyFilm_DCP_marked -p "DIST-001-SERIAL" \
+    --font-size 6 --colour FFFF00 --position top
+
+# Or mark at build time
+dcpwizard create --title "My Film" --video movie.mov --output ./out \
+    --watermark "DIST-001-SERIAL"
 
 # Batch KDM: one KDM per recipient certificate in a single pass.
 # List certs with repeated --cert, or point --cert-dir at a directory

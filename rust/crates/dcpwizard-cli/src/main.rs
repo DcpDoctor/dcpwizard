@@ -410,6 +410,108 @@ struct CreateBurnAppearance {
 /// Turns postkit's ratios into the percentages the burn appearance flags take.
 const RATIO_TO_PERCENT: f32 = 100.0;
 
+/// The visible mark `create` burns into the picture, boxed into the Create
+/// variant the way the other flag groups are.
+#[derive(Args)]
+struct CreateWatermark {
+    /// Text burnt visibly into every picture frame (distributor ID, serial).
+    /// Part of the image, so it registers no track of its own
+    #[arg(long)]
+    watermark: Option<String>,
+    #[arg(long, help = watermark_font_size_help())]
+    watermark_font_size: Option<f32>,
+    /// Watermark colour as RRGGBB or RRGGBBAA (default FFFFFF)
+    #[arg(long)]
+    watermark_colour: Option<String>,
+    /// Watermark placement: top, center or bottom (default bottom)
+    #[arg(long, value_parser = ["top", "center", "bottom"])]
+    watermark_position: Option<String>,
+}
+
+impl CreateWatermark {
+    /// The appearance flags the caller actually gave, so a refusal can name
+    /// them.
+    fn named_appearance(&self) -> Vec<&'static str> {
+        [
+            ("--watermark-font-size", self.watermark_font_size.is_some()),
+            ("--watermark-colour", self.watermark_colour.is_some()),
+            ("--watermark-position", self.watermark_position.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| name)
+        .collect()
+    }
+}
+
+/// What the appearance flags are called where they were given, so a refusal
+/// names the flag the caller typed.
+struct WatermarkFlags {
+    font_size: &'static str,
+    colour: &'static str,
+    position: &'static str,
+}
+
+/// The mark's appearance flags under `create`, where they sit beside the
+/// picture's own.
+const CREATE_WATERMARK_FLAGS: WatermarkFlags = WatermarkFlags {
+    font_size: "--watermark-font-size",
+    colour: "--watermark-colour",
+    position: "--watermark-position",
+};
+
+/// The same flags under the `watermark` command, where the mark is all there is.
+const WATERMARK_COMMAND_FLAGS: WatermarkFlags = WatermarkFlags {
+    font_size: "--font-size",
+    colour: "--colour",
+    position: "--position",
+};
+
+/// How the mark is drawn, refusing a bad value under the flag's own name.
+/// `None` when no mark was asked for.
+fn watermark_options(
+    text: Option<&str>,
+    font_size_percent: Option<f32>,
+    colour: Option<&str>,
+    position: Option<&str>,
+    flags: &WatermarkFlags,
+) -> Result<Option<dcpwizard_core::watermark::WatermarkOptions>, String> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let base = dcpwizard_core::watermark::WatermarkOptions::default();
+    if let Some(percent) = font_size_percent {
+        postkit::subtitle_raster::check_font_size_percent(percent)
+            .map_err(|e| format!("{}: {e}", flags.font_size))?;
+    }
+    let colour = match colour {
+        Some(text) => dcpwizard_core::subtitle::parse_colour_flag(flags.colour, text)?,
+        None => base.colour,
+    };
+    let position = match position {
+        Some(text) => dcpwizard_core::watermark::parse_position_flag(flags.position, text)?,
+        None => base.position,
+    };
+    Ok(Some(dcpwizard_core::watermark::WatermarkOptions {
+        text: text.to_string(),
+        font_size_percent: font_size_percent.unwrap_or(base.font_size_percent),
+        colour,
+        position,
+    }))
+}
+
+/// The mark is one cue with no fade covering every frame of any length of
+/// picture, so the rate its timings are read against never changes what it
+/// draws.
+const WATERMARK_BURN_FPS: f64 = 24.0;
+
+fn watermark_font_size_help() -> String {
+    format!(
+        "Watermark text height as a percent of the frame height (default {:.1})",
+        dcpwizard_core::watermark::DEFAULT_FONT_SIZE_PERCENT
+    )
+}
+
 fn burn_font_size_help() -> String {
     format!(
         "Burn-in text height as a percent of the frame height (default {:.1})",
@@ -887,6 +989,8 @@ enum Commands {
         picture_opts: Box<CreatePictureOpts>,
         #[command(flatten)]
         subtitle_qol: Box<CreateSubtitleOpts>,
+        #[command(flatten)]
+        watermark_opts: Box<CreateWatermark>,
         #[command(flatten)]
         isdcf_naming: Box<CreateIsdcfNaming>,
         #[command(flatten)]
@@ -1661,13 +1765,13 @@ enum Commands {
         max_fall: u16,
     },
 
-    /// Burn a visible watermark into a video/image file
+    /// Burn a visible watermark into an existing DCP's picture essence
     Watermark {
-        /// Input video/image file
+        /// Input DCP directory
         #[arg(short, long)]
         input: String,
 
-        /// Output video/image file
+        /// Output DCP directory (must differ from input)
         #[arg(short, long)]
         output: String,
 
@@ -1675,27 +1779,37 @@ enum Commands {
         #[arg(short, long)]
         payload: String,
 
-        /// Text size in pixels
-        #[arg(long, default_value_t = 24)]
-        font_size: u32,
+        #[arg(long, help = watermark_font_size_help())]
+        font_size: Option<f32>,
 
-        /// Text colour: any ffmpeg colour name or hex
-        #[arg(long, default_value = "white")]
-        colour: String,
-
-        /// Placement: top, center or bottom
-        #[arg(long, default_value = "bottom")]
-        position: String,
-
-        /// Video encoder for the marked copy, e.g. libx264 or prores_ks; unset
-        /// leaves the choice to ffmpeg's guess from the output name
+        /// Text colour as RRGGBB or RRGGBBAA (default FFFFFF)
         #[arg(long)]
-        video_codec: Option<String>,
+        colour: Option<String>,
 
-        /// Constant rate factor, 0 being lossless x264/x265; unset keeps the
-        /// encoder's default
+        /// Placement: top, center or bottom (default bottom)
+        #[arg(long, value_parser = ["top", "center", "bottom"])]
+        position: Option<String>,
+
+        /// TTF/OTF font to draw the mark with (default: a system font)
         #[arg(long)]
-        crf: Option<u32>,
+        font: Option<String>,
+
+        /// Target picture bandwidth in Mbit/s for the marked picture; unset
+        /// re-encodes at the source picture's own average bandwidth
+        #[arg(long)]
+        video_bit_rate: Option<u32>,
+
+        /// KDM XML to decrypt an encrypted source (needs --recipient-key)
+        #[arg(long)]
+        kdm: Option<String>,
+
+        /// Recipient RSA private key (PEM) matching --kdm
+        #[arg(long)]
+        recipient_key: Option<String>,
+
+        /// dcpwizard KEYS.json, an alternative key source to --kdm
+        #[arg(long)]
+        keys: Option<String>,
     },
 
     /// Generate or inspect X.509 certificates for DCP encryption
@@ -3645,6 +3759,7 @@ fn run() {
             versions,
             subtitle_language,
             subtitle_qol,
+            watermark_opts,
             output,
             standard,
             encrypt,
@@ -4029,18 +4144,41 @@ fn run() {
                     .flatten()
                     .map(Path::new)
                     .collect();
+            let frames_already_xyz =
+                matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
+                    || hdr_already_pq
+                    || hdr_to_dci_lut.is_some();
+            let input_is_codestreams = !is_video_file && !still_input;
             if let Some(ref burn) = subtitle_qol.burn_subtitle
                 && let Err(e) = dcpwizard_core::subtitle::check_burn_supported(
                     Path::new(burn),
                     &packaged_timed_text,
-                    matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
-                        || hdr_already_pq
-                        || hdr_to_dci_lut.is_some(),
-                    !is_video_file && !still_input,
+                    frames_already_xyz,
+                    input_is_codestreams,
                 )
             {
                 tracing::error!("{e}");
                 std::process::exit(1);
+            }
+
+            // the mark is drawn in display RGB and onto decoded frames, the
+            // same two things a subtitle burn needs
+            if watermark_opts.watermark.is_some() {
+                if input_is_codestreams {
+                    tracing::error!(
+                        "--watermark needs frames to draw on, and a J2K directory is already \
+                         compressed: mark the finished DCP with the watermark command instead"
+                    );
+                    std::process::exit(1);
+                }
+                if frames_already_xyz {
+                    tracing::error!(
+                        "--watermark draws in display RGB, but this source reaches the encoder \
+                         as X'Y'Z' already: mark the finished DCP with the watermark command \
+                         instead"
+                    );
+                    std::process::exit(1);
+                }
             }
 
             // an appearance flag styles one track, so refuse the ones whose
@@ -4054,6 +4192,27 @@ fn run() {
                 );
                 std::process::exit(1);
             }
+            let unstyled_watermark = watermark_opts.named_appearance();
+            if watermark_opts.watermark.is_none() && !unstyled_watermark.is_empty() {
+                tracing::error!(
+                    "{} styles the mark --watermark burns into the picture: pass --watermark",
+                    unstyled_watermark.join(", ")
+                );
+                std::process::exit(1);
+            }
+            let watermark = match watermark_options(
+                watermark_opts.watermark.as_deref(),
+                watermark_opts.watermark_font_size,
+                watermark_opts.watermark_colour.as_deref(),
+                watermark_opts.watermark_position.as_deref(),
+                &CREATE_WATERMARK_FLAGS,
+            ) {
+                Ok(options) => options,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
             let unstyled_burn = subtitle_qol.burn_appearance.named();
             if subtitle_qol.burn_subtitle.is_none() && !unstyled_burn.is_empty() {
                 tracing::error!(
@@ -4124,6 +4283,24 @@ fn run() {
                     &burn_style,
                 ) {
                     Ok(burn) => Some(burn),
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            };
+            // the mark is shaped with the font --burn-subtitle draws with, so
+            // one --create run has one typeface in the picture
+            let build_watermark = |fps: postkit::encode::FrameRate| -> Option<
+                std::sync::Arc<postkit::subtitle_raster::SubtitleBurn>,
+            > {
+                let options = watermark.as_ref()?;
+                match dcpwizard_core::watermark::watermark_burn(
+                    options,
+                    burn_subtitle_font.as_deref().map(Path::new),
+                    fps.as_f64(),
+                ) {
+                    Ok(mark) => Some(mark),
                     Err(e) => {
                         tracing::error!("{e}");
                         std::process::exit(1);
@@ -4473,6 +4650,7 @@ fn run() {
                     apply_xyz_transform: !content_already_xyz && frame_transform.is_none(),
                     source_preparation: postkit::grok_encoder::SourcePreparation {
                         subtitle_burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
+                        watermark: build_watermark(postkit::encode::FrameRate::whole(fps)),
                         colour_transform: frame_transform,
                     },
                     ..CompressParams::default()
@@ -4987,6 +5165,7 @@ fn run() {
                         rsiz: postkit::encode::default_rsiz(),
                         colour_transform,
                         burn: build_subtitle_burn(postkit::encode::FrameRate::whole(fps)),
+                        watermark: build_watermark(postkit::encode::FrameRate::whole(fps)),
                         out_dir: &still_j2k_dir,
                     }) {
                         tracing::error!("{e}");
@@ -5417,12 +5596,13 @@ fn run() {
             let config = dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
                 input_dir: PathBuf::from(input),
                 output_dir: PathBuf::from(output),
-                target_bitrate_mbps: video_bit_rate,
+                target_bitrate_mbps: Some(video_bit_rate),
                 target_width: width.unwrap_or(0),
                 target_height: height.unwrap_or(0),
                 kdm: kdm.map(PathBuf::from),
                 recipient_key: recipient_key.map(PathBuf::from),
                 keys: keys.map(PathBuf::from),
+                watermark: None,
             };
             dcpwizard_core::j2k_transcode::transcode_dcp(&config)
         }
@@ -6262,31 +6442,49 @@ fn run() {
             font_size,
             colour,
             position,
-            video_codec,
-            crf,
+            font,
+            video_bit_rate,
+            kdm,
+            recipient_key,
+            keys,
         } => {
-            let style = dcpwizard_core::watermark::WatermarkStyle {
+            let options = match watermark_options(
+                Some(&payload),
                 font_size,
-                colour,
-                position,
-                video_codec: video_codec.unwrap_or_default(),
-                video_crf: crf,
-            };
-            match dcpwizard_core::watermark::embed_watermark(
-                PathBuf::from(&input),
-                PathBuf::from(&output),
-                &payload,
-                &style,
+                colour.as_deref(),
+                position.as_deref(),
+                &WATERMARK_COMMAND_FLAGS,
             ) {
-                Ok(()) => {
-                    tracing::info!("Visible watermark burned into: {output}");
-                    0
-                }
+                Ok(Some(options)) => options,
+                Ok(None) => unreachable!("the payload is a required flag"),
                 Err(e) => {
-                    tracing::error!("Watermark failed: {e}");
-                    1
+                    tracing::error!("{e}");
+                    std::process::exit(1);
                 }
-            }
+            };
+            let mark = match dcpwizard_core::watermark::watermark_burn(
+                &options,
+                font.as_deref().map(Path::new),
+                WATERMARK_BURN_FPS,
+            ) {
+                Ok(mark) => mark,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let config = dcpwizard_core::j2k_transcode::DcpTranscodeConfig {
+                input_dir: PathBuf::from(input),
+                output_dir: PathBuf::from(output),
+                target_bitrate_mbps: video_bit_rate,
+                target_width: 0,
+                target_height: 0,
+                kdm: kdm.map(PathBuf::from),
+                recipient_key: recipient_key.map(PathBuf::from),
+                keys: keys.map(PathBuf::from),
+                watermark: Some(mark),
+            };
+            dcpwizard_core::j2k_transcode::transcode_dcp(&config)
         }
 
         Commands::Certificate { action } => match action {

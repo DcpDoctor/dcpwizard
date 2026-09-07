@@ -9,14 +9,27 @@ use postkit::grok_encoder::RawFrame;
 /// 16 MB covers a single 4K J2K frame.
 const MAX_FRAME_BUF: usize = 16 * 1024 * 1024;
 
+/// Bits in a byte, turning summed codestream lengths into a bandwidth.
+const BITS_PER_BYTE: u64 = 8;
+
+/// Bits in a megabit, the unit a picture bandwidth is quoted in.
+const BITS_PER_MEGABIT: u64 = 1_000_000;
+
+/// The CPL element a stereoscopic reel declares its picture as (ST 429-10).
+const STEREOSCOPIC_PICTURE_ELEMENT: &str = "MainStereoscopicPicture";
+
 /// Re-encode an existing DCP's picture essence at a different bandwidth (and,
-/// optionally, resolution), copying audio and subtitle tracks unchanged.
+/// optionally, resolution), copying audio and subtitle tracks unchanged. With
+/// `watermark` set the same pass marks the picture, which is what the
+/// `watermark` command is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DcpTranscodeConfig {
     pub input_dir: PathBuf,
     pub output_dir: PathBuf,
-    /// target picture bandwidth in Mbit/s (required; 0 is rejected)
-    pub target_bitrate_mbps: u32,
+    /// target picture bandwidth in Mbit/s. `None` re-encodes each reel at the
+    /// source picture's own average bandwidth, which is what marking a DCP
+    /// asks for: the mark is the only thing meant to change.
+    pub target_bitrate_mbps: Option<u32>,
     /// optional target resolution; 0 keeps the source dimensions
     pub target_width: u32,
     pub target_height: u32,
@@ -27,6 +40,11 @@ pub struct DcpTranscodeConfig {
     pub recipient_key: Option<PathBuf>,
     /// dcpwizard KEYS.json, an alternative key source to `kdm`.
     pub keys: Option<PathBuf>,
+    /// A visible mark burnt into every re-encoded frame. Not serialised: it
+    /// carries a live font database, so a stored job names the text and
+    /// rebuilds it.
+    #[serde(skip)]
+    pub watermark: Option<Arc<postkit::subtitle_raster::SubtitleBurn>>,
 }
 
 /// One MXF that ships in the output DCP (declared in CPL/PKL/ASSETMAP).
@@ -54,8 +72,8 @@ struct NewPicture {
 /// target bandwidth, copy audio/subtitle tracks verbatim, and emit a fresh
 /// CPL/PKL/ASSETMAP. Fails loud on encrypted input.
 pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
-    if config.target_bitrate_mbps == 0 {
-        tracing::error!("--video-bit-rate is required and must be > 0");
+    if config.target_bitrate_mbps == Some(0) {
+        tracing::error!("--video-bit-rate must be > 0");
         return -1;
     }
     if !config.input_dir.exists() {
@@ -94,6 +112,17 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
     if cpl_content.contains("<KeyId>") && key_source.is_none() {
         tracing::error!(
             "input DCP is encrypted; supply --kdm + --recipient-key or --keys to transcode it"
+        );
+        return -1;
+    }
+
+    // both eyes share one picture track, and this path re-encodes a track as a
+    // single eye, so a stereoscopic source would come back with one eye
+    if cpl_content.contains(STEREOSCOPIC_PICTURE_ELEMENT) {
+        tracing::error!(
+            "{} is stereoscopic: re-encoding its picture here would keep one eye of the two, \
+             so it is refused",
+            config.input_dir.display()
         );
         return -1;
     }
@@ -317,12 +346,18 @@ pub fn transcode_dcp(config: &DcpTranscodeConfig) -> i32 {
         return -1;
     }
 
-    tracing::info!(
-        "Transcoded DCP to {} ({} reel(s) re-encoded at {} Mbps)",
-        config.output_dir.display(),
-        timeline.len(),
-        config.target_bitrate_mbps
-    );
+    match config.target_bitrate_mbps {
+        Some(mbps) => tracing::info!(
+            "Transcoded DCP to {} ({} reel(s) re-encoded at {mbps} Mbps)",
+            config.output_dir.display(),
+            timeline.len(),
+        ),
+        None => tracing::info!(
+            "Transcoded DCP to {} ({} reel(s) re-encoded at the source bandwidth)",
+            config.output_dir.display(),
+            timeline.len(),
+        ),
+    }
     0
 }
 
@@ -385,8 +420,26 @@ fn transcode_picture(
         (src_w, src_h)
     };
 
+    let bitrate_mbps = match config.target_bitrate_mbps {
+        Some(mbps) => mbps,
+        None => {
+            let measured = match source_bandwidth_mbps(src_mxf, key_source, &info, frame_count, fps)
+            {
+                Ok(mbps) => mbps,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    return None;
+                }
+            };
+            tracing::info!(
+                "{} averages {measured} Mbit/s, which the re-encode targets",
+                src_mxf.display()
+            );
+            measured
+        }
+    };
     let target_codestream_bytes =
-        crate::encode::video_codestream_byte_cap(fps, config.target_bitrate_mbps, false);
+        crate::encode::video_codestream_byte_cap(fps, bitrate_mbps, false);
 
     let work = config
         .output_dir
@@ -428,6 +481,7 @@ fn transcode_picture(
         target_codestream_bytes: Some(target_codestream_bytes),
         fps: postkit::encode::FrameRate::whole(fps),
         source_colour: postkit::encode::SourceColour::AlreadyPq,
+        watermark: config.watermark.clone(),
         ..Default::default()
     };
     let result = postkit::encode::encode_loaded_frames(
@@ -477,6 +531,40 @@ fn transcode_picture(
         edit_rate_num: edit_num,
         edit_rate_den: edit_den,
     })
+}
+
+/// The picture's own average bandwidth in Mbit/s, rounded up: every frame's
+/// codestream length summed, at the picture's rate. The lengths come from the
+/// reads themselves, so no frame is decoded.
+fn source_bandwidth_mbps(
+    src_mxf: &Path,
+    key_source: Option<&crate::decrypt::KeySource>,
+    writer_info: &asdcplib::WriterInfo,
+    frame_count: u32,
+    fps: u32,
+) -> Result<u32, String> {
+    let mut reader = MxfReader::new();
+    reader
+        .open_read(&src_mxf.to_string_lossy())
+        .map_err(|e| format!("Failed to open picture MXF {}: {e}", src_mxf.display()))?;
+    let mut crypto = match key_source {
+        Some(ks) => Some(ks.contexts(writer_info, "picture")?),
+        None => None,
+    };
+    let mut buf = vec![0u8; MAX_FRAME_BUF];
+    let mut total_bytes = 0u64;
+    for index in 0..frame_count {
+        let (dec, hmac) = match crypto.as_mut() {
+            Some((d, h)) => (Some(d), Some(h)),
+            None => (None, None),
+        };
+        total_bytes += reader
+            .read_frame(index, &mut buf, dec, hmac)
+            .map_err(|e| format!("cannot read frame {index} of {}: {e}", src_mxf.display()))?
+            as u64;
+    }
+    let bits_per_second = total_bytes * BITS_PER_BYTE * u64::from(fps) / u64::from(frame_count);
+    Ok(bits_per_second.div_ceil(BITS_PER_MEGABIT) as u32)
 }
 
 /// Copy an essence MXF into the output DCP unchanged, keeping its asset id.
@@ -730,7 +818,7 @@ mod tests {
         let config = DcpTranscodeConfig {
             input_dir: dir.path().to_path_buf(),
             output_dir: dir.path().join("out"),
-            target_bitrate_mbps: 0,
+            target_bitrate_mbps: Some(0),
             ..Default::default()
         };
         assert_eq!(transcode_dcp(&config), -1);

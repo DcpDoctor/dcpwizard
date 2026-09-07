@@ -92,8 +92,10 @@ smoke "burnin"          burnin -i "$C" -s "$C" -o "$C"
 smoke "burnin styled"   burnin -i "$C" -s "$C" -o "$C" --colour FFFF00 \
                             --position top --video-codec libx264 --crf 0
 smoke "convert"         convert -i "$C" -t mov -m fast -o "$C"
-smoke "watermark"       watermark -i "$C" -o "$C" -p DIST-001 --font-size 40 \
-                            --colour yellow --position top --video-codec libx264 --crf 0
+smoke "watermark"       watermark -i "$C" -o "$C" -p DIST-001
+smoke "watermark styled" watermark -i "$C" -o "$C" -p DIST-001 --font-size 6 \
+                            --colour FFFF00 --position top --font "$C" \
+                            --video-bit-rate 200 --keys "$C"
 smoke "create+encrypt"  create --title x --video "$C" --output "$C" --encrypt --key-out "$C"
 smoke "assemble"        assemble --input "$C" --input "$C" --output "$C" --title x
 smoke "edit"            edit --input "$C" --output "$C" --title x --annotation a --content-kind FTR --issuer i
@@ -102,6 +104,8 @@ smoke "create-multi"    create-multi --compositions "$C" --output "$C" --standar
 # new create features: background colour, custom container, splits, input range
 smoke "create pad-color" create --title x --video "$C" --output "$C" --pad-head 12f --pad-tail 12f --pad-color ff0000
 smoke "create container-dims" create --title x --video "$C" --output "$C" --container-dims 1920x1080
+smoke "create watermark" create --title x --video "$C" --output "$C" --watermark DIST-001 \
+                            --watermark-font-size 6 --watermark-colour FFFF00 --watermark-position top
 smoke "create split-at"  create --title x --video "$C" --output "$C" --split-at 00:00:01,00:00:02
 smoke "create split-chapters" create --title x --video "$C" --output "$C" --split-chapters
 smoke "create input-range" create --title x --video "$C" --output "$C" --input-range full
@@ -250,6 +254,15 @@ refuse "create --burn-subtitle on a J2K directory" "already compressed" \
 refuse "create --burn-subtitle same file as --subtitle" "pick one" \
        create --title x --video "$VID" --output "$C" \
        --burn-subtitle "$BURN" --subtitle "$BURN"
+# --watermark draws the same display-RGB text on the same decoded frames, so it
+# is refused in the same two places, and its appearance flags need it
+refuse "create --watermark with xyz source" "X'Y'Z' already" \
+       create --title x --video "$VID" --output "$C" \
+       --watermark DIST-001 --source-colourspace xyz
+refuse "create --watermark on a J2K directory" "already compressed" \
+       create --title x --video "$TMP" --output "$C" --watermark DIST-001
+refuse "create --watermark-colour without --watermark" "pass --watermark" \
+       create --title x --video "$VID" --output "$C" --watermark-colour FFFF00
 # a device-listing formulation has no device list to name on a batch
 refuse "kdm-batch --formulation dci-specific" "spans cinemas" \
        kdm-batch --cpl-id "$UUID" --content-title x --cert "$C" \
