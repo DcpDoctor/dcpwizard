@@ -1471,13 +1471,28 @@ enum Commands {
         #[arg(short, long, default_value = "127.0.0.1:8080")]
         bind: String,
     },
-    /// Watch directory for auto-DCP creation
+    /// Build a DCP from every master that lands in a watched folder
     Watch {
-        /// Directory to watch
+        /// Directory to watch for masters
         dir: String,
-        /// POST a JSON notification to this URL when a new DCP is detected
+        /// Directory each package is written to, under the master's file stem
+        #[arg(short, long)]
+        output: String,
+        /// POST a JSON notification to this URL when a package is built or fails
         #[arg(long)]
         webhook_url: Option<String>,
+        /// Seconds between polls
+        #[arg(
+            long,
+            default_value_t = dcpwizard_core::watch::DEFAULT_POLL_INTERVAL_SECONDS,
+            value_parser = clap::value_parser!(u64).range(
+                dcpwizard_core::watch::MINIMUM_POLL_INTERVAL_SECONDS..
+            )
+        )]
+        interval: u64,
+        /// Flags passed to `create` for every package, after a `--` separator
+        #[arg(last = true)]
+        create_arguments: Vec<String>,
     },
     /// Export a DCP picture MXF to a delivery format via ffmpeg
     Export {
@@ -5894,32 +5909,212 @@ fn run() {
 
         Commands::Serve { bind } => dcpwizard_core::rest_api::start_rest_api(&bind),
 
-        Commands::Watch { dir, webhook_url } => {
+        Commands::Watch {
+            dir,
+            output,
+            webhook_url,
+            interval,
+            create_arguments,
+        } => {
+            use dcpwizard_core::watch::{
+                AUDIO_SIDECAR_EXTENSION, DONE_DIRECTORY_NAME, FAILED_DIRECTORY_NAME,
+                SUBTITLE_SIDECAR_EXTENSION,
+            };
+
+            fn free_destination(directory: &Path, file_name: &str) -> PathBuf {
+                let taken = directory.join(file_name);
+                if !taken.exists() {
+                    return taken;
+                }
+                let stem = Path::new(file_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(file_name);
+                let extension = Path::new(file_name).extension().and_then(|e| e.to_str());
+                let mut suffix = 1u32;
+                loop {
+                    let candidate = match extension {
+                        Some(extension) => directory.join(format!("{stem}-{suffix}.{extension}")),
+                        None => directory.join(format!("{stem}-{suffix}")),
+                    };
+                    if !candidate.exists() {
+                        return candidate;
+                    }
+                    suffix += 1;
+                }
+            }
+
+            fn move_aside(source: &Path, directory: &Path) {
+                if let Err(e) = std::fs::create_dir_all(directory) {
+                    tracing::error!("cannot create {}: {e}", directory.display());
+                    return;
+                }
+                let Some(file_name) = source.file_name().and_then(|n| n.to_str()) else {
+                    tracing::error!("cannot read a file name from {}", source.display());
+                    return;
+                };
+                let destination = free_destination(directory, file_name);
+                if let Err(e) = std::fs::rename(source, &destination) {
+                    tracing::error!(
+                        "cannot move {} into {}: {e}",
+                        source.display(),
+                        directory.display()
+                    );
+                }
+            }
+
+            fn post_event(
+                webhook: Option<&postkit::webhook::WebhookConfig>,
+                event_type: &str,
+                job_id: &str,
+                payload_json: String,
+            ) {
+                let Some(config) = webhook else {
+                    return;
+                };
+                let event = postkit::webhook::WebhookEvent {
+                    event_type: event_type.to_string(),
+                    job_id: job_id.to_string(),
+                    payload_json,
+                    timestamp: String::new(),
+                };
+                let result = postkit::webhook::send_webhook(config, &event);
+                if !result.success {
+                    tracing::warn!("webhook delivery failed: {}", result.error);
+                }
+            }
+
+            let watch_dir = PathBuf::from(&dir);
+            let output_dir = PathBuf::from(&output);
+            if let Err(e) = std::fs::create_dir_all(&output_dir) {
+                tracing::error!("cannot create {}: {e}", output_dir.display());
+                std::process::exit(1);
+            }
+            let executable = match std::env::current_exe() {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::error!("cannot find the running dcpwizard binary: {e}");
+                    std::process::exit(1);
+                }
+            };
             let webhook = webhook_url.map(|url| postkit::webhook::WebhookConfig {
                 url,
                 ..Default::default()
             });
+
             dcpwizard_core::watch::watch_directory(
-                &PathBuf::from(dir),
-                std::time::Duration::from_secs(5),
+                &watch_dir,
+                std::time::Duration::from_secs(interval),
                 &|| false,
-                |p| {
-                    tracing::info!("New DCP detected: {}", p.display());
-                    if let Some(ref cfg) = webhook {
-                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                        let evt = postkit::webhook::WebhookEvent {
-                            event_type: "dcp.detected".into(),
-                            job_id: name.to_string(),
-                            payload_json: postkit::webhook::build_job_completed_payload(
-                                name, p, 0.0,
-                            ),
-                            timestamp: String::new(),
-                        };
-                        let res = postkit::webhook::send_webhook(cfg, &evt);
-                        if !res.success {
-                            tracing::warn!("webhook delivery failed: {}", res.error);
-                        }
+                |master| {
+                    let Some(stem) = master.file_stem().and_then(|s| s.to_str()) else {
+                        tracing::error!("cannot read a file stem from {}", master.display());
+                        return;
+                    };
+                    let package_dir = output_dir.join(stem);
+                    let log_path = output_dir.join(format!("{stem}.log"));
+
+                    let audio = watch_dir.join(format!("{stem}.{AUDIO_SIDECAR_EXTENSION}"));
+                    let subtitle = watch_dir.join(format!("{stem}.{SUBTITLE_SIDECAR_EXTENSION}"));
+                    let audio = audio.is_file().then_some(audio);
+                    let subtitle = subtitle.is_file().then_some(subtitle);
+
+                    let mut arguments: Vec<std::ffi::OsString> = vec![
+                        "create".into(),
+                        "--title".into(),
+                        stem.into(),
+                        "--video".into(),
+                        master.into(),
+                        "--output".into(),
+                        package_dir.as_path().into(),
+                    ];
+                    if let Some(audio) = audio.as_deref() {
+                        arguments.push("--audio".into());
+                        arguments.push(audio.into());
                     }
+                    if let Some(subtitle) = subtitle.as_deref() {
+                        arguments.push("--subtitle".into());
+                        arguments.push(subtitle.into());
+                    }
+                    arguments.extend(create_arguments.iter().map(std::ffi::OsString::from));
+
+                    let log = match std::fs::File::create(&log_path) {
+                        Ok(file) => file,
+                        Err(e) => {
+                            tracing::error!("cannot write {}: {e}", log_path.display());
+                            return;
+                        }
+                    };
+                    let log_for_stderr = match log.try_clone() {
+                        Ok(file) => file,
+                        Err(e) => {
+                            tracing::error!("cannot write {}: {e}", log_path.display());
+                            return;
+                        }
+                    };
+
+                    tracing::info!(
+                        "building {} from {}",
+                        package_dir.display(),
+                        master.display()
+                    );
+                    let started = std::time::Instant::now();
+                    let outcome = std::process::Command::new(&executable)
+                        .args(&arguments)
+                        .stdout(std::process::Stdio::from(log))
+                        .stderr(std::process::Stdio::from(log_for_stderr))
+                        .status();
+                    let elapsed_seconds = started.elapsed().as_secs_f64();
+
+                    let failure = match outcome {
+                        Ok(status) if status.success() => None,
+                        Ok(status) => Some(match status.code() {
+                            Some(code) => {
+                                format!("create exited {code}, log at {}", log_path.display())
+                            }
+                            None => format!(
+                                "create was killed by a signal, log at {}",
+                                log_path.display()
+                            ),
+                        }),
+                        Err(e) => Some(format!("could not run create: {e}")),
+                    };
+                    let sidecars = [audio.as_deref(), subtitle.as_deref()]
+                        .into_iter()
+                        .flatten();
+
+                    let Some(message) = failure else {
+                        let done = watch_dir.join(DONE_DIRECTORY_NAME);
+                        move_aside(master, &done);
+                        for sidecar in sidecars {
+                            move_aside(sidecar, &done);
+                        }
+                        tracing::info!("built {} in {elapsed_seconds:.1} s", package_dir.display());
+                        post_event(
+                            webhook.as_ref(),
+                            "dcp.created",
+                            stem,
+                            postkit::webhook::build_job_completed_payload(
+                                stem,
+                                &package_dir,
+                                elapsed_seconds,
+                            ),
+                        );
+                        return;
+                    };
+
+                    let failed = watch_dir.join(FAILED_DIRECTORY_NAME);
+                    move_aside(master, &failed);
+                    for sidecar in sidecars {
+                        move_aside(sidecar, &failed);
+                    }
+                    tracing::error!("create failed for {stem}: see {}", log_path.display());
+                    post_event(
+                        webhook.as_ref(),
+                        "dcp.failed",
+                        stem,
+                        postkit::webhook::build_job_failed_payload(stem, &message),
+                    );
                 },
             );
             0

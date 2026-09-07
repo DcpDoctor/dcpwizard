@@ -122,7 +122,7 @@ Free and open-source alternative to easyDCP Creator+.
 
 ### Delivery & Automation
 - **Copy to drive** with a free-space precheck and post-copy hash verification (USB/CRU); **format-drive** (ext2/ext3, volume label, mounted-target refusal) and **check-drive** (report fs type + label) for cinema hard-drive delivery
-- **Watch folder** mode, automated DCP creation on file arrival
+- **Watch folder**: `watch DIR --output OUT` builds a DCP from every video file or frame folder dropped into `DIR` once it stops changing, using the file stem as the title and a same-named `.wav` and `.srt` beside it as sound and subtitle. The job log is written beside the package, the source moves into `done/` or `failed/`, `--webhook-url` posts `dcp.created` or `dcp.failed`, `--interval` sets the poll seconds and any `create` flags after `--` apply to every package
 - **Job queue** with progress tracking and cancellation
 - **REST API** for headless/batch operation
 - **Prometheus metrics endpoint** (`GET /metrics`), job counts, daemon status for monitoring
