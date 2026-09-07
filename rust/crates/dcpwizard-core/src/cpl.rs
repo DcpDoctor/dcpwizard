@@ -38,6 +38,9 @@ pub struct CplConfig {
     /// Mastering luminance, written with the required `units` attribute.
     #[serde(default)]
     pub luminance: Option<Luminance>,
+    // a DCI HDR Addendum composition, which the metadata asset declares as EOTF ST 2084
+    #[serde(default)]
+    pub hdr: bool,
 }
 
 /// Mastering luminance for the CompositionMetadataAsset.
@@ -496,6 +499,9 @@ const NS_AUX_DATA: &str = "http://www.dolby.com/schemas/2012/AD";
 /// ST 429-12 (2008) timed-text namespace, which is where a SMPTE closed caption
 /// sits.
 const NS_TIMED_TEXT_429_12: &str = "http://www.smpte-ra.org/schemas/429-12/2008/TT";
+// DCI HDR Addendum image encoding parameters, in the ISDCF content modifier registry
+const NS_HDR_METADATA: &str = "http://www.dcimovies.com/schemas/2018/HDR-Metadata";
+const HDR_EOTF_ST2084: &str = "ST 2084";
 
 /// Rewrite each reel's picture element and add the extra AssetList entries
 /// (markers, subtitle, aux data, first-reel metadata) that postkit's writer does
@@ -743,6 +749,22 @@ fn composition_metadata_block(config: &CplConfig, reel: &CplReel, sound: &MainSo
         b.push_str(&format!(
             "                  <meta:Value>{}</meta:Value>\n",
             escape_xml(lang)
+        ));
+        b.push_str("                </meta:Property>\n");
+        b.push_str("              </meta:PropertyList>\n");
+        b.push_str("            </meta:ExtensionMetadata>\n");
+    }
+    // DCI HDR Addendum: the EOTF claim ISDCF reads to name the package HDR1
+    if config.hdr {
+        b.push_str(&format!(
+            "            <meta:ExtensionMetadata scope=\"{NS_HDR_METADATA}\">\n"
+        ));
+        b.push_str("              <meta:Name>Image Encoding Parameters</meta:Name>\n");
+        b.push_str("              <meta:PropertyList>\n");
+        b.push_str("                <meta:Property>\n");
+        b.push_str("                  <meta:Name>EOTF</meta:Name>\n");
+        b.push_str(&format!(
+            "                  <meta:Value>{HDR_EOTF_ST2084}</meta:Value>\n"
         ));
         b.push_str("                </meta:Property>\n");
         b.push_str("              </meta:PropertyList>\n");
@@ -1129,6 +1151,50 @@ mod tests {
         let meta_pos = xml.find("<meta:CompositionMetadataAsset").unwrap();
         let close_pos = xml.find("</AssetList>").unwrap();
         assert!(meta_pos < close_pos);
+    }
+
+    #[test]
+    fn an_hdr_composition_declares_the_st2084_eotf_beside_the_bv21_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CPL.xml");
+        let config = CplConfig {
+            title: "HDR Test".into(),
+            content_kind: "feature".into(),
+            reels: vec![sound_reel()],
+            standard: crate::Standard::Smpte,
+            main_sound: Some(MainSound {
+                configuration: "51/L,R,C,LFE,Ls,Rs".into(),
+                sample_rate: 48000,
+            }),
+            hdr: true,
+            ..Default::default()
+        };
+        assert_eq!(generate_cpl(&config, "cpl1", &path), 0);
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            xml.contains(&format!(
+                "<meta:ExtensionMetadata scope=\"{NS_HDR_METADATA}\">"
+            )),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<meta:Name>Image Encoding Parameters</meta:Name>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<meta:Name>EOTF</meta:Name>"), "{xml}");
+        assert!(xml.contains("<meta:Value>ST 2084</meta:Value>"), "{xml}");
+        // the app profile entry stays beside it in the one list
+        assert!(xml.contains("<meta:Value>Bv2.1</meta:Value>"), "{xml}");
+        assert_eq!(xml.matches("<meta:ExtensionMetadataList>").count(), 1);
+
+        let sdr = CplConfig {
+            hdr: false,
+            ..config
+        };
+        let sdr_path = dir.path().join("CPL_sdr.xml");
+        assert_eq!(generate_cpl(&sdr, "cpl2", &sdr_path), 0);
+        let sdr_xml = std::fs::read_to_string(&sdr_path).unwrap();
+        assert!(!sdr_xml.contains(NS_HDR_METADATA), "{sdr_xml}");
     }
 
     #[test]

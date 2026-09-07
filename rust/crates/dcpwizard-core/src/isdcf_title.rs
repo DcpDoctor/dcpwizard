@@ -102,6 +102,7 @@ pub fn isdcf_title(
         two_d_version_of_three_d: options.two_d_version_of_three_d,
         luminance: config.luminance.clone(),
         frame_rate: rounded_frame_rate(config.frame_rate_num, config.frame_rate_den),
+        hdr: config.hdr_dci,
         container_size: container_size(config),
         // the CPL declares the stored area as the active one, so the name has no
         // interior aspect to spell

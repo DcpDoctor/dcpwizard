@@ -352,6 +352,8 @@ pub struct IsdcfNameInput {
     pub two_d_version_of_three_d: bool,
     pub luminance: Option<Luminance>,
     pub frame_rate: u32,
+    // a DCI HDR Addendum grade, which the name spells HDR1
+    pub hdr: bool,
     pub container_size: (u32, u32),
     /// Picture area inside the container, when it differs from the container.
     pub active_picture_size: Option<(u32, u32)>,
@@ -391,6 +393,7 @@ impl Default for IsdcfNameInput {
             two_d_version_of_three_d: false,
             luminance: None,
             frame_rate: STANDARD_FRAME_RATE,
+            hdr: false,
             container_size: DEFAULT_CONTAINER_SIZE,
             active_picture_size: None,
             audio_language: None,
@@ -466,6 +469,10 @@ pub fn isdcf_name(input: &IsdcfNameInput) -> String {
     }
     if input.frame_rate != STANDARD_FRAME_RATE {
         name += &format!("-{}", input.frame_rate);
+    }
+    // the ISDCF content modifier registry sorts HDR1 after the frame rate
+    if input.hdr {
+        name += "-HDR1";
     }
 
     name += &format!("_{}", aspect_label(input.container_size));
@@ -961,6 +968,21 @@ mod tests {
             isdcf_name(&input),
             "MyNiceFilmWith_XSN-2-Temp-Pre-RedBand-MyChain-2D-45fl-48_F-133_DE-fr_US-R_MOS_4K_DI_20140704_PPF_SMPTE_OV"
         );
+    }
+
+    // the ISDCF content modifier registry sorts HDR1 after the frame rate
+    #[test]
+    fn a_dci_hdr_grade_is_marked_hdr1_after_the_frame_rate() {
+        let input = IsdcfNameInput {
+            hdr: true,
+            frame_rate: 48,
+            ..transitional()
+        };
+        assert_eq!(
+            isdcf_name(&input),
+            "MyNiceFilmWith_XSN-2-48-HDR1_F-133_DE-fr_US-R_MOS_4K_DI_20140704_PPF_SMPTE_OV"
+        );
+        assert!(!isdcf_name(&transitional()).contains("HDR1"));
     }
 
     #[test]

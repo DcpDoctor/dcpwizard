@@ -1129,6 +1129,7 @@ pub fn create_dcp_with_progress(
         distributor: config.distributor.clone(),
         facility: config.facility.clone(),
         luminance: config.luminance.clone(),
+        hdr: config.hdr_dci,
         ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {

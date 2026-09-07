@@ -880,6 +880,7 @@ fn write_packaging(
         reels: cpl_reels,
         standard: config.standard,
         main_sound,
+        hdr: config.hdr_dci,
         ..Default::default()
     };
     if crate::cpl::generate_cpl(&cpl_config, &cpl_uuid, &cpl_path) != 0 {

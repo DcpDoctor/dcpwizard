@@ -522,12 +522,10 @@ pub fn wrap_mxf(config: &MxfWrapConfig) -> i32 {
     }
 }
 
-/// The DCI HDR Addendum picture metadata: ST 2084 (PQ) transfer with P3-D65
-/// primaries, written onto the picture essence descriptor.
+// the addendum names one descriptor item, the ST 2084 transfer, and no primaries
 pub fn dci_hdr_metadata() -> asdcplib::jp2k::HdrMetadata {
     asdcplib::jp2k::HdrMetadata {
         transfer_characteristic: Some(asdcplib::jp2k::TRANSFER_CHARACTERISTIC_ST2084),
-        color_primaries: Some(asdcplib::jp2k::COLOR_PRIMARIES_P3D65),
         ..Default::default()
     }
 }
@@ -577,7 +575,7 @@ pub fn wrap_j2k_hdr_files(
     match wrap.finish() {
         Ok(track) => {
             tracing::info!(
-                "Wrapped DCI HDR picture MXF (ST 2084 / P3-D65): {}",
+                "Wrapped DCI HDR picture MXF (ST 2084): {}",
                 output_mxf.display()
             );
             Some(track)
@@ -915,10 +913,10 @@ mod tests {
     }
 
     // Wrap a real DCI J2K frame with --hdr-dci signaling, then read the picture
-    // essence descriptor back and assert the ST 2084 / P3-D65 ULs are present.
+    // essence descriptor back and assert the ST 2084 UL is the only colour item.
     #[test]
-    fn hdr_dci_wrap_writes_st2084_and_p3d65_uls() {
-        use asdcplib::jp2k::{COLOR_PRIMARIES_P3D65, TRANSFER_CHARACTERISTIC_ST2084};
+    fn hdr_dci_wrap_writes_the_st2084_ul_and_no_primaries() {
+        use asdcplib::jp2k::TRANSFER_CHARACTERISTIC_ST2084;
 
         let dir = tempfile::tempdir().unwrap();
         let seed = dir.path().join("seed.j2c");
@@ -960,9 +958,8 @@ mod tests {
         );
         let hdr = reader.hdr_metadata().expect("read hdr metadata");
         assert_eq!(
-            hdr.color_primaries,
-            Some(COLOR_PRIMARIES_P3D65),
-            "picture descriptor must carry the P3-D65 ColorPrimaries UL"
+            hdr.color_primaries, None,
+            "the addendum names no ColorPrimaries item, so the descriptor must carry none"
         );
     }
 
