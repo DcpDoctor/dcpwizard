@@ -1,0 +1,7 @@
+.git
+**/target
+gui/node_modules
+gui/dist
+build
+__pycache__
+.worktrees
