@@ -37,6 +37,7 @@ pub mod hints;
 pub mod import;
 pub mod info;
 pub mod ingest_package;
+pub mod intermediates;
 pub mod isdcf_name;
 pub mod isdcf_title;
 pub mod j2k_transcode;

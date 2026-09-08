@@ -5169,21 +5169,10 @@ fn run() {
                     None => dcpwizard_core::dcp::create_dcp(&config),
                 };
 
-                // Clean up intermediate files
-                let _ = std::fs::remove_dir_all(&j2k_dir);
-                let _ = std::fs::remove_dir_all(output_dir.join("j2k_trimmed"));
-                let _ = std::fs::remove_dir_all(output_dir.join("j2k_right_trimmed"));
-                let _ = std::fs::remove_file(output_dir.join("j2k_trimmed.wav"));
-                let _ = std::fs::remove_dir_all(output_dir.join("audio_work"));
-                dcpwizard_core::encode_qol::EncodeState::clear(&output_dir);
-                if let Some(ref d) = right_eye_dir {
-                    let _ = std::fs::remove_dir_all(d);
-                }
-                // both are ours whenever they exist, and a later stage may have
-                // moved audio_path off them, so remove them by name
-                let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
-                let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
-                let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
+                dcpwizard_core::intermediates::remove_intermediates(
+                    &output_dir,
+                    &[video_path.as_path()],
+                );
                 code
             } else {
                 // Input is a J2K directory or image sequence
@@ -5400,10 +5389,10 @@ fn run() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
                     None => dcpwizard_core::dcp::create_dcp(&config),
                 };
-                let _ = std::fs::remove_dir_all(&work_dir);
-                let _ = std::fs::remove_dir_all(&still_j2k_dir);
-                let _ = std::fs::remove_dir_all(output_dir.join("j2k_trimmed"));
-                let _ = std::fs::remove_file(output_dir.join("j2k_trimmed.wav"));
+                dcpwizard_core::intermediates::remove_intermediates(
+                    &output_dir,
+                    &[video_path.as_path()],
+                );
                 code
             };
 
@@ -5642,13 +5631,10 @@ fn run() {
             };
             let code = dcpwizard_core::dcp::create_dcp(&config);
 
-            // Clean up intermediate files
-            let _ = std::fs::remove_dir_all(&j2k_dir);
-            // both are ours whenever they exist, and the pull-up may have
-            // moved audio_path off the demux, so remove them by name
-            let _ = std::fs::remove_file(output_dir.join("audio_demux.wav"));
-            let _ = std::fs::remove_file(output_dir.join("audio_pullup.wav"));
-            let _ = std::fs::remove_file(output_dir.join("range_corrected.mkv"));
+            dcpwizard_core::intermediates::remove_intermediates(
+                &output_dir,
+                &[input_path.as_path()],
+            );
             code
         }
 

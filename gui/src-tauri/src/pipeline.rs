@@ -2538,6 +2538,7 @@ fn run_job(app: &AppHandle, job: &JobConfig) -> Result<String, String> {
         &log_file,
         &format_stage_timing("package", package_started.elapsed()),
     );
+    dcpwizard_core::intermediates::remove_intermediates(output, &[job.video_path.as_path()]);
 
     // Optional validation
     if job.validate {
@@ -3170,6 +3171,40 @@ mod tests {
             },
             "subtitles are clamped to the frames that survived"
         );
+    }
+
+    #[test]
+    fn the_scratch_a_gui_job_writes_is_gone_once_the_dcp_is_packaged() {
+        let dir = tempfile::tempdir().unwrap();
+        let j2k = dir.path().join("j2k");
+        std::fs::create_dir_all(&j2k).unwrap();
+        for i in 0..48u64 {
+            std::fs::write(j2k.join(format!("frame_{i:08}.j2c")), [i as u8]).unwrap();
+        }
+        let wav = dir.path().join("sound.wav");
+        write_mono(&wav, 1234, 96_000);
+        let mut job = test_job();
+        job.trim_start_frames = 12;
+        job.trim_end_frames = 12;
+        let (trimmed_dir, trimmed_audio) =
+            apply_trim(&job, &j2k, dir.path(), Some(wav), 24, None).unwrap();
+        let right = dir.path().join("right");
+        std::fs::create_dir_all(right.join("j2k")).unwrap();
+        std::fs::write(dir.path().join("slvs_sound.wav"), [0u8]).unwrap();
+        std::fs::write(dir.path().join("hdr_tonemap.mov"), [0u8]).unwrap();
+        let assetmap = dir.path().join("ASSETMAP.xml");
+        std::fs::write(&assetmap, b"<AssetMap/>").unwrap();
+
+        dcpwizard_core::intermediates::remove_intermediates(dir.path(), &[]);
+
+        assert!(!j2k.exists());
+        assert!(!trimmed_dir.exists());
+        assert!(!trimmed_audio.unwrap().exists());
+        assert!(!dir.path().join("audio_work").exists());
+        assert!(!right.exists());
+        assert!(!dir.path().join("slvs_sound.wav").exists());
+        assert!(!dir.path().join("hdr_tonemap.mov").exists());
+        assert!(assetmap.exists(), "the package itself must survive");
     }
 
     #[test]
