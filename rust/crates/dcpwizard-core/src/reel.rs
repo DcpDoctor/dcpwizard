@@ -518,6 +518,7 @@ pub fn create_multi_reel_dcp(config: &DcpConfig, fps: u32) -> i32 {
             .map(|labels| postkit::mxf_wrap::McaConfig {
                 labels,
                 spoken_language: config.audio_language.clone(),
+                soundfield_group: None,
             });
             let wrapped = crate::mxf_wrap::wrap_mxf_files(
                 vec![wav_tmp.clone()],

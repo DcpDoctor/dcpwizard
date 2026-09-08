@@ -756,6 +756,7 @@ pub fn create_dcp_with_progress(
         let mca_config = mca_labels.map(|labels| postkit::mxf_wrap::McaConfig {
             labels,
             spoken_language: config.audio_language.clone(),
+            soundfield_group: None,
         });
         // MainSoundConfiguration for the CPL metadata asset, from the same counts
         // as the MCA labels (silent fill channels become '-').

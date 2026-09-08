@@ -164,7 +164,7 @@ checksum = "08dae85b57b725df143d5a2eb92c032dd032f062a636826fda1e1a4b21c40c03"
 [[package]]
 name = "asdcplib"
 version = "0.1.0"
-source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=fd9d4a0#fd9d4a0025b20c4b2c927675ebace7092f1c0cd3"
+source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=f7b263f#f7b263f5635282cb127394fc469bfe40b4374f87"
 dependencies = [
  "asdcplib-sys",
  "thiserror 2.0.18",
@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "asdcplib-sys"
 version = "0.1.0"
-source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=fd9d4a0#fd9d4a0025b20c4b2c927675ebace7092f1c0cd3"
+source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=f7b263f#f7b263f5635282cb127394fc469bfe40b4374f87"
 dependencies = [
  "cc",
  "cmake",
@@ -708,8 +708,8 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "dcpdoctor-core"
-version = "0.5.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e38987#0e389878d11ceedba03819204d2e8d7bcb3fdf2a"
+version = "1.2.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
 dependencies = [
  "asdcplib",
  "base64",
@@ -733,8 +733,8 @@ dependencies = [
 
 [[package]]
 name = "dcpdoctor-imf"
-version = "0.5.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e38987#0e389878d11ceedba03819204d2e8d7bcb3fdf2a"
+version = "1.2.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
 dependencies = [
  "dcpdoctor-parse",
  "quick-xml 0.41.0",
@@ -743,8 +743,8 @@ dependencies = [
 
 [[package]]
 name = "dcpdoctor-parse"
-version = "0.5.1"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e38987#0e389878d11ceedba03819204d2e8d7bcb3fdf2a"
+version = "1.2.0"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",

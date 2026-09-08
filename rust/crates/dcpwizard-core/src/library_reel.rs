@@ -163,6 +163,7 @@ fn build_one_item_reel(
                 |labels| postkit::mxf_wrap::McaConfig {
                     labels,
                     spoken_language: config.audio_language.clone(),
+                    soundfield_group: None,
                 },
             );
         if crate::mxf_wrap::wrap_mxf_files(

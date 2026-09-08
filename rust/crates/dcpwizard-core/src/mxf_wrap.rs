@@ -426,6 +426,7 @@ pub fn wrap_mxf_files(
                         postkit::mxf_wrap::McaConfig {
                             labels,
                             spoken_language: None,
+                            soundfield_group: None,
                         }
                     });
             }
