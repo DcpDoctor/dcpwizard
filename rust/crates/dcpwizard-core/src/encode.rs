@@ -146,6 +146,30 @@ impl XyzRoute {
     }
 }
 
+// what the encoder's frames carry when they are not the display RGB a subtitle
+// burn or a watermark is drawn in, spelled the way the refusals name it. P3 and
+// Rec.2020 are display RGB too: the draw goes on first and the transform
+// converts it with the picture.
+pub fn frames_not_display_rgb(source_colour: &postkit::encode::SourceColour) -> Option<String> {
+    use postkit::encode::SourceColour;
+    match source_colour {
+        SourceColour::DciLut(_) | SourceColour::AlreadyPq => {
+            Some(format!("X'Y'Z' already ({XYZ_ROUTES})"))
+        }
+        SourceColour::HdrDcdm { source, .. } => Some(format!(
+            "PQ-encoded HDR samples (--hdr-dci reads a {source:?} master)"
+        )),
+        SourceColour::DisplayRgb
+        | SourceColour::DisplayRgbIn(_)
+        | SourceColour::KeepRgb
+        | SourceColour::KeepRgbFrom(_)
+        | SourceColour::KeepRgbAfterLut(_) => None,
+    }
+}
+
+/// The routes that hand the encoder X'Y'Z' frames, as the refusals name them.
+const XYZ_ROUTES: &str = "--source-colourspace xyz, --hdr-already-pq, or the HDR-to-DCI LUT";
+
 /// Refuse a source colour space on picture that is already compressed: no
 /// transform runs there, so anything but the Rec.709 default would be ignored.
 pub fn check_precompressed_colourspace(space: postkit::colour::ColourSpace) -> Result<(), String> {

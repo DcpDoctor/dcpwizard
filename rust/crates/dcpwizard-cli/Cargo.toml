@@ -23,6 +23,7 @@ tracing-subscriber.workspace = true
 asdcplib.workspace = true
 assert_cmd = "2"
 dcpdoctor-core.workspace = true
+dolby_vision = "3.3"
 hound = "3.5"
 predicates = "3"
 tempfile = "3"

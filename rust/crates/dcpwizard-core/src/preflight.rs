@@ -57,9 +57,9 @@ pub struct CreatePlan {
     pub burn_subtitle_font: Option<PathBuf>,
     pub burn_style: BurnStyleOverrides,
     pub source_colourspace: ColourSpace,
-    /// Whether the encoder is handed X'Y'Z' frames already, by the source colour
-    /// space, the HDR-to-DCI LUT or a PQ source.
-    pub frames_already_xyz: bool,
+    /// The colour the encoder's frames arrive in, which decides whether a burn
+    /// or a mark can still be drawn into them.
+    pub source_colour: postkit::encode::SourceColour,
     pub atmos: Option<PathBuf>,
     /// `LABEL=timecode` marker requests, unparsed.
     pub markers: Vec<String>,
@@ -101,7 +101,7 @@ impl Default for CreatePlan {
             burn_subtitle_font: None,
             burn_style: BurnStyleOverrides::default(),
             source_colourspace: ColourSpace::Rec709,
-            frames_already_xyz: false,
+            source_colour: postkit::encode::SourceColour::default(),
             atmos: None,
             markers: Vec::new(),
             standard: Standard::default(),
@@ -169,7 +169,7 @@ fn check_burn(plan: &CreatePlan) -> Result<(), String> {
     crate::subtitle::check_burn_supported(
         burn,
         &timed_text,
-        plan.frames_already_xyz,
+        &plan.source_colour,
         plan.is_codestreams(),
     )?;
     crate::subtitle::prepare_subtitle_burn(

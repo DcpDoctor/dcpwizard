@@ -4173,6 +4173,16 @@ fn run() {
                 );
             }
 
+            // the colour the encoder's frames arrive in, which the burn, the
+            // mark and the preflight all read
+            let source_colour = match (&hdr_dcdm_colour, hdr_to_dci_lut.as_deref(), hdr_already_pq)
+            {
+                (Some(colour), _, _) => colour.clone(),
+                (None, Some(lut), _) => postkit::encode::SourceColour::DciLut(PathBuf::from(lut)),
+                (None, None, true) => postkit::encode::SourceColour::AlreadyPq,
+                (None, None, false) => xyz_route.source_colour(),
+            };
+
             // a single image is a third input shape beside a video and a
             // codestream directory, and it is the only one with no length of its
             // own, so the hold has to be asked for and cannot be asked for
@@ -4225,16 +4235,12 @@ fn run() {
                     .flatten()
                     .map(Path::new)
                     .collect();
-            let frames_already_xyz =
-                matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
-                    || hdr_already_pq
-                    || hdr_to_dci_lut.is_some();
             let input_is_codestreams = !is_video_file && !still_input;
             if let Some(ref burn) = subtitle_qol.burn_subtitle
                 && let Err(e) = dcpwizard_core::subtitle::check_burn_supported(
                     Path::new(burn),
                     &packaged_timed_text,
-                    frames_already_xyz,
+                    &source_colour,
                     input_is_codestreams,
                 )
             {
@@ -4252,11 +4258,11 @@ fn run() {
                     );
                     std::process::exit(1);
                 }
-                if frames_already_xyz {
+                if let Some(frames) = dcpwizard_core::encode::frames_not_display_rgb(&source_colour)
+                {
                     tracing::error!(
                         "--watermark draws in display RGB, but this source reaches the encoder \
-                         as X'Y'Z' already: mark the finished DCP with the watermark command \
-                         instead"
+                         as {frames}: mark the finished DCP with the watermark command instead"
                     );
                     std::process::exit(1);
                 }
@@ -4443,11 +4449,7 @@ fn run() {
                 burn_subtitle_font: burn_subtitle_font.as_deref().map(PathBuf::from),
                 burn_style: burn_style.clone(),
                 source_colourspace: source_space,
-                frames_already_xyz: matches!(
-                    xyz_route,
-                    dcpwizard_core::encode::XyzRoute::AlreadyXyz
-                ) || hdr_already_pq
-                    || hdr_to_dci_lut.is_some(),
+                source_colour: source_colour.clone(),
                 atmos: atmos.as_deref().map(PathBuf::from),
                 markers: markers.clone(),
                 standard: std_val,

@@ -23,6 +23,8 @@ const FPS: FrameRate = FrameRate {
 const SRT: &str = "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n\
                    2\n00:00:02,000 --> 00:00:03,000\nsecond line\n\n";
 
+const DISPLAY_RGB: postkit::encode::SourceColour = postkit::encode::SourceColour::DisplayRgb;
+
 fn write_srt(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("cues.srt");
     std::fs::write(&path, SRT).unwrap();
@@ -34,11 +36,11 @@ fn a_burn_is_refused_wherever_it_would_be_drawn_in_the_wrong_place() {
     let dir = tempfile::tempdir().unwrap();
     let srt = write_srt(dir.path());
 
-    check_burn_supported(&srt, &[], false, false).expect("a plain display-RGB burn is fine");
+    check_burn_supported(&srt, &[], &DISPLAY_RGB, false).expect("a plain display-RGB burn is fine");
     check_burn_supported(
         &srt,
         &[dir.path().join("other.srt").as_path()],
-        false,
+        &DISPLAY_RGB,
         false,
     )
     .expect("a different timed-text file is fine");
@@ -47,23 +49,36 @@ fn a_burn_is_refused_wherever_it_would_be_drawn_in_the_wrong_place() {
     for (label, result, needle) in [
         (
             "missing file",
-            check_burn_supported(&missing, &[], false, false),
+            check_burn_supported(&missing, &[], &DISPLAY_RGB, false),
             "not found",
         ),
         (
             "same file as --subtitle",
-            check_burn_supported(&srt, &[srt.as_path()], false, false),
+            check_burn_supported(&srt, &[srt.as_path()], &DISPLAY_RGB, false),
             "pick one",
         ),
         (
             "J2K input",
-            check_burn_supported(&srt, &[], false, true),
+            check_burn_supported(&srt, &[], &DISPLAY_RGB, true),
             "already compressed",
         ),
         (
             "frames already X'Y'Z'",
-            check_burn_supported(&srt, &[], true, false),
+            check_burn_supported(&srt, &[], &postkit::encode::SourceColour::AlreadyPq, false),
             "X'Y'Z' already",
+        ),
+        (
+            "an HDR master the encoder gets as PQ samples",
+            check_burn_supported(
+                &srt,
+                &[],
+                &postkit::encode::SourceColour::HdrDcdm {
+                    source: postkit::colour::HdrSource::Hdr10,
+                    source_peak_nits: postkit::colour::HdrSource::DEFAULT_PEAK_NITS,
+                },
+                false,
+            ),
+            "PQ-encoded HDR samples",
         ),
     ] {
         let err = result.expect_err(label);

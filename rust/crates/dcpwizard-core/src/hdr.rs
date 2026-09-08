@@ -88,9 +88,14 @@ pub fn plan_hdr_dcdm(
             (hdr_source_of_dolby_vision(&summary)?, Some(summary))
         }
     };
+    let source_peak_nits = resolve_peak_nits(peak_nits, dolby_vision.as_ref(), video);
+    tracing::info!(
+        "DCI HDR: {} master, {source:?} grade rolled off from {source_peak_nits} cd/m²",
+        format.name()
+    );
     Ok(SourceColour::HdrDcdm {
         source,
-        source_peak_nits: resolve_peak_nits(peak_nits, dolby_vision.as_ref(), video),
+        source_peak_nits,
     })
 }
 

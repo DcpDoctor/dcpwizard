@@ -811,35 +811,6 @@ pub async fn submit_job(
             "The burn-in appearance styles the text the burn-in field draws into the picture: pick a burn-in subtitle file or clear those fields".into(),
         );
     }
-    if let Some(path) = burn_subtitle.as_deref() {
-        if !versions.is_empty() {
-            return Err(
-                "A versions manifest carries its own subtitles: clear the burn-in field".into(),
-            );
-        }
-        // parse the cue file and build the burn now, so a bad file or a missing
-        // font fails here instead of part way through the encode
-        let timed_text_paths: Vec<&Path> = [subtitle.as_deref(), ccap.as_deref()]
-            .into_iter()
-            .flatten()
-            .map(Path::new)
-            .collect();
-        dcpwizard_core::subtitle::check_burn_supported(
-            Path::new(path),
-            &timed_text_paths,
-            matches!(xyz_route, dcpwizard_core::encode::XyzRoute::AlreadyXyz)
-                || hdr_already_pq.unwrap_or(false)
-                || hdr_to_dci_lut.is_some(),
-            postkit::encode::detect_input_type(&video) == postkit::encode::InputType::J2kSequence,
-        )?;
-        dcpwizard_core::subtitle::prepare_subtitle_burn(
-            Path::new(path),
-            burn_subtitle_font.as_deref().map(Path::new),
-            postkit::encode::FrameRate::whole(fps_num),
-            &burn_style,
-        )?;
-    }
-
     let right_eye = right_eye.filter(|s| !s.is_empty());
     let hdr_dci = hdr_dci.unwrap_or(false);
     let allow_generic_hdr_tonemap = allow_generic_hdr_tonemap.unwrap_or(false);
@@ -880,6 +851,33 @@ pub async fn submit_job(
             );
         }
     };
+
+    if let Some(path) = burn_subtitle.as_deref() {
+        if !versions.is_empty() {
+            return Err(
+                "A versions manifest carries its own subtitles: clear the burn-in field".into(),
+            );
+        }
+        // parse the cue file and build the burn now, so a bad file or a missing
+        // font fails here instead of part way through the encode
+        let timed_text_paths: Vec<&Path> = [subtitle.as_deref(), ccap.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(Path::new)
+            .collect();
+        dcpwizard_core::subtitle::check_burn_supported(
+            Path::new(path),
+            &timed_text_paths,
+            &source_colour,
+            postkit::encode::detect_input_type(&video) == postkit::encode::InputType::J2kSequence,
+        )?;
+        dcpwizard_core::subtitle::prepare_subtitle_burn(
+            Path::new(path),
+            burn_subtitle_font.as_deref().map(Path::new),
+            postkit::encode::FrameRate::whole(fps_num),
+            &burn_style,
+        )?;
+    }
 
     let mut job = JobConfig {
         id,
@@ -1045,7 +1043,7 @@ fn job_plan(job: &JobConfig) -> dcpwizard_core::preflight::CreatePlan {
         burn_subtitle_font: job.burn_subtitle_font.as_ref().map(PathBuf::from),
         burn_style: job.burn_style.clone(),
         source_colourspace: job.source_colourspace,
-        frames_already_xyz: !job.source_colour.applies_xyz_transform(),
+        source_colour: job.source_colour.clone(),
         atmos: job.atmos.as_ref().map(PathBuf::from),
         // the panel places no markers, so a composition gets the default pair
         markers: Vec::new(),

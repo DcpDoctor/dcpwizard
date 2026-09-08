@@ -295,3 +295,153 @@ fn a_master_with_no_dolby_vision_rpu_is_refused_by_name() {
         .stdout(predicate::str::contains("no Dolby Vision RPU"));
     assert!(!out.exists(), "a refused request must write no package");
 }
+
+#[test]
+fn a_burn_and_a_mark_are_refused_over_an_hdr_master() {
+    let dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let master = hdr10_master(dir.path());
+    let cues = dir.path().join("cues.srt");
+    std::fs::write(&cues, "1\n00:00:00,000 --> 00:00:01,000\nfirst line\n\n").unwrap();
+    let out = dir.path().join("refused");
+    let create = [
+        "create",
+        "--title",
+        "T",
+        "--video",
+        master.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--hdr-dci",
+        "--hdr-source",
+        "hdr10",
+    ];
+
+    dcpwizard(config_home.path())
+        .args(create)
+        .args(["--burn-subtitle", cues.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("--burn-subtitle draws in display RGB")
+                .and(predicate::str::contains("PQ-encoded HDR samples")),
+        );
+
+    dcpwizard(config_home.path())
+        .args(create)
+        .args(["--watermark", "DIST-001"])
+        .assert()
+        .failure()
+        .stdout(
+            predicate::str::contains("--watermark draws in display RGB")
+                .and(predicate::str::contains("PQ-encoded HDR samples")),
+        );
+
+    assert!(!out.exists(), "a refused request must write no package");
+}
+
+// neither the 1000 cd/m² fallback nor the mastering display maximum, so the log
+// line can only carry it if the RPU's own MaxCLL was read
+const FIXTURE_MAX_CONTENT_LIGHT_LEVEL: u16 = 1200;
+const FIXTURE_MAX_FRAME_AVERAGE_LIGHT_LEVEL: u16 = 400;
+const FIXTURE_MASTERING_DISPLAY_MAX_NITS: u16 = 4000;
+const FIXTURE_MASTERING_DISPLAY_MIN_STEPS: u16 = 1;
+
+fn level6_block() -> dolby_vision::rpu::extension_metadata::blocks::ExtMetadataBlockLevel6 {
+    dolby_vision::rpu::extension_metadata::blocks::ExtMetadataBlockLevel6 {
+        max_display_mastering_luminance: FIXTURE_MASTERING_DISPLAY_MAX_NITS,
+        min_display_mastering_luminance: FIXTURE_MASTERING_DISPLAY_MIN_STEPS,
+        max_content_light_level: FIXTURE_MAX_CONTENT_LIGHT_LEVEL,
+        max_frame_average_light_level: FIXTURE_MAX_FRAME_AVERAGE_LIGHT_LEVEL,
+    }
+}
+
+// create reads a container, so the annex B fixture is remuxed without re-encoding
+fn dolby_vision_master(
+    dir: &Path,
+    profile: postkit::dolby_vision::DolbyVisionFixtureProfile,
+) -> PathBuf {
+    let annex_b = postkit::dolby_vision::write_dolby_vision_fixture(
+        dir,
+        "dv.hevc",
+        profile,
+        Some(level6_block()),
+        None,
+    )
+    .expect("the Dolby Vision fixture has to build");
+    let master = dir.join("dv.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-i"])
+        .arg(&annex_b)
+        .args(["-c", "copy"])
+        .arg(&master)
+        .status()
+        .expect("ffmpeg has to run");
+    assert!(status.success(), "ffmpeg could not remux the fixture");
+    master
+}
+
+#[test]
+fn a_dolby_vision_profile_5_master_is_refused_by_profile() {
+    let dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let master = dolby_vision_master(
+        dir.path(),
+        postkit::dolby_vision::DolbyVisionFixtureProfile::Profile5,
+    );
+    let out = dir.path().join("refused");
+
+    dcpwizard(config_home.path())
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            master.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--hdr-dci",
+            "--hdr-source",
+            "dolby-vision",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("profile 5"));
+    assert!(!out.exists(), "a refused request must write no package");
+}
+
+#[test]
+fn a_dolby_vision_profile_81_master_plans_hdr10_at_the_rpus_maxcll() {
+    let dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let master = dolby_vision_master(
+        dir.path(),
+        postkit::dolby_vision::DolbyVisionFixtureProfile::Profile81,
+    );
+    let out = dir.path().join("checked");
+
+    // --check runs the plan and stops, so nothing is encoded to read this off
+    dcpwizard(config_home.path())
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            master.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--hdr-dci",
+            "--hdr-source",
+            "dolby-vision",
+            "--check",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("dolby-vision master")
+                .and(predicate::str::contains("Hdr10 grade"))
+                .and(predicate::str::contains(format!(
+                    "{FIXTURE_MAX_CONTENT_LIGHT_LEVEL} cd/m²"
+                ))),
+        );
+}

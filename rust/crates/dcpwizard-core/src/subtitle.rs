@@ -399,19 +399,12 @@ pub fn check_timed_text_readable(path: &Path, fps: u32) -> Result<(), String> {
     load_styled_cues(path, fps).map(|_| ())
 }
 
-/// The routes that hand the encoder X'Y'Z' frames, as the refusal names them.
-const XYZ_ROUTES: &str = "--source-colourspace xyz, --hdr-already-pq, or the HDR-to-DCI LUT";
-
 /// Refuse a `--burn-subtitle` the encode cannot honour, before anything is
 /// encoded.
-///
-/// `frames_already_xyz` covers every route that hands the encoder X'Y'Z'
-/// frames: an `--source-colourspace xyz` source, the HDR-to-DCI LUT branch, and
-/// `--hdr-already-pq`.
 pub fn check_burn_supported(
     burn_path: &Path,
     timed_text_paths: &[&Path],
-    frames_already_xyz: bool,
+    source_colour: &postkit::encode::SourceColour,
     input_is_codestreams: bool,
 ) -> Result<(), String> {
     let timed_text: Vec<PathBuf> = timed_text_paths.iter().map(|p| p.to_path_buf()).collect();
@@ -419,10 +412,19 @@ pub fn check_burn_supported(
         burn_path,
         &postkit::preflight::BurnTarget {
             timed_text: &timed_text,
-            frames_already_xyz: frames_already_xyz.then_some(XYZ_ROUTES),
+            // the colour refusal below names what the frames carry, which one
+            // sentence about X'Y'Z' cannot
+            frames_already_xyz: None,
             input_is_codestreams,
         },
-    )
+    )?;
+    if let Some(frames) = crate::encode::frames_not_display_rgb(source_colour) {
+        return Err(format!(
+            "--burn-subtitle draws in display RGB, but this source reaches the encoder as \
+             {frames}: burn from the display-RGB master instead"
+        ));
+    }
+    Ok(())
 }
 
 /// Build a subtitle track from any supported input, applying wrap/RTL/placement/
