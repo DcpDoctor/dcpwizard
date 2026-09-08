@@ -549,6 +549,72 @@ fn create_encodes_a_source_that_already_is_the_forced_container_raster() {
     );
 }
 
+/// The scratch a build writes belongs to the build, not to the package, and a
+/// package that was never written keeps it for `--resume`. The ASSETMAP is the
+/// last thing `create_dcp` writes and its name is fixed, so a directory in its
+/// place fails the package after every frame has been encoded.
+#[test]
+fn a_finished_dcp_holds_no_scratch_and_a_failed_one_keeps_it_for_a_resume() {
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("full.mp4");
+    write_test_video(&video, 2048, 1080);
+
+    let failed = dir.path().join("failed");
+    std::fs::create_dir_all(failed.join("ASSETMAP.xml")).unwrap();
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            failed.to_str().unwrap(),
+            "--twok",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--resume reuses them"));
+    assert!(
+        dcpwizard_core::trim::frame_count(&failed.join("j2k")) > 0,
+        "a failed package must keep the frames it encoded"
+    );
+    assert!(
+        failed.join(".dcpwizard-encode.json").exists(),
+        "a failed package must keep the state --resume checks"
+    );
+
+    let out = dir.path().join("out");
+    cmd()
+        .args([
+            "create",
+            "--title",
+            "T",
+            "--video",
+            video.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--twok",
+        ])
+        .assert()
+        .success();
+    assert!(
+        !out.join("j2k").exists(),
+        "the codestreams shipped in the DCP"
+    );
+    assert!(
+        !out.join(".dcpwizard-encode.json").exists(),
+        "the resume state shipped in the DCP"
+    );
+    assert!(
+        std::fs::read_dir(&out)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("CPL_")),
+        "a clean run must still produce a package"
+    );
+}
+
 #[test]
 fn create_writes_the_picture_mxf_while_it_encodes() {
     let dir = TempDir::new().unwrap();

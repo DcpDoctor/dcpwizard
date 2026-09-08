@@ -2548,6 +2548,25 @@ fn normalize_input_range(video: &Path, range: &str, out_dir: &Path) -> Result<Pa
     Ok(out)
 }
 
+// a package that was never written keeps the frames and the resume state behind it
+fn remove_intermediates_if_packaged(output_dir: &Path, handed_in: &Path, code: i32) -> i32 {
+    if code == 0 {
+        dcpwizard_core::intermediates::remove_intermediates(output_dir, &[handed_in]);
+        return code;
+    }
+    match dcpwizard_core::encode_qol::EncodeState::load(output_dir) {
+        Some(_) => tracing::warn!(
+            "packaging failed: the encoded frames are still in {}, --resume reuses them",
+            output_dir.display()
+        ),
+        None => tracing::warn!(
+            "packaging failed: the encoded frames are still in {}",
+            output_dir.display()
+        ),
+    }
+    code
+}
+
 /// Build the combined sign-language sound track (ISDCF Doc 13): VP9-pack the
 /// sign video onto channel 15 over the main audio. Returns the combined WAV and
 /// the leading main-audio channel count for the SLVS MCA config.
@@ -5169,11 +5188,7 @@ fn run() {
                     None => dcpwizard_core::dcp::create_dcp(&config),
                 };
 
-                dcpwizard_core::intermediates::remove_intermediates(
-                    &output_dir,
-                    &[video_path.as_path()],
-                );
-                code
+                remove_intermediates_if_packaged(&output_dir, &video_path, code)
             } else {
                 // Input is a J2K directory or image sequence
                 print_hints(hints_pass);
@@ -5389,11 +5404,7 @@ fn run() {
                     Some(v) => dcpwizard_core::versions::create_versioned_dcp(&config, v),
                     None => dcpwizard_core::dcp::create_dcp(&config),
                 };
-                dcpwizard_core::intermediates::remove_intermediates(
-                    &output_dir,
-                    &[video_path.as_path()],
-                );
-                code
+                remove_intermediates_if_packaged(&output_dir, &video_path, code)
             };
 
             // upload to the TMS (dom's upload_after_make_dcp): opt-in, only
@@ -5631,11 +5642,7 @@ fn run() {
             };
             let code = dcpwizard_core::dcp::create_dcp(&config);
 
-            dcpwizard_core::intermediates::remove_intermediates(
-                &output_dir,
-                &[input_path.as_path()],
-            );
-            code
+            remove_intermediates_if_packaged(&output_dir, &input_path, code)
         }
 
         Commands::Transcode {
