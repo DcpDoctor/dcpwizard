@@ -7,7 +7,8 @@ use tempfile::TempDir;
 // the 2K flat container, so no fitting runs between the source and the encode
 const WIDTH: u32 = 1998;
 const HEIGHT: u32 = 1080;
-const SOURCE_SECONDS: f64 = 0.25;
+// a whole number of frames at every rate the tests package, 50 included
+const SOURCE_SECONDS: f64 = 0.5;
 const SOUND_SAMPLE_RATE: u32 = 48_000;
 const SOUND_CHANNELS: u16 = 2;
 
@@ -143,13 +144,12 @@ fn package_at(dir: &Path, config_home: &Path, fps: u32) -> PathBuf {
     out
 }
 
-// TODO: ST 429-2 §8.1 caps a composition Edit Rate at 60, so these packages are not conforming SMPTE DCPs
 #[test]
 fn every_hfr_rate_packages_a_2k_dcp_at_its_own_rate() {
     let dir = TempDir::new().unwrap();
     let config_home = TempDir::new().unwrap();
 
-    for fps in [96, 100, 120] {
+    for fps in [48, 50, 60] {
         let out = package_at(dir.path(), config_home.path(), fps);
         let rate = format!("{fps} 1");
 
@@ -187,13 +187,45 @@ fn every_hfr_rate_packages_a_2k_dcp_at_its_own_rate() {
             "the picture MXF has to carry every source frame at {fps} fps"
         );
 
-        // the rate is the only thing verify holds against the package
-        let errors = verify_errors(&out);
-        assert_eq!(errors.len(), 1, "verify reported {errors:?} at {fps} fps");
-        assert!(
-            errors[0].contains("cpl_invalid_edit_rate") && errors[0].contains(&format!("'{rate}'")),
-            "the only error at {fps} fps has to be the ST 429-2 edit rate: {errors:?}"
-        );
+        verify_reports_no_error(&out);
+    }
+}
+
+// ST 429-2 gives a composition edit rate no value above 60, whatever the addendum adds
+#[test]
+fn a_rate_above_the_st_429_2_cap_is_refused_before_it_encodes() {
+    let dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let sound = dir.path().join("silence.wav");
+    write_silence(&sound);
+
+    for fps in [96, 100, 120] {
+        let video = dir.path().join(format!("bars{fps}.mp4"));
+        colour_bars(&video, fps);
+        let out = dir.path().join(format!("refused{fps}"));
+
+        dcpwizard(config_home.path())
+            .args([
+                "create",
+                "--title",
+                "HFR",
+                "--video",
+                video.to_str().unwrap(),
+                "--audio",
+                sound.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--container",
+                "2k-flat",
+                "--frame-rate",
+                &fps.to_string(),
+            ])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains(format!(
+                "frame rate {fps} fps cannot be packaged: ST 429-2 stops a 2K composition edit rate at 60 fps"
+            )));
+        assert!(!out.exists(), "a refused request must write no package");
     }
 }
 
@@ -202,8 +234,8 @@ fn every_hfr_rate_packages_a_2k_dcp_at_its_own_rate() {
 fn four_k_refuses_an_hfr_rate_before_it_encodes() {
     let dir = TempDir::new().unwrap();
     let config_home = TempDir::new().unwrap();
-    let video = dir.path().join("bars120.mp4");
-    colour_bars(&video, 120);
+    let video = dir.path().join("bars60.mp4");
+    colour_bars(&video, 60);
     let out = dir.path().join("refused");
 
     dcpwizard(config_home.path())
@@ -218,12 +250,12 @@ fn four_k_refuses_an_hfr_rate_before_it_encodes() {
             "--container",
             "4k-flat",
             "--frame-rate",
-            "120",
+            "60",
         ])
         .assert()
         .failure()
         .stdout(predicate::str::contains(
-            "4K DCP is limited to 24/25/30 fps; 120 fps requires a 2K container",
+            "4K DCP is limited to 24/25/30 fps; 60 fps requires a 2K container",
         ));
     assert!(!out.exists(), "a refused request must write no package");
 }

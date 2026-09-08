@@ -11,16 +11,13 @@ const DEFAULT_BANDWIDTH_MBPS: u32 = 230;
 
 /// Panel frame rate keys and the CPL edit rate numerator each stands for. Every
 /// rate the panel offers is integer, so the denominator is always 1.
-const FRAME_RATES: [(&str, u32); 9] = [
+const FRAME_RATES: [(&str, u32); 6] = [
     ("24", 24),
     ("25", 25),
     ("30", 30),
     ("48", 48),
     ("50", 50),
     ("60", 60),
-    ("96", 96),
-    ("100", 100),
-    ("120", 120),
 ];
 const FRAME_RATE_DENOMINATOR: u32 = 1;
 const DEFAULT_FRAME_RATE: (&str, u32) = FRAME_RATES[0];

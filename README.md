@@ -22,7 +22,7 @@ Free and open-source alternative to easyDCP Creator+.
 - **Pre-build check** on `create`: every refusal the packager can make is made before the encode starts, from one shared check, so a job that cannot be packaged fails in a second instead of after an hour of J2K. `create --check` runs that check plus the advisory hints and stops, encoding nothing and writing nothing under `--output`
 - **SMPTE & Interop** standard support
 - **2K and 4K** resolution (2048×1080, 4096×2160)
-- **Frame rates** 24, 25, 30 fps (2K/4K); HFR 48, 50, 60, 96, 100, 120 fps (2K only)
+- **Frame rates** 24, 25, 30 fps (2K/4K); HFR 48, 50, 60 fps (2K only)
 - **Reel splitting** via `create --reel-length <minutes>` (multi-reel CPL, sample-accurate audio and per-reel subtitle boundaries)
 - **Explicit reel splits** via `create --split-at <tc>[,<tc>...]` (HH:MM:SS or HH:MM:SS:FF) or `create --split-chapters` (source chapter marks via ffprobe)
 - **Custom picture container** via `create --container <2k-scope|...>` or `create --container-dims WxH` (even, within the 2K/4K bound): the container is the raster the picture is encoded at, so a scope package is 2048x858 frames, the CPL's stored area, active area and aspect all read back from that essence, and the container names the 2K or 4K family without `--twok`/`--fourk`

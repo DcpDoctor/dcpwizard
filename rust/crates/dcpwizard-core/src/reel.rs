@@ -1036,7 +1036,7 @@ mod tests {
     fn samples_per_frame_is_exact_for_dcp_rates() {
         // every legal DCP rate divides 48 kHz (and 96 kHz) evenly, so audio
         // splits land on exact sample boundaries at frame edges.
-        for fps in [24u32, 25, 30, 48, 50, 60, 96, 100, 120] {
+        for fps in [24u32, 25, 30, 48, 50, 60] {
             assert_eq!(48_000 % fps, 0, "{fps} not sample-exact at 48kHz");
             assert_eq!(96_000 % fps, 0, "{fps} not sample-exact at 96kHz");
         }
