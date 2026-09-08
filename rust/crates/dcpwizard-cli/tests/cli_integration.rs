@@ -218,6 +218,148 @@ fn an_unknown_accessibility_standard_is_refused_by_name() {
         );
 }
 
+/// A DCP carrying a closed-caption asset, an HI mix channel and a VI-N
+/// narration channel. Built once and shared, since a create runs ffmpeg and the
+/// JPEG 2000 encoder.
+fn dcp_with_the_accessibility_tracks() -> std::path::PathBuf {
+    static BUILD: OnceLock<TempDir> = OnceLock::new();
+    let build = BUILD.get_or_init(|| {
+        let dir = TempDir::new().unwrap();
+        let video = dir.path().join("source.mp4");
+        write_test_video(&video, 2048, 1080);
+        let audio = dir.path().join("source.wav");
+        write_wav(&audio, 8, &vec![0; 8 * 12_000]);
+        let captions = dir.path().join("captions.srt");
+        write_subtitle(&captions, "00:00:00,000", "00:00:00,200", "hello");
+
+        cmd()
+            .args([
+                "create",
+                "--title",
+                "T",
+                "--video",
+                video.to_str().unwrap(),
+                "--audio",
+                audio.to_str().unwrap(),
+                "--ccap",
+                captions.to_str().unwrap(),
+                // 0-based, so the HI and VI-N channels land after the 5.1 bed
+                "--hi-channel",
+                "6",
+                "--vi-channel",
+                "7",
+                "-o",
+                dir.path().join("dcp").to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        dir
+    });
+    build.path().join("dcp")
+}
+
+/// The same picture with no sound and no captions, so every accessibility track
+/// the probe reads off a composition is missing.
+fn dcp_without_the_accessibility_tracks() -> std::path::PathBuf {
+    static BUILD: OnceLock<TempDir> = OnceLock::new();
+    let build = BUILD.get_or_init(|| {
+        let dir = TempDir::new().unwrap();
+        let video = dir.path().join("source.mp4");
+        write_test_video(&video, 2048, 1080);
+        cmd()
+            .args([
+                "create",
+                "--title",
+                "T",
+                "--video",
+                video.to_str().unwrap(),
+                "-o",
+                dir.path().join("dcp").to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        dir
+    });
+    build.path().join("dcp")
+}
+
+fn accessibility_check(standard: &str, dcp: &std::path::Path) -> assert_cmd::Command {
+    let mut command = cmd();
+    command.args([
+        "accessibility",
+        "--standard",
+        standard,
+        dcp.to_str().unwrap(),
+    ]);
+    command
+}
+
+#[test]
+fn eaa_wants_captions_and_narration_on_a_real_dcp() {
+    accessibility_check("eaa", &dcp_with_the_accessibility_tracks())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Standard:  Eaa"))
+        .stdout(predicate::str::contains("Compliant: true"));
+
+    accessibility_check("eaa", &dcp_without_the_accessibility_tracks())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Compliant: false"))
+        .stdout(predicate::str::contains(
+            "[Error] EAA-CC-1 (ClosedCaptions): Closed caption asset required by EAA",
+        ))
+        .stdout(predicate::str::contains(
+            "[Error] EAA-AD-1 (AudioDescription): Audio description channel required by EAA",
+        ))
+        .stdout(predicate::str::contains(
+            "[Warning] EAA-HI-1 (HearingImpaired): Hearing impaired channel recommended by EAA",
+        ));
+}
+
+#[test]
+fn aoda_wants_captions_on_a_real_dcp() {
+    accessibility_check("aoda", &dcp_with_the_accessibility_tracks())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Standard:  Aoda"))
+        .stdout(predicate::str::contains("Compliant: true"));
+
+    accessibility_check("aoda", &dcp_without_the_accessibility_tracks())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Compliant: false"))
+        .stdout(predicate::str::contains(
+            "[Error] AODA-CC-1 (ClosedCaptions): Closed caption asset required by AODA",
+        ))
+        .stdout(predicate::str::contains(
+            "[Warning] AODA-AD-1 (AudioDescription): Audio description channel recommended by AODA",
+        ));
+}
+
+#[test]
+fn ofcom_wants_captions_and_narration_on_a_real_dcp() {
+    accessibility_check("ofcom", &dcp_with_the_accessibility_tracks())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Standard:  Ofcom"))
+        .stdout(predicate::str::contains("Compliant: true"))
+        .stdout(predicate::str::contains(
+            "[Warning] OFCOM-SL-1 (SignLanguage): Sign language video recommended by OFCOM",
+        ));
+
+    accessibility_check("ofcom", &dcp_without_the_accessibility_tracks())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Compliant: false"))
+        .stdout(predicate::str::contains(
+            "[Error] OFCOM-CC-1 (ClosedCaptions): Closed caption asset required by OFCOM",
+        ))
+        .stdout(predicate::str::contains(
+            "[Error] OFCOM-AD-1 (AudioDescription): Audio description channel required by OFCOM",
+        ));
+}
+
 #[test]
 fn dv_inject_names_the_input_it_cannot_find() {
     let dir = TempDir::new().unwrap();

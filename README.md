@@ -137,7 +137,11 @@ Free and open-source alternative to easyDCP Creator+.
 - **Visible watermarking** via `watermark`, a text mark (distributor ID/serial) burnt into an existing DCP's JPEG 2000 picture essence, with `--font-size` as a percent of the frame height, `--colour`, `--position top|center|bottom` and `--font`. The picture is decoded, marked and re-encoded at its own average bandwidth unless `--video-bit-rate` names another; sound and timed text ship unchanged, and `--kdm`/`--recipient-key`/`--keys` mark an encrypted source. `create --watermark TEXT` marks at build time instead
 - **Trailer packaging**, ratings cards (MPAA/BBFC/FSK), green/red band, countdown leaders; the packaged mp4 is then encoded and wrapped into a real trailer DCP
 - **Content version tracker**, SQLite database of which version delivered where and when
-- **Accessibility compliance**, verify AD/HI/SL tracks against CVAA, EAA, AODA, Ofcom standards
+- **Accessibility compliance**, read the closed-caption asset and the HI, VI-N and sign-language channels off a package and check them against CVAA, EAA, AODA or Ofcom. Each list below is dcpwizard's own mapping of the access services an instrument names onto DCP tracks rather than a citation, since the EAA, AODA and Ofcom instruments all name access services for broadcast, on-demand or web delivery and none of them names a cinema deliverable:
+  - CVAA requires a closed-caption asset and a VI-N narration channel, and recommends an HI mix channel
+  - EAA requires a closed-caption asset and a VI-N narration channel, and recommends sign-language video and an HI mix channel
+  - AODA requires a closed-caption asset, and recommends a VI-N narration channel and an HI mix channel
+  - Ofcom requires a closed-caption asset and a VI-N narration channel, and recommends sign-language video
 
 ## Installation
 

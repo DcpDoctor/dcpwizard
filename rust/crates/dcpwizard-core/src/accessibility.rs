@@ -25,7 +25,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = check_accessibility(dir.path(), AccessibilityStandard::Eaa);
         assert!(!result.compliant);
-        assert_eq!(result.errors, 2); // AD + HI required
+        assert_eq!(result.errors, 2); // CC + AD required
     }
 
     #[test]
