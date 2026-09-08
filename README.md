@@ -745,8 +745,8 @@ sends only to `--email-to`.
 
 `tms` and `create --upload-to-tms` read a TOML file, by default
 `~/.config/dcpwizard/tms.toml` (`--tms-config` points elsewhere). It holds the TMS
-password, so keep it outside the repo, mode 600. The password is never logged,
-never echoed in errors and never passed as a command-line argument.
+password or the key passphrase, so keep it outside the repo, mode 600. Neither is
+ever logged, echoed in errors or passed as a command-line argument.
 
 | key | required | notes |
 |-----|----------|-------|
@@ -755,7 +755,9 @@ never echoed in errors and never passed as a command-line argument.
 | `port` | no | defaults to 22 for sftp, 21 for ftp |
 | `path` | yes | remote directory the package directory is created under |
 | `user` | yes | login user |
-| `password` | yes | login password |
+| `password` | unless `private_key` is set | login password |
+| `private_key` | no | sftp only, path to an ssh private key, the password is not sent when it is set |
+| `private_key_passphrase` | no | only for an encrypted `private_key` |
 
 ```toml
 protocol = "sftp"
@@ -770,7 +772,7 @@ An sftp host must be in `~/.ssh/known_hosts`: an unknown or changed host key is
 refused rather than handed the password, and the error prints the fingerprint and
 the `ssh-keyscan` line that records it once the cinema has confirmed it. Plain
 `ftp` sends the login and the package unencrypted, so prefer `sftp` wherever the
-TMS offers it.
+TMS offers it, and an ftp config that names a `private_key` is refused.
 
 ## REST API
 
