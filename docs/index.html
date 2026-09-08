@@ -479,7 +479,7 @@
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(34,211,238,0.15);">🌈</div>
             <h3>HDR and Dolby Vision</h3>
-            <p>Carry HDR10, HLG, and Dolby Vision through to the package, or author a DCI HDR Addendum DCP (ST 2084 PQ, P3-D65) for next-generation screens.</p>
+            <p><code>create --hdr-dci</code> turns an HDR10, HLG, PQ P3-D65, or Dolby Vision 8.1 master into a DCI HDR Addendum DCP: ST 2084 on the picture descriptor, the HDR-Metadata extension in the CPL, HDR1 in the content title. <code>--hdr-source</code> names the grade when the master's colour tags do not, <code>--hdr-peak-nits</code> says where the roll-off starts.</p>
         </div>
         <div class="feature-card">
             <div class="feature-icon" style="background: rgba(56,189,248,0.15);">🎨</div>
@@ -589,7 +589,7 @@
             <tr><td>Trailer packaging (ratings / leaders)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Content version tracking</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Accessibility track check (CVAA / EAA / AODA / Ofcom)</td><td class="yes">✓</td><td class="no">✗</td></tr>
-            <tr><td>Dolby Vision / HDR10 / HLG</td><td class="yes">✓</td><td class="no">✗</td></tr>
+            <tr><td>DCI HDR Addendum DCP from HDR10, HLG, PQ P3-D65, or Dolby Vision 8.1</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Timeline conform (EDL / FCP7 XML)</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Version dashboard &amp; distribution matrix</td><td class="yes">✓</td><td class="no">✗</td></tr>
             <tr><td>Open source (AGPL-3.0)</td><td class="yes">✓</td><td class="no">✗</td></tr>
