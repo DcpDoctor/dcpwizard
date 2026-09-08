@@ -271,8 +271,7 @@ mod tests {
         assert!(refusal.contains("profile 5"), "{refusal}");
     }
 
-    // the matroska muxer writes the tags the frames carry, so setparams stamps
-    // them rather than the output options
+    // the matroska muxer writes the tags the frames carry, not the output options
     fn tagged_clip(dir: &Path, name: &str, setparams: Option<&str>) -> std::path::PathBuf {
         let clip = dir.join(name);
         let mut command = std::process::Command::new("ffmpeg");
@@ -341,7 +340,7 @@ mod tests {
         let mut summary = dolby_vision_summary(8);
         summary.mastering_display_max_nits = Some(4000.0);
         assert_eq!(resolve_peak_nits(None, Some(&summary), &untagged), 4000.0);
-        // MaxCLL is the grade's own peak, so it beats the mastering display
+        // MaxCLL is the grade's own peak
         summary.max_content_light_level_nits = Some(1200.0);
         assert_eq!(resolve_peak_nits(None, Some(&summary), &untagged), 1200.0);
     }
