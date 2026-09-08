@@ -164,7 +164,7 @@ checksum = "08dae85b57b725df143d5a2eb92c032dd032f062a636826fda1e1a4b21c40c03"
 [[package]]
 name = "asdcplib"
 version = "0.1.0"
-source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=f7b263f#f7b263f5635282cb127394fc469bfe40b4374f87"
+source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=6d044c1#6d044c11ec5e508062e3973921868a2f3d107f65"
 dependencies = [
  "asdcplib-sys",
  "thiserror 2.0.18",
@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "asdcplib-sys"
 version = "0.1.0"
-source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=f7b263f#f7b263f5635282cb127394fc469bfe40b4374f87"
+source = "git+https://github.com/PostPerfection/asdcplib-rs.git?rev=6d044c1#6d044c11ec5e508062e3973921868a2f3d107f65"
 dependencies = [
  "cc",
  "cmake",
@@ -709,7 +709,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 [[package]]
 name = "dcpdoctor-core"
 version = "1.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e00184#0e001845dc2f2b12ae94fd2d0cd637a91abcf822"
 dependencies = [
  "asdcplib",
  "base64",
@@ -734,7 +734,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-imf"
 version = "1.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e00184#0e001845dc2f2b12ae94fd2d0cd637a91abcf822"
 dependencies = [
  "dcpdoctor-parse",
  "quick-xml 0.41.0",
@@ -744,7 +744,7 @@ dependencies = [
 [[package]]
 name = "dcpdoctor-parse"
 version = "1.2.0"
-source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=6d98287#6d98287d76ff5181292f27576b1c51d23c1fed68"
+source = "git+https://github.com/PostPerfection/dcpdoctor.git?rev=0e00184#0e001845dc2f2b12ae94fd2d0cd637a91abcf822"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
