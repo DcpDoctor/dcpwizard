@@ -784,6 +784,20 @@ Or via Docker:
 docker run -p 8080:8080 -v /path/to/media:/data dcpwizard serve --bind 0.0.0.0:8080
 ```
 
+`--api-key <key>` requires that key in `X-Api-Key` or `Authorization: Bearer` on
+every request but `GET /health`, and answers 401 without it. Without the flag the
+API is open to anyone who can reach the bind address, so bind to `127.0.0.1` or
+put it behind something that authenticates. The key is compared without stopping
+at the first differing byte, and a key on the command line is visible to anything
+that can read the process list:
+```bash
+dcpwizard serve --bind 0.0.0.0:8080 --api-key "$(cat /run/secrets/dcpwizard-api-key)"
+```
+
+Every job route (`GET /jobs`, `POST /create`, `POST /verify`, `GET /metrics`)
+proxies to the job daemon, and answers 503 naming `dcpwizard daemon` when it is
+not running.
+
 ## Comparison with easyDCP Creator+
 
 | Feature | DCP Wizard | easyDCP Creator+ |

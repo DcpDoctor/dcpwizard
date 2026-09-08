@@ -1521,6 +1521,11 @@ enum Commands {
         /// Listen address (host:port)
         #[arg(short, long, default_value = "127.0.0.1:8080")]
         bind: String,
+        /// Require this key in X-Api-Key or Authorization: Bearer on every
+        /// request but /health. Without it the API is open to anyone who can
+        /// reach the bind address.
+        #[arg(long)]
+        api_key: Option<String>,
     },
     /// Build a DCP from every master that lands in a watched folder
     Watch {
@@ -5999,7 +6004,9 @@ fn run() {
             scan_picture,
         ),
 
-        Commands::Serve { bind } => dcpwizard_core::rest_api::start_rest_api(&bind),
+        Commands::Serve { bind, api_key } => {
+            dcpwizard_core::rest_api::start_rest_api(&bind, api_key.as_deref())
+        }
 
         Commands::Watch {
             dir,
