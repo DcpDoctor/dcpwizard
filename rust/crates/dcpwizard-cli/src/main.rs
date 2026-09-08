@@ -6240,7 +6240,13 @@ fn run() {
                 quality_crf: crf,
                 audio_mxf: audio.map(PathBuf::from),
             };
-            export_dcp(&config)
+            match export_dcp(&config) {
+                Ok(()) => 0,
+                Err(message) => {
+                    eprintln!("export failed: {message}");
+                    1
+                }
+            }
         }
 
         Commands::Completion { shell } => {

@@ -32,6 +32,23 @@ impl ExportFormat {
             ExportFormat::ImageSequence => "png",
         }
     }
+
+    fn pixel_format(&self) -> &'static str {
+        match self {
+            ExportFormat::ProRes => "yuv422p10le",
+            ExportFormat::DnxHr => "yuv422p",
+            ExportFormat::H264 | ExportFormat::H265 => "yuv420p",
+            ExportFormat::ImageSequence => "rgb48le",
+        }
+    }
+
+    // a ProRes or DNxHR master for approval carries PCM, only the delivery codecs take AAC
+    fn audio_codec(&self) -> &'static str {
+        match self {
+            ExportFormat::ProRes | ExportFormat::DnxHr => "pcm_s24le",
+            ExportFormat::H264 | ExportFormat::H265 | ExportFormat::ImageSequence => "aac",
+        }
+    }
 }
 
 /// Export configuration.
@@ -45,10 +62,12 @@ pub struct ExportConfig {
 }
 
 /// Export / transcode DCP MXF content to a delivery format via ffmpeg.
-pub fn export_dcp(config: &ExportConfig) -> i32 {
+pub fn export_dcp(config: &ExportConfig) -> Result<(), String> {
     if !config.input_mxf.exists() {
-        tracing::error!("Input MXF not found: {}", config.input_mxf.display());
-        return -1;
+        return Err(format!(
+            "input MXF not found: {}",
+            config.input_mxf.display()
+        ));
     }
 
     let crf = if config.quality_crf == 0 {
@@ -70,7 +89,8 @@ pub fn export_dcp(config: &ExportConfig) -> i32 {
     };
 
     let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.arg("-y").arg("-i").arg(&config.input_mxf);
+    cmd.arg("-y").arg("-v").arg("error");
+    cmd.arg("-i").arg(&config.input_mxf);
 
     if let Some(audio) = &config.audio_mxf
         && audio.exists()
@@ -78,6 +98,7 @@ pub fn export_dcp(config: &ExportConfig) -> i32 {
         cmd.arg("-i").arg(audio);
     }
 
+    cmd.arg("-vf").arg(rec709_filter(config.format));
     cmd.arg("-c:v").arg(config.format.ffmpeg_codec());
 
     match config.format {
@@ -94,26 +115,33 @@ pub fn export_dcp(config: &ExportConfig) -> i32 {
         ExportFormat::ImageSequence => unreachable!(),
     }
 
-    cmd.arg("-c:a").arg("aac").arg(&output);
+    cmd.arg("-c:a")
+        .arg(config.format.audio_codec())
+        .arg(&output);
 
-    let result = cmd.output();
+    run_ffmpeg(cmd, &format!("export to {}", output.display()))?;
+    tracing::info!("Exported DCP to {}", output.display());
+    Ok(())
+}
 
-    match result {
-        Ok(o) if o.status.success() => {
-            tracing::info!("Exported DCP to {}", output.display());
-            0
-        }
-        Ok(o) => {
-            tracing::error!(
-                "ffmpeg export failed: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-            -1
-        }
-        Err(e) => {
-            tracing::error!("Failed to run ffmpeg: {e}");
-            -1
-        }
+// a DCP picture is X'Y'Z' at DCI gamma 2.6: swscale undoes that, out_color_matrix picks the
+// Rec.709 matrix over swscale's 601 default, and setparams tags what the player has to assume
+fn rec709_filter(format: ExportFormat) -> String {
+    format!(
+        "scale=out_color_matrix=bt709:out_range=tv,format={},\
+         setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+        format.pixel_format()
+    )
+}
+
+fn run_ffmpeg(mut cmd: std::process::Command, operation: &str) -> Result<(), String> {
+    match cmd.output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!(
+            "ffmpeg could not {operation}: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("could not run ffmpeg: {e}")),
     }
 }
 
@@ -162,36 +190,21 @@ pub fn extract_frame(mxf_path: &Path, frame_number: u64, output_path: &Path) -> 
     }
 }
 
-fn export_image_sequence(input_mxf: &Path, output_dir: &Path) -> i32 {
-    if let Err(e) = std::fs::create_dir_all(output_dir) {
-        tracing::error!("Failed to create output directory: {e}");
-        return -1;
-    }
+fn export_image_sequence(input_mxf: &Path, output_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(output_dir)
+        .map_err(|e| format!("could not create {}: {e}", output_dir.display()))?;
 
     let pattern = output_dir.join("frame_%08d.png");
 
-    let result = std::process::Command::new("ffmpeg")
-        .arg("-y")
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.arg("-y")
+        .arg("-v")
+        .arg("error")
         .arg("-i")
         .arg(input_mxf)
-        .arg(&pattern)
-        .output();
+        .arg(&pattern);
 
-    match result {
-        Ok(o) if o.status.success() => {
-            tracing::info!("Exported image sequence to {}", output_dir.display());
-            0
-        }
-        Ok(o) => {
-            tracing::error!(
-                "ffmpeg image sequence export failed: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-            -1
-        }
-        Err(e) => {
-            tracing::error!("Failed to run ffmpeg: {e}");
-            -1
-        }
-    }
+    run_ffmpeg(cmd, &format!("write frames to {}", output_dir.display()))?;
+    tracing::info!("Exported image sequence to {}", output_dir.display());
+    Ok(())
 }

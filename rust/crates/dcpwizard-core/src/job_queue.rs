@@ -464,7 +464,7 @@ fn process_job(job: &Job, control: &JobControl) -> Result<(), String> {
         }
         JobType::ExportDcp => {
             let config = parse_params::<crate::export::ExportConfig>(&job.params, "ExportDcp")?;
-            from_exit_code(crate::export::export_dcp(&config), "exporting the DCP")
+            crate::export::export_dcp(&config)
         }
         JobType::ImportVideo => {
             let config = parse_params::<crate::import::ImportConfig>(&job.params, "ImportVideo")?;
