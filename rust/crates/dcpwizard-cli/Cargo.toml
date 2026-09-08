@@ -22,11 +22,15 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 asdcplib.workspace = true
 assert_cmd = "2"
+base64 = "0.22"
+chrono = "0.4"
 dcpdoctor-core.workspace = true
 dolby_vision = "3.3"
 hound = "3.5"
+libc = "0.2"
 predicates = "3"
 tempfile = "3"
+zip = "8"
 
 [package.metadata.deb]
 name = "dcpwizard"

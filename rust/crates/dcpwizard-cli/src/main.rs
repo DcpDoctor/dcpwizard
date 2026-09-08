@@ -3205,18 +3205,15 @@ fn run_kdm_batch(a: KdmBatchArgs) -> i32 {
             }
         }
         let files = xml_files_in(&out_dir);
+        let label = if g.name.is_empty() {
+            "additional recipients"
+        } else {
+            &g.name
+        };
         match send_kdm_email(&cfg_path, &g.name, &a.content_title, &to, &files) {
-            Ok(()) => tracing::info!(
-                "emailed {} KDM(s) for {}",
-                files.len(),
-                if g.name.is_empty() {
-                    "additional recipients"
-                } else {
-                    &g.name
-                }
-            ),
+            Ok(()) => tracing::info!("emailed {} KDM(s) for {label}", files.len()),
             Err(e) => {
-                tracing::error!("{e}");
+                tracing::error!("{label}: {e}");
                 failures += 1;
             }
         }

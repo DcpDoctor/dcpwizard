@@ -756,18 +756,22 @@ version = "1.2.0"
 dependencies = [
  "asdcplib",
  "assert_cmd",
+ "base64",
+ "chrono",
  "clap",
  "ctrlc",
  "dcpdoctor-core",
  "dcpwizard-core",
  "dolby_vision",
  "hound",
+ "libc",
  "postkit",
  "predicates",
  "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
