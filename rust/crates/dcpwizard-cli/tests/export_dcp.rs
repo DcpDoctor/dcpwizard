@@ -308,6 +308,101 @@ fn an_h264_export_holds_the_dcp_colour_and_aac_audio() {
 }
 
 #[test]
+fn an_h265_export_holds_the_dcp_colour_and_aac_audio() {
+    let fixture = dcp_fixture();
+    let output = fixture.directory.path().join("screener_h265.mp4");
+    export(fixture, "h265", &output);
+
+    assert_eq!(probe(&output, "v:0", "codec_name"), ["hevc"]);
+    assert_eq!(
+        probe(&output, "v:0", "width,height,nb_frames"),
+        [WIDTH.to_string(), HEIGHT.to_string(), FRAMES.to_string()]
+    );
+    assert_eq!(probe(&output, "v:0", "pix_fmt"), ["yuv420p"]);
+    assert_eq!(probe(&output, "a:0", "codec_name"), ["aac"]);
+    assert_rec709_tags(&output);
+
+    let exported = mean_rgb(&output);
+    assert_colour_within(
+        exported,
+        mean_rgb(&fixture.picture_mxf),
+        PICTURE_TOLERANCE,
+        "the H.265 export against the DCP picture",
+    );
+    assert_colour_within(
+        exported,
+        mean_rgb(&fixture.master),
+        MASTER_TOLERANCE,
+        "the H.265 export against the master",
+    );
+}
+
+#[test]
+fn a_dnxhr_export_holds_the_dcp_colour_and_pcm_audio() {
+    let fixture = dcp_fixture();
+    let output = fixture.directory.path().join("screener.mxf");
+    export(fixture, "dnxhr", &output);
+
+    assert_eq!(probe(&output, "v:0", "codec_name"), ["dnxhd"]);
+    assert_eq!(
+        probe(&output, "v:0", "width,height"),
+        [WIDTH.to_string(), HEIGHT.to_string()]
+    );
+    // DNxHR HQ is 4:2:2 8-bit, which is the layout a master for approval carries
+    assert_eq!(probe(&output, "v:0", "pix_fmt"), ["yuv422p"]);
+    assert_eq!(probe(&output, "a:0", "codec_name"), ["pcm_s24le"]);
+    assert_rec709_tags(&output);
+
+    let exported = mean_rgb(&output);
+    assert_colour_within(
+        exported,
+        mean_rgb(&fixture.picture_mxf),
+        PICTURE_TOLERANCE,
+        "the DNxHR export against the DCP picture",
+    );
+    assert_colour_within(
+        exported,
+        mean_rgb(&fixture.master),
+        MASTER_TOLERANCE,
+        "the DNxHR export against the master",
+    );
+}
+
+#[test]
+fn an_image_sequence_export_writes_a_readable_png_per_frame() {
+    let fixture = dcp_fixture();
+    let output = fixture.directory.path().join("stills");
+    export(fixture, "image-sequence", &output);
+
+    let mut frames: Vec<PathBuf> = std::fs::read_dir(&output)
+        .expect("the sequence directory has to be readable")
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    frames.sort();
+    assert_eq!(
+        frames.len(),
+        FRAMES as usize,
+        "one still per packaged frame in {}",
+        output.display()
+    );
+
+    let first = &frames[0];
+    assert_eq!(probe(first, "v:0", "codec_name"), ["png"]);
+    assert_eq!(probe(first, "v:0", "pix_fmt"), ["rgb48be"]);
+    assert_eq!(
+        probe(first, "v:0", "width,height"),
+        [WIDTH.to_string(), HEIGHT.to_string()]
+    );
+    assert_colour_within(
+        mean_rgb(first),
+        mean_rgb(&fixture.picture_mxf),
+        PICTURE_TOLERANCE,
+        "the first still against the DCP picture",
+    );
+}
+
+#[test]
 fn exporting_something_that_is_not_a_track_file_says_so() {
     let directory = TempDir::new().unwrap();
     let config_home = TempDir::new().unwrap();
