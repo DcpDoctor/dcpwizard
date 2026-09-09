@@ -28,6 +28,23 @@ enum HdrSourceArg {
     DolbyVision,
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum HdrTargetArg {
+    Hdr10,
+    Hlg,
+    Sdr,
+}
+
+impl From<HdrTargetArg> for postkit::dolby_vision::HdrType {
+    fn from(arg: HdrTargetArg) -> Self {
+        match arg {
+            HdrTargetArg::Hdr10 => Self::Hdr10,
+            HdrTargetArg::Hlg => Self::Hlg,
+            HdrTargetArg::Sdr => Self::Sdr,
+        }
+    }
+}
+
 impl From<HdrSourceArg> for dcpwizard_core::hdr::HdrSourceFormat {
     fn from(arg: HdrSourceArg) -> Self {
         match arg {
@@ -132,6 +149,25 @@ struct CreateNaming {
 const DEFAULT_FRAME_RATE: u32 = 24;
 const RATING_SEPARATOR: char = '=';
 const ISDCF_DATE_PARTS: usize = 3;
+
+struct MasteringDisplay {
+    red: (u16, u16),
+    green: (u16, u16),
+    blue: (u16, u16),
+    white_point: (u16, u16),
+    max_luminance: u32,
+    min_luminance: u32,
+}
+
+// ST 2086 counts chromaticity in 0.00002 steps and luminance in 0.0001 cd/m²
+const P3D65_MASTERING_DISPLAY: MasteringDisplay = MasteringDisplay {
+    red: (34000, 16000),
+    green: (13250, 34500),
+    blue: (7500, 3000),
+    white_point: (15635, 16450),
+    max_luminance: 10_000_000,
+    min_luminance: 1,
+};
 
 impl CreateIsdcfNaming {
     fn resolve(&self) -> Result<CreateNaming, String> {
@@ -1811,6 +1847,22 @@ enum Commands {
         /// Max frame average light level (MaxFALL)
         #[arg(long, default_value = "400")]
         max_fall: u16,
+    },
+
+    /// Tone map a video between HDR10, HLG and SDR
+    #[command(name = "hdr-convert")]
+    HdrConvert {
+        /// Input video file
+        #[arg(short, long)]
+        input: String,
+
+        /// Output video file
+        #[arg(short, long)]
+        output: String,
+
+        /// Grade the output carries
+        #[arg(short, long, value_enum)]
+        target: HdrTargetArg,
     },
 
     /// Burn a visible watermark into an existing DCP's picture essence
@@ -6667,16 +6719,16 @@ fn run() {
                 input: std::path::PathBuf::from(&input),
                 hdr_type: postkit::dolby_vision::HdrType::Hdr10,
                 hdr10: postkit::dolby_vision::Hdr10Metadata {
-                    display_primaries_rx: 13250,
-                    display_primaries_ry: 34500,
-                    display_primaries_gx: 7500,
-                    display_primaries_gy: 3000,
-                    display_primaries_bx: 34000,
-                    display_primaries_by: 16000,
-                    white_point_x: 15635,
-                    white_point_y: 16450,
-                    max_luminance: 10000000,
-                    min_luminance: 1,
+                    display_primaries_rx: P3D65_MASTERING_DISPLAY.red.0,
+                    display_primaries_ry: P3D65_MASTERING_DISPLAY.red.1,
+                    display_primaries_gx: P3D65_MASTERING_DISPLAY.green.0,
+                    display_primaries_gy: P3D65_MASTERING_DISPLAY.green.1,
+                    display_primaries_bx: P3D65_MASTERING_DISPLAY.blue.0,
+                    display_primaries_by: P3D65_MASTERING_DISPLAY.blue.1,
+                    white_point_x: P3D65_MASTERING_DISPLAY.white_point.0,
+                    white_point_y: P3D65_MASTERING_DISPLAY.white_point.1,
+                    max_luminance: P3D65_MASTERING_DISPLAY.max_luminance,
+                    min_luminance: P3D65_MASTERING_DISPLAY.min_luminance,
                     max_cll,
                     max_fall,
                 },
@@ -6685,6 +6737,16 @@ fn run() {
             };
             dcpwizard_core::dolby_vision::inject_hdr10_metadata(&opts)
         }
+
+        Commands::HdrConvert {
+            input,
+            output,
+            target,
+        } => dcpwizard_core::dolby_vision::convert_hdr(
+            std::path::Path::new(&input),
+            target.into(),
+            std::path::Path::new(&output),
+        ),
 
         Commands::Watermark {
             input,

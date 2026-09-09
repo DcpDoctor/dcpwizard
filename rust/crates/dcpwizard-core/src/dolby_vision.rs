@@ -5,7 +5,7 @@
 
 pub use postkit::dolby_vision::{
     DolbyVisionOptions, DolbyVisionProfile, Hdr10Metadata, HdrMetadataOptions, HdrType,
-    convert_hdr, detect_hdr_type, read_hdr10_metadata,
+    detect_hdr_type, read_hdr10_metadata,
 };
 
 use std::path::Path;
@@ -52,6 +52,15 @@ pub fn inject_hdr10_metadata(options: &HdrMetadataOptions) -> i32 {
         return 1;
     }
     postkit::dolby_vision::inject_hdr10_metadata(options)
+}
+
+// refused before ffmpeg runs, the way the two inject commands are
+pub fn convert_hdr(input: &Path, target: HdrType, output: &Path) -> i32 {
+    if let Err(e) = require_file("input file", input) {
+        tracing::error!("{e}");
+        return 1;
+    }
+    postkit::dolby_vision::convert_hdr(input, target, output)
 }
 
 #[cfg(test)]
