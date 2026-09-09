@@ -194,13 +194,40 @@ fn the_watermark_command_marks_an_encrypted_source_under_its_keys() {
     let config_home = TempDir::new().unwrap();
     let source = grey_source(directory.path());
 
+    // an encrypted package is only conformant with a signed CPL and PKL, and
+    // create verifies what it wrote
+    let certificates = directory.path().join("certs");
+    dcpwizard(config_home.path())
+        .args([
+            "certificate",
+            "chain",
+            "--organization",
+            "Watermark Test",
+            "-o",
+            certificates.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
     let encrypted = directory.path().join("encrypted");
     let keys = directory.path().join("KEYS.json");
     create_grey_dcp(
         &source,
         &encrypted,
         config_home.path(),
-        &["--encrypt", "--key-out", keys.to_str().unwrap()],
+        &[
+            "--encrypt",
+            "--key-out",
+            keys.to_str().unwrap(),
+            "--signer-cert",
+            certificates.join("signer.pem").to_str().unwrap(),
+            "--signer-key",
+            certificates.join("signer.key").to_str().unwrap(),
+            "--signer-chain",
+            certificates.join("intermediate.pem").to_str().unwrap(),
+            "--signer-chain",
+            certificates.join("root.pem").to_str().unwrap(),
+        ],
     );
     assert!(
         picture_is_encrypted(&only_file_starting_with(&encrypted, "picture_")),
