@@ -505,6 +505,11 @@ pub struct SubmitResult {
     pub hints: Vec<String>,
 }
 
+// a job that names nothing is verified, the way the CLI's create is
+fn verify_after_build(validate: Option<bool>) -> bool {
+    validate.unwrap_or(true)
+}
+
 // ─── Tauri commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -882,7 +887,7 @@ pub async fn submit_job(
         title: title.clone(),
         output_dir: PathBuf::from(&output_dir),
         audio_path,
-        validate: validate.unwrap_or(false),
+        validate: verify_after_build(validate),
         standard: standard.unwrap_or_else(|| DEFAULT_STANDARD.into()),
         resolution: resolution.unwrap_or_else(|| DEFAULT_RESOLUTION.into()),
         framerate,
@@ -2641,6 +2646,13 @@ mod tests {
     use dcpwizard_core::mxf_wrap::AudioInputOrder;
     use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
     use std::time::Duration;
+
+    #[test]
+    fn a_job_that_names_no_choice_is_verified_after_the_build() {
+        assert!(verify_after_build(None));
+        assert!(verify_after_build(Some(true)));
+        assert!(!verify_after_build(Some(false)));
+    }
 
     #[test]
     fn stage_timing_reads_as_minutes_and_seconds() {

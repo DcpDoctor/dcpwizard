@@ -1160,7 +1160,7 @@ document.getElementById("btn-build")?.addEventListener("click", async () => {
       title,
       outputDir: output,
       audioPath: audio,
-      validate: document.getElementById("prop-validate")?.checked || false,
+      validate: document.getElementById("prop-validate")?.checked ?? true,
       standard: document.getElementById("prop-standard")?.value || "smpte",
       resolution: document.getElementById("prop-resolution")?.value || "2k-full",
       framerate: document.getElementById("prop-framerate")?.value || String(DEFAULT_FRAMERATE),

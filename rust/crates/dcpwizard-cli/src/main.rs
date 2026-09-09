@@ -1096,6 +1096,11 @@ enum Commands {
         /// without encoding or writing anything under --output.
         #[arg(long)]
         check: bool,
+
+        /// Ship the package without verifying it. The finished DCP is normally
+        /// read back through the same checks the verify command runs.
+        #[arg(long)]
+        no_verify: bool,
     },
     /// Rebuild ASSETMAP and PKL to cover every asset file present (metadata-only
     /// repackaging; no re-wrap or re-encode). For re-ingesting exported OV/VF
@@ -2609,6 +2614,37 @@ fn normalize_input_range(video: &Path, range: &str, out_dir: &Path) -> Result<Pa
     Ok(out)
 }
 
+fn print_verify_findings(result: &dcpwizard_core::verify::VerifyResult) {
+    if result.valid {
+        tracing::info!("DCP verification PASSED");
+    } else {
+        for e in &result.errors {
+            tracing::error!("{e}");
+        }
+    }
+    for w in &result.warnings {
+        tracing::warn!("{w}");
+    }
+    for i in &result.info {
+        tracing::info!("{i}");
+    }
+}
+
+// the finished package is read back through the verify command's own checks
+fn verify_finished_package(output_dir: &Path) -> i32 {
+    let result = dcpwizard_core::verify::verify_dcp_with_options(
+        output_dir,
+        &dcpwizard_core::verify::VerifyCliOptions {
+            skip_hash_check: false,
+            skip_picture_check: false,
+            strict: false,
+            scan_every_frame: false,
+        },
+    );
+    print_verify_findings(&result);
+    if result.valid { 0 } else { 1 }
+}
+
 // a package that was never written keeps the frames and the resume state behind it
 fn remove_intermediates_if_packaged(output_dir: &Path, handed_in: &Path, code: i32) -> i32 {
     if code == 0 {
@@ -3930,6 +3966,7 @@ fn run() {
             library_items,
             delivery,
             check,
+            no_verify,
         } => {
             let CreateDelivery {
                 upload_to_tms,
@@ -5547,6 +5584,17 @@ fn run() {
                 remove_intermediates_if_packaged(&output_dir, &video_path, code)
             };
 
+            // the package is read back before it goes anywhere, so a broken one
+            // is named here rather than at the cinema
+            let code = match (code, no_verify) {
+                (0, false) => verify_finished_package(&output_dir),
+                (0, true) => {
+                    eprintln!("--no-verify: the finished package was not verified");
+                    0
+                }
+                (code, _) => code,
+            };
+
             // upload to the TMS (dom's upload_after_make_dcp): opt-in, only
             // after a clean run, and before any power-off.
             let code = match tms_target {
@@ -5878,19 +5926,7 @@ fn run() {
             }
 
             if !quiet {
-                if result.valid {
-                    tracing::info!("DCP verification PASSED");
-                } else {
-                    for e in &result.errors {
-                        tracing::error!("{e}");
-                    }
-                }
-                for w in &result.warnings {
-                    tracing::warn!("{w}");
-                }
-                for i in &result.info {
-                    tracing::info!("{i}");
-                }
+                print_verify_findings(&result);
             }
 
             if result.valid { 0 } else { 1 }
