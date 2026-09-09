@@ -155,7 +155,7 @@ Download from the [GitHub Releases](https://github.com/PostPerfection/dcpwizard/
 | **macOS** (Apple Silicon) | `dcpwizard-macos-aarch64.tar.gz` | `.dmg` |
 | **Windows** (x86_64) | `dcpwizard-windows-x86_64.zip` | `.msi` |
 
-The CLI links the Grok JPEG 2000 library (libgrokj2k) dynamically, so the Grok runtime must be present. Point `LD_LIBRARY_PATH` at Grok's `lib64` (Linux) or the equivalent before running.
+The CLI links the Grok JPEG 2000 library (libgrokj2k) dynamically, and each archive carries it in `lib/` beside the binary. Unpack the archive and run the binary from where it sits: nothing has to be installed and `LD_LIBRARY_PATH` does not have to be set.
 
 ### Install from source
 

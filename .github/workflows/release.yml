@@ -50,7 +50,8 @@ jobs:
             pkg-config \
             libxml2-dev \
             libssl-dev \
-            libxerces-c-dev
+            libxerces-c-dev \
+            patchelf
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -98,9 +99,37 @@ jobs:
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
-          mkdir -p dist
+          set -euo pipefail
+          mkdir -p dist/lib
           cp rust/target/release/${{ matrix.binary }} dist/
+          for candidate in "$GITHUB_WORKSPACE/grok-install/lib64" "$GITHUB_WORKSPACE/grok-install/lib"; do
+            if [ -d "$candidate" ]; then GROK_LIB="$candidate"; break; fi
+          done
+          if [ -z "${GROK_LIB:-}" ]; then
+            echo "no grok library directory under grok-install"
+            exit 1
+          fi
+          # the binary links libgrokj2k at load time, so the archive carries it
+          # and looks for it beside itself instead of on LD_LIBRARY_PATH
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            for lib in $(readelf -d dist/${{ matrix.binary }} | sed -n 's/.*NEEDED.*\[\(libgrok[^]]*\)\].*/\1/p'); do
+              cp -L "$GROK_LIB/$lib" "dist/lib/$lib"
+            done
+            patchelf --set-rpath '$ORIGIN/lib' dist/${{ matrix.binary }}
+          else
+            for reference in $(otool -L dist/${{ matrix.binary }} | awk '/libgrok/ {print $1}'); do
+              name=$(basename "$reference")
+              cp -L "$GROK_LIB/$name" "dist/lib/$name"
+              install_name_tool -id "@rpath/$name" "dist/lib/$name"
+              install_name_tool -change "$reference" "@rpath/$name" dist/${{ matrix.binary }}
+              codesign --force --sign - "dist/lib/$name"
+            done
+            install_name_tool -add_rpath '@loader_path/lib' dist/${{ matrix.binary }}
+            # every install_name_tool edit breaks the signature arm64 requires
+            codesign --force --sign - dist/${{ matrix.binary }}
+          fi
           tar -czf ${{ matrix.artifact }}.tar.gz -C dist .
 
       - name: Package (Windows)
@@ -111,6 +140,26 @@ jobs:
           # the exe links grokj2k.dll at load time, so ship it alongside
           Copy-Item "$env:GITHUB_WORKSPACE/grok-install/bin/grokj2k.dll" "dist/"
           Compress-Archive -Path "dist/*" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      # what a user does with the download: unpack it and run it, with nothing
+      # pointing the loader at a grok install
+      - name: The unpacked archive runs on its own (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p unpacked
+          tar -xzf ${{ matrix.artifact }}.tar.gz -C unpacked
+          cd unpacked
+          env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
+            ./${{ matrix.binary }} --version
+
+      - name: The unpacked archive runs on its own (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path unpacked
+          Expand-Archive -Path "${{ matrix.artifact }}.zip" -DestinationPath unpacked
+          & "unpacked/${{ matrix.binary }}" --version
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
