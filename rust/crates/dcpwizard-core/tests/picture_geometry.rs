@@ -96,6 +96,24 @@ fn stored_area(cpl: &str) -> (u32, u32) {
     (edge("Width"), edge("Height"))
 }
 
+/// Every element with the given tag cut out, content and all.
+fn without_element(xml: &str, tag: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut kept = String::new();
+    let mut rest = xml;
+    while let Some((before, after)) = rest.split_once(&open) {
+        kept.push_str(before);
+        let Some((_, tail)) = after.split_once(&close) else {
+            rest = after;
+            break;
+        };
+        rest = tail;
+    }
+    kept.push_str(rest);
+    kept
+}
+
 /// The raster the picture MXF really carries, read back through asdcplib.
 fn essence_raster(dir: &Path) -> (u32, u32) {
     let mxf = std::fs::read_dir(dir)
@@ -144,8 +162,10 @@ fn the_cpl_declares_the_raster_the_encoder_produced() {
         cpl.contains(&format!("<meta:Width>{FLAT_WIDTH}</meta:Width>")),
         "{cpl}"
     );
+    // a uuid or a base64 hash can spell 2048 on its own, so neither is searched
+    let geometry = without_element(&without_element(&cpl, "Id"), "Hash");
     assert!(
-        !cpl.contains("2048"),
+        !geometry.contains("2048"),
         "no full-container preset anywhere: {cpl}"
     );
 }
