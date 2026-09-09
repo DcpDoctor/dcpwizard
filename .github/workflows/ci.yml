@@ -144,8 +144,33 @@ jobs:
         run: cargo build --release
 
       - name: Test
+        if: runner.os != 'macOS'
         working-directory: rust
         run: cargo test --workspace --no-fail-fast
+
+      # the macos run has hung inside a test more than once, so after the
+      # deadline every test binary still running gets its stacks sampled
+      - name: Test (macOS, with a hang watchdog)
+        if: runner.os == 'macOS'
+        working-directory: rust
+        run: |
+          cargo test --workspace --no-fail-fast &
+          tests=$!
+          (
+            sleep 2400
+            echo "::group::tests still running after 40 minutes, sampling"
+            for pid in $(pgrep -f 'target/debug/deps/'); do
+              ps -p "$pid" -o pid=,command=
+              sample "$pid" 3 2>/dev/null | head -200
+            done
+            echo "::endgroup::"
+            kill "$tests"
+          ) &
+          watchdog=$!
+          wait "$tests"
+          status=$?
+          kill "$watchdog" 2>/dev/null || true
+          exit "$status"
 
       - name: Clippy
         working-directory: rust
