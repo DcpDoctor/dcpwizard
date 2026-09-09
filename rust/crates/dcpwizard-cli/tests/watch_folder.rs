@@ -152,6 +152,9 @@ fn make_silent_wav(directory: &Path, file_name: &str) -> PathBuf {
         "anullsrc=r=48000:cl=stereo",
         "-t",
         "0.5",
+        // DCI sound is 24-bit PCM, and anullsrc defaults to 16
+        "-c:a",
+        "pcm_s24le",
         path.to_str().unwrap(),
     ]);
     path
