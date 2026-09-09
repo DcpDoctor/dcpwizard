@@ -254,7 +254,7 @@ export GRK_PLUGIN_PATH=/path/to/grok/lib64
 ./src-tauri/target/release/dcpwizard-gui
 ```
 
-A desktop launcher inherits neither variable, so put both on the `.desktop` Exec line or in `~/.config/environment.d`. The job log at `<output>/dcpwizard.log` confirms the device ran: the header prints `Accelerator: requested, active` and the encode is followed by `[ENCODE] Frames on the device: N of M`.
+A desktop launcher inherits neither variable, so put both on the `.desktop` Exec line or in `~/.config/environment.d`. The job log at `<output>/dcpwizard.log` confirms the device ran: the header prints `Accelerator: requested, active` and the encode is followed by `[ENCODE] Frames on the device: N of M`. `create` writes the same log beside the package it builds.
 
 ## CLI Usage
 

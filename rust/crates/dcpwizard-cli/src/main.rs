@@ -1,6 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
+mod job_log;
+
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum AccessibilityStandardArg {
     Cvaa,
@@ -3862,6 +3864,7 @@ fn run() {
 
     postkit::grok_encoder::initialize(0);
 
+    let mut accelerator_error = None;
     if gpu_enabled
         && let Err(e) =
             postkit::grok_encoder::use_gpu_with_authentication(license, registration_url)
@@ -3872,6 +3875,7 @@ fn run() {
             std::process::exit(1);
         }
         tracing::warn!("{e} The GPU preference is on, so this run stays on the CPU.");
+        accelerator_error = Some(e);
     }
 
     let code = match cli.command {
@@ -4575,6 +4579,28 @@ fn run() {
                 return;
             }
 
+            // the job log sits beside the package, and a job that cannot write
+            // one has nowhere to put the package either
+            let mut job_log = match job_log::JobLog::create(&output_dir) {
+                Ok(log) => log,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            job_log.line("=== DCP Wizard Pipeline ===");
+            job_log.line(&format!("Title: {title}"));
+            job_log.line(&format!("Input: {}", video_path.display()));
+            job_log.line(&format!("Output: {}", output_dir.display()));
+            job_log.line(&format!(
+                "Accelerator: {}",
+                job_log::accelerator_status(
+                    gpu_enabled,
+                    postkit::grok_encoder::gpu_active(),
+                    accelerator_error.as_deref(),
+                )
+            ));
+
             let code = if is_video_file {
                 // Full pipeline: video → J2K encode → MXF wrap → DCP
                 use postkit::grok_encoder::{self, CompressParams, EncodeProgress};
@@ -4927,6 +4953,7 @@ fn run() {
                     },
                 };
                 let encode_start = std::time::Instant::now();
+                let device_frames_before = postkit::grok_encoder::accelerated_frames();
                 let mut last_encode_progress: Option<EncodeProgress> = None;
                 let result = grok_encoder::encode_video_pipeline_resumable_with_mxf_feed(
                     &encode_video_path,
@@ -4980,6 +5007,17 @@ fn run() {
                     std::process::exit(1);
                 }
                 tracing::info!("Encoded {} frames", result.frames_encoded);
+                let device_frames = postkit::grok_encoder::accelerated_frames()
+                    .saturating_sub(device_frames_before);
+                job_log.line(&format!(
+                    "[ENCODE] Frames on the device: {device_frames} of {}",
+                    result.frames_encoded
+                ));
+                if device_frames == 0 && gpu_enabled {
+                    job_log.line(
+                        "[ENCODE] WARNING: the GPU was requested and no frame ran on the device",
+                    );
+                }
                 let picture_mxf = match picture_wrap {
                     Some(wrap) => match wrap.finish(result.frames_encoded) {
                         Ok(wrapped) => {
