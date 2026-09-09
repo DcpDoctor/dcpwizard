@@ -1,10 +1,12 @@
 use assert_cmd::Command;
+#[cfg(unix)]
 use predicates::prelude::*;
 use std::path::{Path, PathBuf};
 
 const PICTURE_BYTES: usize = 3 << 20;
 
 // larger than any filesystem the tests run on, and sparse, so no blocks are used
+#[cfg(unix)]
 const SPARSE_PICTURE_BYTES: u64 = 4 << 40;
 
 // a regressed space check would copy the sparse file's zeros until the temp
