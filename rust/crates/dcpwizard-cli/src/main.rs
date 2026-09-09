@@ -4267,6 +4267,11 @@ fn run() {
             // own, so the hold has to be asked for and cannot be asked for
             // anywhere else.
             let still_input = postkit::still::is_still_image(&video_path);
+            // a directory of stills is compressed here on the way to the
+            // packager, where a directory of codestreams already is picture
+            let sequence_input = video_path.is_dir()
+                && postkit::encode::detect_input_type(&video_path)
+                    == postkit::encode::InputType::ImageSequence;
             // a codestream directory is picture that is already encoded: no
             // transform runs over it, so a colour space here would be ignored
             if !is_video_file && !still_input {
@@ -5365,6 +5370,47 @@ fn run() {
                     }
                     tracing::info!("Held the still for {frames} frame(s) at {width}x{height}");
                     still_j2k_dir.clone()
+                } else if sequence_input {
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let cancel_clone = cancel.clone();
+                    let _ = ctrlc::set_handler(move || {
+                        cancel_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                    });
+                    let device_frames_before = postkit::grok_encoder::accelerated_frames();
+                    let encoded = dcpwizard_core::encode::encode_image_sequence(
+                        &dcpwizard_core::encode::ImageSequenceEncode {
+                            input_dir: video_path.clone(),
+                            output_dir: output_dir.clone(),
+                            bandwidth_mbps: video_bit_rate.unwrap_or(0),
+                            fps,
+                        },
+                        &cancel,
+                        print_encode_progress,
+                    );
+                    eprintln!();
+                    let encoded = match encoded {
+                        Ok(encoded) => encoded,
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    tracing::info!(
+                        "Encoded {} frame(s) of the image sequence",
+                        encoded.frames_encoded
+                    );
+                    let device_frames = postkit::grok_encoder::accelerated_frames()
+                        .saturating_sub(device_frames_before);
+                    job_log.line(&format!(
+                        "[ENCODE] Frames on the device: {device_frames} of {}",
+                        encoded.frames_encoded
+                    ));
+                    if device_frames == 0 && gpu_enabled {
+                        job_log.line(
+                            "[ENCODE] WARNING: the GPU was requested and no frame ran on the device",
+                        );
+                    }
+                    encoded.j2k_dir
                 } else {
                     video_path.clone()
                 };
