@@ -29,6 +29,10 @@ pub fn hdr_codestream_byte_cap(edit_rate: u32) -> u64 {
 pub const HDR_MAX_MBPS: u32 = 450;
 
 const DOLBY_VISION_NAME: &str = "dolby-vision";
+const HDR10_PLUS_NAME: &str = "hdr10plus";
+
+// ffprobe's name for the ST 2094-40 dynamic metadata an HDR10+ master carries
+const HDR10_PLUS_SIDE_DATA: &str = "SMPTE2094-40";
 
 // ffprobe's spellings of the colour tags an HDR master carries
 const PQ_TRANSFER_TAG: &str = "smpte2084";
@@ -42,6 +46,7 @@ const MASTERING_DISPLAY_LUMINANCE_STEPS_PER_NIT: f32 = 10_000.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HdrSourceFormat {
     Hdr10,
+    Hdr10Plus,
     Hlg,
     PqP3D65,
     DolbyVision,
@@ -49,8 +54,10 @@ pub enum HdrSourceFormat {
 
 impl HdrSourceFormat {
     pub fn parse(name: &str) -> Option<Self> {
-        if name.trim().to_lowercase() == DOLBY_VISION_NAME {
-            return Some(Self::DolbyVision);
+        match name.trim().to_lowercase().as_str() {
+            DOLBY_VISION_NAME => return Some(Self::DolbyVision),
+            HDR10_PLUS_NAME => return Some(Self::Hdr10Plus),
+            _ => {}
         }
         match HdrSource::parse(name)? {
             HdrSource::Hdr10 => Some(Self::Hdr10),
@@ -62,6 +69,7 @@ impl HdrSourceFormat {
     pub fn name(self) -> &'static str {
         match self {
             Self::Hdr10 => "hdr10",
+            Self::Hdr10Plus => HDR10_PLUS_NAME,
             Self::Hlg => "hlg",
             Self::PqP3D65 => "pq-p3d65",
             Self::DolbyVision => DOLBY_VISION_NAME,
@@ -80,7 +88,9 @@ pub fn plan_hdr_dcdm(
         None => detect_hdr_source_format(video)?,
     };
     let (source, dolby_vision) = match format {
-        HdrSourceFormat::Hdr10 => (HdrSource::Hdr10, None),
+        // HDR10+ adds per scene metadata over an HDR10 grade, and the addendum
+        // transform reads that grade
+        HdrSourceFormat::Hdr10 | HdrSourceFormat::Hdr10Plus => (HdrSource::Hdr10, None),
         HdrSourceFormat::Hlg => (HdrSource::Hlg, None),
         HdrSourceFormat::PqP3D65 => (HdrSource::PqP3D65, None),
         HdrSourceFormat::DolbyVision => {
@@ -118,6 +128,9 @@ pub fn detect_hdr_source_format(video: &Path) -> Result<HdrSourceFormat, String>
     if dolby_vision_rpu_present(video) {
         return Ok(HdrSourceFormat::DolbyVision);
     }
+    if hdr10_plus_metadata_present(video) {
+        return Ok(HdrSourceFormat::Hdr10Plus);
+    }
     let (transfer, primaries) = colour_tags(video)?;
     match (transfer.as_str(), primaries.as_str()) {
         (PQ_TRANSFER_TAG, BT2020_PRIMARIES_TAG) => Ok(HdrSourceFormat::Hdr10),
@@ -126,9 +139,45 @@ pub fn detect_hdr_source_format(video: &Path) -> Result<HdrSourceFormat, String>
         _ => Err(format!(
             "{} is tagged with the {transfer} transfer and {primaries} primaries, which names no \
              HDR grade --hdr-dci can transform: name the master with \
-             --hdr-source <hdr10|hlg|pq-p3d65|dolby-vision>",
+             --hdr-source <hdr10|hdr10plus|hlg|pq-p3d65|dolby-vision>",
             video.display()
         )),
+    }
+}
+
+fn hdr10_plus_metadata_present(video: &Path) -> bool {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-read_intervals",
+            "%+#1",
+            "-show_entries",
+            "frame=side_data_list",
+            "-of",
+            "json",
+        ])
+        .arg(video)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).contains(HDR10_PLUS_SIDE_DATA)
+        }
+        Ok(output) => {
+            tracing::warn!(
+                "ffprobe could not read the dynamic metadata of {}: {}",
+                video.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!("failed to run ffprobe: {e}");
+            false
+        }
     }
 }
 
@@ -325,6 +374,139 @@ mod tests {
         );
         let refusal = detect_hdr_source_format(&sdr).unwrap_err();
         assert!(refusal.contains("--hdr-source"), "{refusal}");
+    }
+
+    const FIXTURE_WIDTH: u32 = 320;
+    const FIXTURE_HEIGHT: u32 = 180;
+    const FIXTURE_FPS: u32 = 25;
+    const HDR10_PLUS_FRAMES: usize = 2;
+    // 12 bit PQ code for 600 cd/m², the level 1 peak the fixture RPUs carry
+    const PQ_CODE_600_NITS: u16 = 2851;
+
+    fn plain_hevc(directory: &Path, name: &str, frames: usize) -> std::path::PathBuf {
+        let output = directory.join(name);
+        let made = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c=gray:s={FIXTURE_WIDTH}x{FIXTURE_HEIGHT}:r={FIXTURE_FPS}"),
+                "-frames:v",
+                &frames.to_string(),
+                "-pix_fmt",
+                "yuv420p10le",
+                "-c:v",
+                "libx265",
+                "-x265-params",
+                "log-level=none",
+                "-f",
+                "hevc",
+            ])
+            .arg(&output)
+            .output()
+            .expect("ffmpeg has to run");
+        assert!(
+            made.status.success(),
+            "ffmpeg could not write {name}: {}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        output
+    }
+
+    // one scene of ST 2094-40 metadata, interleaved into the stream as SEI NALs
+    fn hdr10_plus_fixture(directory: &Path) -> std::path::PathBuf {
+        let frame = |sequence_frame_index: usize| {
+            serde_json::json!({
+                "BezierCurveData": {
+                    "Anchors": [102, 205, 307, 410, 512, 614, 717, 819, 922],
+                    "KneePointX": 0,
+                    "KneePointY": 0
+                },
+                "LuminanceParameters": {
+                    "AverageRGB": 1024,
+                    "LuminanceDistributions": {
+                        "DistributionIndex": [1, 5, 10, 25, 50, 75, 90, 95, 99],
+                        "DistributionValues": [0, 0, 100, 3, 4, 5, 6, 7, 8]
+                    },
+                    "MaxScl": [17000, 18000, 19000]
+                },
+                "NumberOfWindows": 1,
+                "TargetedSystemDisplayMaximumLuminance": 500,
+                "SceneFrameIndex": sequence_frame_index,
+                "SceneId": 0,
+                "SequenceFrameIndex": sequence_frame_index
+            })
+        };
+        let metadata = serde_json::json!({
+            "JSONInfo": { "HDR10plusProfile": "B", "Version": "1.0" },
+            "SceneInfo": (0..HDR10_PLUS_FRAMES).map(frame).collect::<Vec<_>>(),
+            "SceneInfoSummary": {
+                "SceneFirstFrameIndex": [0],
+                "SceneFrameNumbers": [HDR10_PLUS_FRAMES]
+            },
+            "ToolInfo": { "Tool": "dcpwizard test fixture", "Version": "1.0" }
+        });
+        let json = directory.join("hdr10plus.json");
+        std::fs::write(&json, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+
+        let base_layer = plain_hevc(directory, "base.hevc", HDR10_PLUS_FRAMES);
+        let injected = directory.join("hdr10plus.hevc");
+        let made = std::process::Command::new("hdr10plus_tool")
+            .arg("inject")
+            .args(["-i".as_ref(), base_layer.as_os_str()])
+            .args(["-j".as_ref(), json.as_os_str()])
+            .args(["-o".as_ref(), injected.as_os_str()])
+            .output()
+            .expect("hdr10plus_tool has to be installed");
+        assert!(
+            made.status.success(),
+            "hdr10plus_tool could not inject: {}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        injected
+    }
+
+    #[test]
+    fn a_dolby_vision_master_and_an_hdr10_plus_one_are_named_by_their_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let dolby_vision = postkit::dolby_vision::write_dolby_vision_fixture(
+            dir.path(),
+            "profile81.hevc",
+            postkit::dolby_vision::DolbyVisionFixtureProfile::Profile81,
+            None,
+            Some(PQ_CODE_600_NITS),
+        )
+        .expect("the profile 8.1 fixture has to be written");
+        assert_eq!(
+            detect_hdr_source_format(&dolby_vision).unwrap(),
+            HdrSourceFormat::DolbyVision
+        );
+
+        let hdr10_plus = hdr10_plus_fixture(dir.path());
+        assert_eq!(
+            detect_hdr_source_format(&hdr10_plus).unwrap(),
+            HdrSourceFormat::Hdr10Plus,
+            "the ST 2094-40 metadata names the grade where the base layer carries no colour tags"
+        );
+    }
+
+    // an HDR10+ master delivers as its HDR10 base layer, the grade the addendum transform reads
+    #[test]
+    fn an_hdr10_plus_master_plans_as_hdr10() {
+        let dir = tempfile::tempdir().unwrap();
+        let hdr10_plus = hdr10_plus_fixture(dir.path());
+        let planned = plan_hdr_dcdm(&hdr10_plus, None, Some(1000.0)).expect("plan the master");
+        assert_eq!(
+            planned,
+            SourceColour::HdrDcdm {
+                source: HdrSource::Hdr10,
+                source_peak_nits: 1000.0,
+            }
+        );
     }
 
     #[test]

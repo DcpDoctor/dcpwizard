@@ -23,6 +23,7 @@ impl From<AccessibilityStandardArg> for postkit::accessibility::AccessibilitySta
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum HdrSourceArg {
     Hdr10,
+    Hdr10Plus,
     Hlg,
     PqP3d65,
     DolbyVision,
@@ -49,6 +50,7 @@ impl From<HdrSourceArg> for dcpwizard_core::hdr::HdrSourceFormat {
     fn from(arg: HdrSourceArg) -> Self {
         match arg {
             HdrSourceArg::Hdr10 => Self::Hdr10,
+            HdrSourceArg::Hdr10Plus => Self::Hdr10Plus,
             HdrSourceArg::Hlg => Self::Hlg,
             HdrSourceArg::PqP3d65 => Self::PqP3D65,
             HdrSourceArg::DolbyVision => Self::DolbyVision,
